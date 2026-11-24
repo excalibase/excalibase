@@ -260,6 +260,10 @@ if penv.get("FEATURE_ONETIMECREDENTIALS") != "true":
 if penv.get("FEATURE_FUNCTIONINVOKE") != "false":
     failures.append(f"FEATURE_FUNCTIONINVOKE={penv.get('FEATURE_FUNCTIONINVOKE')!r} by default, want false")
 
+# MCP's destructive tools ask twice, on by default.
+if penv.get("FEATURE_MCPCONFIRM") != "true":
+    failures.append(f"FEATURE_MCPCONFIRM={penv.get('FEATURE_MCPCONFIRM')!r} by default, want true")
+
 # EXC-762: the cloud-console layout of Studio is off by default.
 if penv.get("FEATURE_STUDIO_V2") != "false":
     failures.append(f"FEATURE_STUDIO_V2={penv.get('FEATURE_STUDIO_V2')!r} by default, want false")

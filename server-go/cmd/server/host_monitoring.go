@@ -115,7 +115,7 @@ func mountProjectContainers(r *chi.Mux, sqlStore storage.OrgStore, store storage
 		r.Use(features.Require(d.features, features.HostMetrics))
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Get("/metrics", d.hostMonitoringHandler.ProjectContainers)
 	})
 }

@@ -19,12 +19,15 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider/githubapp"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/internal/testutil/githubfake"
 	"github.com/excalibase/provisioning-poc/internal/testutil/sitestest"
 	"github.com/google/uuid"
@@ -180,6 +183,8 @@ type Options struct {
 	// AppsOn switches on the appgitbuilds flag; AppLimits sizes app builds.
 	AppsOn    bool
 	AppLimits sitebuilds.AppLimits
+	// OwnerSuspended, when set, puts the harness project's org under an owner whose suspension it answers (EXC-843).
+	OwnerSuspended *atomic.Bool
 }
 
 func New(t *testing.T, options Options) *Harness {
@@ -225,6 +230,9 @@ func New(t *testing.T, options Options) *Harness {
 	}
 	if options.Previews {
 		serviceOptions.Previews = siteService
+	}
+	if options.OwnerSuspended != nil {
+		serviceOptions.OrgGuard = suspendedOwnerGuard(project, options.OwnerSuspended)
 	}
 	if options.AppLimits.CPUMillis == 0 {
 		options.AppLimits = FreeAppLimits
@@ -489,4 +497,13 @@ func MustNotFind(t *testing.T, haystack, needle string) {
 	if strings.Contains(haystack, needle) {
 		t.Errorf("%q found in %q", needle, haystack)
 	}
+}
+
+// suspendedOwnerGuard refuses the project while flag is set.
+func suspendedOwnerGuard(project string, flag *atomic.Bool) *orgguard.Guard {
+	instances := fakestore.NewInstances()
+	instances.Items[project] = &domain.DatabaseInstance{ProjectID: project, OrgID: "org-suspended-owner"}
+	return orgguard.New(instances, func(context.Context) (map[string]bool, error) {
+		return map[string]bool{"org-suspended-owner": flag.Load()}, nil
+	})
 }

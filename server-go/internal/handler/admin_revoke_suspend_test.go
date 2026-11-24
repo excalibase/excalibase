@@ -16,18 +16,36 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
 
 type fakeOwnerSuspender struct {
 	userID, reason string
+	closed         bool
 	err            error
 	calls          int
+	// closures records each closure mail asked for, as "user/org".
+	closures   []string
+	closureErr error
+	// whenClosed is how many orgs were deleted when the closure mail was asked.
+	orgs             *adminOrgStore
+	deletedAtClosure []bool
 }
 
-func (f *fakeOwnerSuspender) Suspend(_ context.Context, _ adminconsole.Actor, userID, reason string) (*adminconsole.Result, error) {
+func (f *fakeOwnerSuspender) NotifyOrgClosed(_ context.Context, userID, orgID string) error {
+	f.closures = append(f.closures, userID+"/"+orgID)
+	if f.orgs != nil {
+		f.deletedAtClosure = append(f.deletedAtClosure, f.orgs.deleted)
+	}
+	return f.closureErr
+}
+
+func (f *fakeOwnerSuspender) Suspend(_ context.Context, _ adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error) {
 	f.calls++
-	f.userID, f.reason = userID, reason
+	f.userID, f.reason, f.closed = userID, reason.Text, reason.OrgClosed
 	return &adminconsole.Result{}, f.err
 }
 
@@ -64,6 +82,9 @@ func TestAdmin_RevokeOrg_SuspendsTheOwnerWithTheReason(t *testing.T) {
 	}
 	if sus.calls != 1 || sus.userID != "owner-1" {
 		t.Fatalf("owner not suspended: %+v", sus)
+	}
+	if !sus.closed {
+		t.Error("a revoke deletes the org, so its suspension must carry the closure notice")
 	}
 	if sus.reason == "" || !strings.Contains(sus.reason, "proxy abuse on every project") {
 		t.Errorf("the reason did not reach the suspension: %q", sus.reason)
@@ -138,9 +159,20 @@ func (d deactivatingStore) FindUser(_ context.Context, id string) (*adminconsole
 func (deactivatingStore) OwnedApps(context.Context, string) ([]adminconsole.OwnedApp, error) {
 	return nil, nil
 }
+func (deactivatingStore) OwnedProjects(context.Context, string) ([]string, error) { return nil, nil }
 func (d deactivatingStore) Suspend(_ context.Context, s adminconsole.Suspension, _ []adminconsole.SuspendedApp) error {
 	d.users.users[s.UserID].Active = false
 	return nil
+}
+func (deactivatingStore) ClaimMail(context.Context, string) (bool, error) { return false, nil }
+func (deactivatingStore) ReleaseMail(context.Context, string) error       { return nil }
+func (deactivatingStore) ClaimClosureMail(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (deactivatingStore) ReleaseClosureMail(context.Context, string, string) error  { return nil }
+func (deactivatingStore) MarkClosureMailSent(context.Context, string, string) error { return nil }
+func (deactivatingStore) ClosureMailSent(context.Context, string, string) (bool, error) {
+	return true, nil
 }
 func (deactivatingStore) Unsuspend(context.Context, string) error { return nil }
 func (deactivatingStore) SuspendedApps(context.Context, string) ([]adminconsole.SuspendedApp, error) {
@@ -152,7 +184,7 @@ func (deactivatingStore) ForgetSuspendedApp(context.Context, string, string, str
 
 type noApps struct{}
 
-func (noApps) PauseApp(context.Context, string, string) (*apphost.App, error) { return nil, nil }
+func (noApps) StopApp(context.Context, string, string) (*apphost.App, error) { return nil, nil }
 func (noApps) ResumeApp(context.Context, string, string, string) (*apphost.App, error) {
 	return nil, nil
 }
@@ -274,4 +306,102 @@ func (a *syncAudit) count() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return len(a.entries)
+}
+
+func (deactivatingStore) RecordSuspendedApps(context.Context, string, []adminconsole.SuspendedApp) error {
+	return nil
+}
+
+// The closure mail goes out once the projects are really gone, and before the
+// org row is removed.
+func TestAdmin_RevokeOrg_MailsTheClosureAfterTheTeardown(t *testing.T) {
+	sus := &fakeOwnerSuspender{}
+	_, orgs, _, r := revokeRig(t, sus)
+	sus.orgs = orgs
+	if w := revoke(r, revokeReasonBody); w.Code != http.StatusOK {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	if len(sus.closures) != 1 || sus.closures[0] != "owner-1/org-9" {
+		t.Fatalf("closure mails = %v, want one for owner-1/org-9", sus.closures)
+	}
+}
+
+// A revoke that left projects behind keeps the org and tells the owner nothing
+// yet: the mail stays owed for the revoke that finishes the job.
+func TestAdmin_RevokeOrg_NoClosureMailWhenAProjectDropFails(t *testing.T) {
+	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj-stuck": {ProjectID: "proj-stuck", OrgID: "org-9", DBType: domain.PostgreSQL, Namespace: "org-9-stuck", Status: "ACTIVE"},
+	}}
+	mock := k8s.NewMockClient()
+	mock.Namespaces["org-9-stuck"] = true
+	mock.StuckNamespaces["org-9-stuck"] = true
+	pgProv := provisioner.NewPostgreSQLProvisioner(mock, "")
+	pgProv.SetDeletionPoller(provisioner.NewPoller(0, 0))
+	provSvc := service.NewProvisioningService(store, provisioner.NewFactory(pgProv), mock)
+	orgs := &adminOrgStore{org: &domain.Org{ID: "org-9", Slug: "acme", OwnerID: "owner-1"}}
+	sus := &fakeOwnerSuspender{}
+	h := NewAdminHandler(provSvc, store, orgs, &captureAudit{}, nil, "", nil)
+	h.SetOwnerSuspender(sus)
+	router := chi.NewRouter()
+	router.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
+
+	w := revoke(router, revokeReasonBody)
+	if w.Code != http.StatusMultiStatus {
+		t.Fatalf("got %d %s, want 207", w.Code, w.Body.String())
+	}
+	if len(sus.closures) != 0 || orgs.deleted {
+		t.Fatalf("closure mails = %v, org deleted = %v", sus.closures, orgs.deleted)
+	}
+}
+
+// A closure mail that failed keeps the org: the org row is what lets a second
+// revoke find the work and send the mail. Deleting it would leave the owner
+// with no notice and no way to send one.
+func TestAdmin_RevokeOrg_KeepsTheOrgWhenTheClosureMailFailsAndRetries(t *testing.T) {
+	sus := &fakeOwnerSuspender{closureErr: errors.New("smtp down")}
+	_, orgs, _, r := revokeRig(t, sus)
+
+	w := revoke(r, revokeReasonBody)
+	if w.Code != http.StatusMultiStatus {
+		t.Fatalf("got %d %s, want 207", w.Code, w.Body.String())
+	}
+	if orgs.deleted {
+		t.Fatal("the org was deleted though the owner was never told")
+	}
+	if !strings.Contains(w.Body.String(), "revoke again to retry") || strings.Contains(w.Body.String(), "smtp") {
+		t.Errorf("the message must say what to do and leak nothing: %s", w.Body.String())
+	}
+
+	sus.closureErr = nil
+	if w := revoke(r, revokeReasonBody); w.Code != http.StatusOK {
+		t.Fatalf("retry got %d %s", w.Code, w.Body.String())
+	}
+	if !orgs.deleted || len(sus.closures) != 2 {
+		t.Fatalf("org deleted = %v, closure attempts = %d, want the retry to mail and delete", orgs.deleted, len(sus.closures))
+	}
+}
+
+// A revoke that dropped projects but could not tell the owner is still audited.
+func TestAdmin_RevokeOrg_AuditsTheRevokeWhenTheNoticeFails(t *testing.T) {
+	for name, err := range map[string]error{"not_sent": errors.New("smtp down"), "in_flight": adminconsole.ErrClosureNoticeInFlight} {
+		t.Run(name, func(t *testing.T) {
+			audit := &syncAudit{}
+			store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+				"proj-1": {ProjectID: "proj-1", OrgID: "org-9", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeDocker, Namespace: "ctr-1"},
+			}}
+			orgs := &adminOrgStore{org: &domain.Org{ID: "org-9", Slug: "acme", OwnerID: "owner-1"}}
+			h := NewAdminHandler(newDockerProvSvc(t, store), store, orgs, audit, nil, "", nil)
+			h.SetOwnerSuspender(&fakeOwnerSuspender{closureErr: err})
+			r := chi.NewRouter()
+			r.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
+			w := revoke(r, revokeReasonBody)
+			if w.Code != http.StatusMultiStatus || orgs.deleted {
+				t.Fatalf("got %d, deleted = %v", w.Code, orgs.deleted)
+			}
+			entry := audit.first(t)
+			if entry.Action != "admin.revoke_org" || !strings.Contains(entry.Details, "dropped=1") || !strings.Contains(entry.Details, "notice="+name) {
+				t.Fatalf("audit = %+v", entry)
+			}
+		})
+	}
 }

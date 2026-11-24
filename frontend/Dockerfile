@@ -11,14 +11,16 @@ ARG VITE_API_URL=/api
 ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.29-alpine
 # Security fixes from Alpine published since the base image was cut (EXC-642).
 RUN apk upgrade --no-cache
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # The /api resolver is injected at container start from /etc/resolv.conf so the
 # proxy works under both Docker's embedded DNS and Kubernetes cluster DNS.
 COPY docker-entrypoint.d/10-resolver.sh /docker-entrypoint.d/10-resolver.sh
-RUN chmod +x /docker-entrypoint.d/10-resolver.sh
+# connect-src names the storage origin Studio uploads files to (STORAGE_PUBLIC_ORIGIN, EXC-809).
+COPY docker-entrypoint.d/20-storage-origin.sh /docker-entrypoint.d/20-storage-origin.sh
+RUN chmod +x /docker-entrypoint.d/10-resolver.sh /docker-entrypoint.d/20-storage-origin.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
 # busybox wget (present in nginx:alpine); curl is not installed in this base.

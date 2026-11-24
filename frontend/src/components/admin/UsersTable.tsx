@@ -5,6 +5,7 @@ import { serverErrorMessage } from '../../utils/serverError';
 import { useAccountAction, useConsoleUsers } from '../../hooks/useAdminConsole';
 import type { ConsoleUser, SuspendResult } from '../../api/adminConsole';
 import { AccountStatusBadge } from './AccountStatusBadge';
+import { SuspendReasonCode, type SuspendReasonCodeValue } from './SuspendReasonCode';
 import { ReasonDialog } from './ReasonDialog';
 import { useDebounced } from './useDebounced';
 
@@ -23,11 +24,12 @@ export function UsersTable() {
   const { data, isLoading, error } = useConsoleUsers({ q: query, includeSuspended: showSuspended, limit: 50 });
   const suspend = useAccountAction('suspend');
   const unsuspend = useAccountAction('unsuspend');
+  const [reasonCode, setReasonCode] = useState<SuspendReasonCodeValue>('other');
   const mutation = pending?.action === 'unsuspend' ? unsuspend : suspend;
 
   const confirm = async (reason: string) => {
     if (!pending) return;
-    const result = await mutation.mutateAsync({ userId: pending.user.id, reason }).catch(() => null);
+    const result = await mutation.mutateAsync({ userId: pending.user.id, reason, reasonCode: pending.action === 'suspend' ? reasonCode : undefined }).catch(() => null);
     if (result) {
       setOutcome(result);
       setPending(null);
@@ -101,7 +103,9 @@ export function UsersTable() {
           error={mutation.error ? serverErrorMessage(mutation.error, 'The request failed') : undefined}
           onConfirm={confirm}
           onCancel={() => setPending(null)}
-        />
+        >
+          {pending.action === 'suspend' && <SuspendReasonCode value={reasonCode} onChange={setReasonCode} />}
+        </ReasonDialog>
       )}
     </div>
   );

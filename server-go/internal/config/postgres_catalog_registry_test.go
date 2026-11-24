@@ -54,8 +54,8 @@ func TestUpstreamBasesStayOnTheirOwnRegistry(t *testing.T) {
 				entry.Major, entry.BaseImage)
 		}
 	}
-	if !strings.HasPrefix(postgresCatalog.DocumentDBGatewayImage, "ghcr.io/documentdb/") {
-		t.Errorf("gateway image %q is not the upstream DocumentDB one",
+	if !strings.HasPrefix(postgresCatalog.DocumentDBGatewayImage, "excalibase/documentdb-gateway:") {
+		t.Errorf("gateway image %q is not our guarded gateway on Docker Hub",
 			postgresCatalog.DocumentDBGatewayImage)
 	}
 }

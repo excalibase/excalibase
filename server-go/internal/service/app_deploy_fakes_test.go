@@ -124,6 +124,17 @@ func (f *fakeAppStoreForDeploy) RecordLifecycleFailure(projectID, id string, fai
 	return nil
 }
 
+func (f *fakeAppStoreForDeploy) RecordSuspension(projectID, id string, suspension *apphost.Suspension) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	app, ok := f.apps[projectID+"/"+id]
+	if !ok {
+		return apphost.ErrAppNotFound
+	}
+	app.Suspension = suspension
+	return nil
+}
+
 func (f *fakeAppStoreForDeploy) statusOf(projectID, id string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

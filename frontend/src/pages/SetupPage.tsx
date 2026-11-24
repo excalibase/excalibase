@@ -210,7 +210,7 @@ export function SetupPage() {
         />
 
         <div className="mb-4 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
-          Distribute shares across separate trusted operators. Losing more than{' '}
+          Distribute shares across separate trusted people. Losing more than{' '}
           {issuedKeys.shares.length - issuedKeys.threshold} share(s) makes the vault unrecoverable.
           Clipboard auto-clears after 30 seconds.
         </div>

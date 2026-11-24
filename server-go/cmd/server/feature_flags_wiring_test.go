@@ -184,6 +184,16 @@ var darkWork = map[features.Feature]string{
 	features.FreeWALUpload:   "TestTierConfig_GuardOffLeavesTheOperatorsInterval",
 	// On unless switched off: off, apps and functions keep the owner's login (internal/service).
 	features.AppRuntimeLogin: "TestAppRuntimeLogin_OffKeepsTheOwnerLogin",
+	// On unless switched off: off, a function's HTML answer keeps its type (internal/handler).
+	features.FunctionHTMLGuard: "TestRuntimeResponseGuardOffKeepsTheFunctionsType",
+	// On unless switched off: only MCP's destructive tools read it; no route is gated (internal/mcpserver).
+	features.MCPConfirm: "TestTheSwitchedOffGuardDeletesAtOnce",
+	// Off, apps deploy by tag and are pulled always (internal/service, internal/k8s).
+	features.AppImagePin: "TestDeployApp_FlagOffLeavesTheDeployUnchanged",
+	// Off, no guard is started (cmd/server).
+	features.CrashLoopGuard: "TestCrashGuard_WantedOnlyWithHostingAndTheFlag",
+	// Off, a suspension sends no mail (internal/adminconsole).
+	features.SuspensionEmails: "TestSuspendSendsNothingWhileTheFlagIsOff",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }

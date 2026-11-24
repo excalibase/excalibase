@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
@@ -102,6 +103,32 @@ func TestFunctionHandler_ReconcileRuntimes(t *testing.T) {
 	h.ReconcileRuntimes(context.Background())
 	if fake.ensured != 0 {
 		t.Fatalf("a project with no runtime must not get one at startup, got %d", fake.ensured)
+	}
+}
+
+// A suspended owner's runtime, or one awaiting deletion, is left as it is at
+// startup: ensuring it would restart what the suspension stopped.
+func TestFunctionHandler_ReconcileRuntimes_SkipsWhatMustNotServe(t *testing.T) {
+	cases := map[string]func(h *FunctionHandler){
+		"suspended owner": func(h *FunctionHandler) {
+			h.SetOrgGuard(suspendedOwnerOf(h.instanceStore, "default"))
+		},
+		"pending deletion": func(h *FunctionHandler) {
+			h.instanceStore.(*inMemoryInstanceStore).insts[testReplayProject].Status = string(domain.StatusPendingDeletion)
+		},
+	}
+	for name, arrange := range cases {
+		t.Run(name, func(t *testing.T) {
+			rt := newRestartableRuntime(t, "boot-1")
+			h, store, fake := newReplayHandler(t, rt)
+			saveReplayFn(t, store, "alpha", "")
+			fake.hasRuntime = true
+			arrange(h)
+			h.ReconcileRuntimes(context.Background())
+			if fake.ensured != 0 {
+				t.Fatalf("reconcile ensured %d runtimes, want none", fake.ensured)
+			}
+		})
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -120,7 +121,13 @@ func (a *ProjectAccess) RoleAtLeast(minRole string) bool {
 }
 
 // WithProjectAccess carries access on ctx, as RequireProjectAccess does.
+//
+// A platform admin also carries the override that lets work start again in an
+// organisation whose owner is abuse-suspended (EXC-843).
 func WithProjectAccess(ctx context.Context, access *ProjectAccess) context.Context {
+	if access != nil && access.PlatformAdmin {
+		ctx = orgguard.WithPlatformOverride(ctx)
+	}
 	return context.WithValue(ctx, projectAccessKey, access)
 }
 

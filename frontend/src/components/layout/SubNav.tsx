@@ -8,9 +8,11 @@ import { useFeatures } from '../../hooks/useDeploymentMode';
 
 interface SubNavProps {
   readonly sectionKey: string;
+  // Inside the phone drawer: full width under the rail.
+  readonly drawer?: boolean;
 }
 
-export function SubNav({ sectionKey }: SubNavProps) {
+export function SubNav({ sectionKey, drawer = false }: SubNavProps) {
   const { projectId } = useParams<{ projectId: string }>();
   const section = PROJECT_NAV.find((s) => s.key === sectionKey);
   const { data: documentDb = false } = useProjectIsDocumentDB(projectId ?? '');
@@ -20,7 +22,7 @@ export function SubNav({ sectionKey }: SubNavProps) {
   if (!section?.children) return null;
 
   return (
-    <div className="w-56 flex-shrink-0 flex flex-col bg-surface-card border-r border-border-primary" data-testid="sub-nav">
+    <div className={cn('flex-shrink-0 flex flex-col bg-surface-card', drawer ? 'w-full border-t border-border-primary' : 'w-56 border-r border-border-primary')} data-testid="sub-nav">
       <div className="px-4 py-3 border-b border-border-primary">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-text-tertiary">
           {section.label}

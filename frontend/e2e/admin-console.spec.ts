@@ -77,7 +77,22 @@ test.describe('admin console', () => {
     await suspendDialog.getByRole('button', { name: 'Suspend' }).click();
 
     await expect(row.getByText('Suspended')).toBeVisible();
-    expect(posts[1]).toEqual({ url: '/api/admin/console/users/u2/suspend', body: { reason: 'abuse again, proxy traffic' } });
+    expect(posts[1]).toEqual({ url: '/api/admin/console/users/u2/suspend', body: { reason: 'abuse again, proxy traffic', reasonCode: 'other' } });
+
+    // The rule the admin picks is what the account holder is told, so it is sent with the reason.
+    await row.getByRole('button', { name: 'Unsuspend' }).click();
+    await page.getByRole('dialog').getByLabel('Reason').fill('appealed again, cleared');
+    await page.getByRole('dialog').getByRole('button', { name: 'Unsuspend' }).click();
+    await expect(row.getByText('Active')).toBeVisible();
+
+    await row.getByRole('button', { name: 'Suspend' }).click();
+    const pickDialog = page.getByRole('dialog');
+    await pickDialog.getByLabel(/Rule broken/).selectOption('crypto_mining');
+    await pickDialog.getByLabel('Reason').fill('miner found in the image');
+    await pickDialog.getByRole('button', { name: 'Suspend' }).click();
+
+    await expect(row.getByText('Suspended')).toBeVisible();
+    expect(posts[3]).toEqual({ url: '/api/admin/console/users/u2/suspend', body: { reason: 'miner found in the image', reasonCode: 'crypto_mining' } });
   });
 
   test('a platform admin outside /admin sees only their own orgs', async ({ page }) => {

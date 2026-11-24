@@ -4,18 +4,19 @@ import { lazy, Suspense } from 'react';
 import { Spinner } from '../../containers/ContainerBits';
 import type { DatabaseInstance } from '../../../types';
 import { databaseServiceStatus } from '../serviceStatus';
+import { DbBackupsTab } from './DbBackupsTab';
 import { DbConnectTab } from './DbConnectTab';
+import { DbLogsTab } from './DbLogsTab';
+import { DbMetricsTab } from './DbMetricsTab';
 import { DbOverviewTab } from './DbOverviewTab';
 import { DbSettingsTab } from './DbSettingsTab';
 import { PanelFrame } from './PanelFrame';
 import { tabsFor } from './panelState';
 import { engineLabel } from '../../../utils/engine';
 
-// The heavy pages load only when their tab opens.
+// The table browser still embeds its v1 page (EXC-857 split it out) and loads
+// only when its tab opens.
 const TablesPage = lazy(() => import('../../../pages/TablesPage').then((m) => ({ default: m.TablesPage })));
-const BackupsPage = lazy(() => import('../../../pages/BackupsPage').then((m) => ({ default: m.BackupsPage })));
-const MetricsPage = lazy(() => import('../../../pages/MetricsPage').then((m) => ({ default: m.MetricsPage })));
-const LogExplorerPage = lazy(() => import('../../../pages/LogExplorerPage').then((m) => ({ default: m.LogExplorerPage })));
 
 interface PanelProps {
   readonly tab: string;
@@ -40,19 +41,19 @@ function TabBody({ project, tab }: { readonly project: DatabaseInstance; readonl
     case 'backups':
       return (
         <DatabaseRequired mysql>
-          <BackupsPage />
+          <DbBackupsTab project={project} />
         </DatabaseRequired>
       );
     case 'metrics':
       return (
         <DatabaseRequired mysql>
-          <MetricsPage />
+          <DbMetricsTab project={project} />
         </DatabaseRequired>
       );
     case 'logs':
       return (
         <DatabaseRequired mysql>
-          <LogExplorerPage />
+          <DbLogsTab project={project} />
         </DatabaseRequired>
       );
     case 'settings':
