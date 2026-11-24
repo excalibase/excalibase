@@ -133,7 +133,7 @@ func TestARestoreAnswerHasAKindForACustomer(t *testing.T) {
 	assertStaffView(t, "restore answer (staff)", decodeFailure(t, string(staff)))
 }
 
-func lifecycleBody(t *testing.T, role string, stored string, cause error) (string, map[string]any) {
+func lifecycleBody(t *testing.T, role, stored string, cause error) (string, map[string]any) {
 	t.Helper()
 	h := &ProvisioningHandler{instances: &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
 		"p1": {ProjectID: "p1", Namespace: "org1-p1", Status: "ACTIVE", FailureReason: stored},
