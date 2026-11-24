@@ -46,7 +46,9 @@ describe('backups tab', () => {
 
   test('a backup can be started and the answer is shown', async () => {
     open();
-    await userEvent.click(await screen.findByRole('button', { name: 'Back up now' }));
+    const button = await screen.findByRole('button', { name: 'Back up now' });
+    expect(screen.queryByText('Backup started')).not.toBeInTheDocument();
+    await userEvent.click(button);
     expect(api.post).toHaveBeenCalledWith('/provision/p1/backup/trigger');
     expect(await screen.findByText('Backup started')).toBeInTheDocument();
   });
@@ -127,6 +129,15 @@ describe('backups tab', () => {
     expect(screen.queryByRole('button', { name: /Restore|Replace|Back up now/ })).not.toBeInTheDocument();
     expect(screen.queryByTestId(/^backup-row-/)).not.toBeInTheDocument();
     expect(calledWith('/backup/list')).toBe(false);
+  });
+
+  test('while the role loads an admin sees a spinner, not the admin-only notice', async () => {
+    plane.role = 'admin';
+    open();
+    expect(screen.queryByText(/Only an admin of this organization/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Back up now' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Back up now' })).toBeEnabled();
+    expect(screen.queryByText(/Only an admin of this organization/)).not.toBeInTheDocument();
   });
 
   test('an admin has the controls', async () => {

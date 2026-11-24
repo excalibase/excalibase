@@ -62,9 +62,15 @@ const open = async (page: Page, tab: string) => {
   await expect(page.getByRole('tab', { name: new RegExp(tab, 'i'), selected: true })).toBeVisible();
 };
 
-const fitsScreen = async (page: Page) => {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow).toBeLessThanOrEqual(0);
+// The shell clips the page and <main> scrolls on its own, so the page-level check alone cannot
+// fail: <main> and the tab's own root are measured too.
+const fitsScreen = async (page: Page, tabRoot: string) => {
+  const pageWidth = await page.evaluate(() => ({ scroll: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth), client: document.documentElement.clientWidth }));
+  expect(pageWidth.scroll).toBeLessThanOrEqual(pageWidth.client);
+  for (const container of [page.locator('main'), page.getByTestId(tabRoot)]) {
+    const { scroll, client } = await container.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(scroll).toBeLessThanOrEqual(client);
+  }
 };
 
 for (const [name, size] of [['desktop', { width: 1280, height: 800 }], ['phone', { width: 390, height: 800 }]] as const) {
@@ -92,7 +98,7 @@ for (const [name, size] of [['desktop', { width: 1280, height: 800 }], ['phone',
       await start.click();
       await expect(page.getByTestId('restore-result')).toBeVisible();
       expect(requests.some((r) => r.startsWith('restore') && r.includes('orders restored'))).toBe(true);
-      await fitsScreen(page);
+      await fitsScreen(page, 'db-backups');
     });
 
     test('backups: a viewer sees no controls', async ({ page }) => {
@@ -109,7 +115,7 @@ for (const [name, size] of [['desktop', { width: 1280, height: 800 }], ['phone',
       await expect(page.getByText('3 of 50')).toBeVisible();
       await expect(page.getByTestId('instance-db-1')).toContainText('primary');
       await expect(page.getByTestId('db-metrics')).not.toContainText(/pod|kubernetes|cluster/i);
-      await fitsScreen(page);
+      await fitsScreen(page, 'db-metrics');
     });
 
     test('logs: lines, a wider range and a search reach the server', async ({ page }) => {
@@ -120,7 +126,7 @@ for (const [name, size] of [['desktop', { width: 1280, height: 800 }], ['phone',
       await page.getByRole('searchbox', { name: 'Search logs' }).fill('ERROR');
       await expect(page.getByText(/checkpoint complete/)).toHaveCount(0);
       await expect.poll(() => requests.at(-1) ?? '').toContain('q=ERROR');
-      await fitsScreen(page);
+      await fitsScreen(page, 'db-logs');
     });
   });
 }

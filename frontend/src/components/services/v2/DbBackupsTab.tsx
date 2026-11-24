@@ -32,7 +32,8 @@ function BackupRow({ backup }: { readonly backup: BackupInfo }) {
 }
 
 function PausedNote({ newest, isPauseBackup }: { readonly newest?: BackupInfo; readonly isPauseBackup: boolean }) {
-  const detail = newest ? `${isPauseBackup ? '; the pause took a final backup' : '; the latest completed backup is'} ${newest.id}` : '';
+  const lead = isPauseBackup ? '; the pause took a final backup' : '; the latest completed backup is';
+  const detail = newest ? `${lead} ${newest.id}` : '';
   return <Notice testId="paused-backups">Paused: nightly backups stop while paused{detail}</Notice>;
 }
 
