@@ -5,6 +5,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 )
 
 type recordingStep struct {
@@ -82,5 +84,36 @@ func TestUnsuspendRestoresServing(t *testing.T) {
 	want := []string{"restore sites p1", "restore sites p2"}
 	if !reflect.DeepEqual(log, want) {
 		t.Fatalf("restore steps = %v, want %v", log, want)
+	}
+}
+
+// The admin lifting a suspension serves the account's projects at once, ahead
+// of the guard's short cache: the restore runs under the platform override.
+type overrideProbe struct{ sawOverride []bool }
+
+func (o *overrideProbe) Name() string                       { return "probe" }
+func (o *overrideProbe) Stop(context.Context, string) error { return nil }
+func (o *overrideProbe) Restore(ctx context.Context, _ string) error {
+	o.sawOverride = append(o.sawOverride, orgguard.Overridden(ctx))
+	return nil
+}
+
+func TestUnsuspendRestoresUnderThePlatformOverride(t *testing.T) {
+	svc, _, _, _ := newSuspensionFixture()
+	probe := &overrideProbe{}
+	svc.AddServingSteps(probe)
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "proxy abuse"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Unsuspend(context.Background(), admin, "victim", "appealed"); err != nil {
+		t.Fatal(err)
+	}
+	if len(probe.sawOverride) == 0 {
+		t.Fatal("no restore ran")
+	}
+	for _, saw := range probe.sawOverride {
+		if !saw {
+			t.Fatal("a restore ran without the platform override")
+		}
 	}
 }

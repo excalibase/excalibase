@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
@@ -31,9 +32,15 @@ func suspendedMayWrite(method, path string) bool {
 
 func suspendedMatrix(t *testing.T, suspended bool) (*chi.Mux, string) {
 	t.Helper()
-	router, who, _, _ := buildMatrixPlatform(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(deps *handlerDeps, _ *fakePlatform) {
+	// App hosting on and the optional handlers wired, so the routes the
+	// default matrix leaves unmounted are walked too.
+	cfg := config.AppConfig{DeploymentMode: "selfhosted", AppHostingEnabled: true}
+	router, who, _, _ := buildMatrixPlatform(t, cfg, func(deps *handlerDeps, _ *fakePlatform) {
 		instances := fakestore.NewInstances()
 		instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"})
+		deps.documentsHandler = handler.NewDocumentBrowserHandler(nil)
+		deps.storageHandler = handler.NewStorageHandler(nil, instances)
+		deps.s3KeysHandler = handler.NewS3KeysHandler(nil, "")
 		deps.orgGuard = orgguard.New(instances, func(context.Context) (map[string]bool, error) {
 			if suspended {
 				return map[string]bool{matrixOrgA: true}, nil
@@ -62,6 +69,7 @@ func TestEveryProjectWriteRefusesASuspendedOwnersOrg(t *testing.T) {
 	suspended, token := suspendedMatrix(t, true)
 	unsuspended, _ := suspendedMatrix(t, false)
 	checked := 0
+	families := map[string]bool{}
 	walk := func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if !strings.Contains(pattern, "{projectId}") || isPublicProjectRoute(pattern) || !isMutating(method) {
 			return nil
@@ -81,6 +89,11 @@ func TestEveryProjectWriteRefusesASuspendedOwnersOrg(t *testing.T) {
 			t.Errorf("%s %s: refused an org in good standing: %d %q", method, pattern, code, body)
 		}
 		checked++
+		for _, family := range mountedFamilies {
+			if strings.Contains(pattern, family) {
+				families[family] = true
+			}
+		}
 		return nil
 	}
 	if err := chi.Walk(suspended, walk); err != nil {
@@ -89,6 +102,19 @@ func TestEveryProjectWriteRefusesASuspendedOwnersOrg(t *testing.T) {
 	if checked < len(projectRoutes) {
 		t.Fatalf("walked only %d project writes; the router lost mounts", checked)
 	}
+	for _, family := range mountedFamilies {
+		if !families[family] {
+			t.Errorf("no write under %s was walked: the route family is unmounted in this test, so nothing pins it", family)
+		}
+	}
+}
+
+// mountedFamilies are the route families that sit behind app hosting or an
+// optional handler. The default matrix leaves them unmounted, which once let a
+// whole family go unchecked; a family missing from the walk fails the test.
+var mountedFamilies = []string{
+	"/apps/", "/app-network", "/app-templates", "/registry-credentials", "/domains",
+	"/storage/", "/s3-keys", "/documentdb", "/metrics-keys", "/sites", "/functions", "/db-endpoint",
 }
 
 func TestSuspendedOwnersOrgStillReadsItsProject(t *testing.T) {
@@ -96,5 +122,19 @@ func TestSuspendedOwnersOrgStillReadsItsProject(t *testing.T) {
 	code, body := suspendedRequest(router, http.MethodGet, "/api/provision/"+matrixProjectA+"/", token)
 	if strings.Contains(body, orgguard.Message) {
 		t.Fatalf("a read was refused as suspended: %d %q", code, body)
+	}
+}
+
+// GET /query runs one statement in a read-only transaction, so a suspended
+// org's member can still read their data; POST /query, which can write, is refused.
+func TestSuspendedOwnersOrgKeepsReadOnlySQLButNotWritableSQL(t *testing.T) {
+	router, token := suspendedMatrix(t, true)
+	_, body := suspendedRequest(router, http.MethodGet, "/api/schema/"+matrixProjectA+"/query?sql=select+1", token)
+	if strings.Contains(body, orgguard.Message) {
+		t.Fatalf("the read-only query was refused as suspended: %q", body)
+	}
+	code, body := suspendedRequest(router, http.MethodPost, "/api/schema/"+matrixProjectA+"/query", token)
+	if code != http.StatusForbidden || !strings.Contains(body, orgguard.Message) {
+		t.Fatalf("the writable query: %d %q, want it refused as suspended", code, body)
 	}
 }

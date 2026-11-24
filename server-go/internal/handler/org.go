@@ -598,6 +598,10 @@ func (h *OrgHandler) projectMemberWriteAllowed(w http.ResponseWriter, projectID 
 func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	orgID := chi.URLParam(r, "orgId")
+	if err := h.orgGuard.CheckOrg(r.Context(), orgID); err != nil {
+		writeOrgGuardError(w, err)
+		return
+	}
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
 		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
@@ -644,6 +648,10 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	orgID := chi.URLParam(r, "orgId")
+	if err := h.orgGuard.CheckOrg(r.Context(), orgID); err != nil {
+		writeOrgGuardError(w, err)
+		return
+	}
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
 		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)

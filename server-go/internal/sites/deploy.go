@@ -365,6 +365,10 @@ func (s *Service) publish(ctx context.Context, site *Site, rel release) error {
 	if err != nil {
 		return err
 	}
+	// A suspension that landed while this deploy ran must not route the site.
+	if err := s.options.OrgGuard.CheckServingFreshUnlessAdmin(ctx, site.ProjectID); err != nil {
+		return publishFailure(site, stepRoute, err)
+	}
 	if err := s.publisher.PutKV(ctx, site.Hostname, entry); err != nil {
 		return publishFailure(site, stepRoute, err)
 	}

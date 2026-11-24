@@ -4,7 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
 )
@@ -45,5 +51,26 @@ func TestAcceptInvite_RefusedWhileTheOrgOwnerIsSuspended(t *testing.T) {
 	h := guardedOrgHandler(t, org)
 	if w := acceptRequest(h, `{"token":"tok"}`); w.Code != http.StatusForbidden || len(org.accepted) != 0 {
 		t.Fatalf("got %d, %d accepted; want 403 and the invite unspent", w.Code, len(org.accepted))
+	}
+}
+
+// Giving someone access to a project of a suspended owner's org is growth too.
+func TestProjectMembers_AddAndChangeRefusedWhileTheOrgOwnerIsSuspended(t *testing.T) {
+	h := NewOrgHandler(&inviteOrgStore{}, nil)
+	h.SetOrgGuard(suspendedOrgGuard("org1"))
+	r := chi.NewRouter()
+	r.Post("/api/orgs/{orgId}/projects/{projectId}/members/", h.AddProjectMember)
+	r.Patch("/api/orgs/{orgId}/projects/{projectId}/members/{userId}", h.UpdateProjectMemberRole)
+	for _, call := range []struct{ method, path string }{
+		{http.MethodPost, "/api/orgs/org1/projects/p1/members/"},
+		{http.MethodPatch, "/api/orgs/org1/projects/p1/members/u2"},
+	} {
+		req := httptest.NewRequest(call.method, call.path, strings.NewReader(`{"userId":"u2","role":"admin"}`))
+		req = req.WithContext(auth.SetUser(req.Context(), &domain.User{ID: "u-admin", Role: "user"}))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), orgguard.Message) {
+			t.Errorf("%s %s: %d %s, want 403 with the suspension message", call.method, call.path, w.Code, w.Body.String())
+		}
 	}
 }

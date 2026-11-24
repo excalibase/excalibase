@@ -14,9 +14,9 @@ const defaultServingTTL = 5 * time.Second
 const maxCachedProjects = 50000
 
 type servingLists struct {
-	orgs, users map[string]bool
-	at          time.Time
-	loaded      bool
+	orgs   map[string]bool
+	at     time.Time
+	loaded bool
 }
 
 type projectOwner struct {
@@ -25,36 +25,38 @@ type projectOwner struct {
 	at             time.Time
 }
 
+// WithClock replaces the guard's clock, for tests of the cache expiry.
+func (g *Guard) WithClock(now func() time.Time) *Guard {
+	g.now = now
+	return g
+}
+
 // WithServingTTL sets how long CheckServing trusts what it read; zero reads every time.
 func (g *Guard) WithServingTTL(ttl time.Duration) *Guard {
 	g.servingTTL = ttl
 	return g
 }
 
-// CheckServing refuses while the project's org owner, or the account that
-// created it, is suspended. Unlike CheckProject it is for what the platform
-// serves rather than starts, so a platform admin's override does not apply:
-// the engine and the auth service ask on behalf of nobody.
+// CheckServing refuses while the owner of the project's org is suspended. It
+// keys on the org owner alone: a suspended account that merely created a
+// project in a good-standing org must not take that org's project down.
+// (CheckProject, for starting compute, still refuses a suspended creator.)
+// Unlike CheckProject it is for what the platform serves rather than starts,
+// so a platform admin's override does not apply: the engine and the auth
+// service ask on behalf of nobody.
 //
 // An unknown project passes; the caller's own not-found stands. When the
-// suspension lists cannot be read the last good copy answers; with none, the
-// call is refused.
+// suspension list cannot be read the last good copy answers; with none, the
+// call is refused with ErrCheckUnavailable.
 func (g *Guard) CheckServing(ctx context.Context, projectID string) error {
-	if g == nil {
-		return nil
-	}
-	owner, err := g.projectOwnerOf(projectID)
-	if err != nil || !owner.known {
-		return err
-	}
-	lists, err := g.servingLists(ctx)
-	if err != nil {
-		return err
-	}
-	if lists.orgs[owner.orgID] || (owner.ownerID != "" && lists.users[owner.ownerID]) {
-		return ErrOrgSuspended
-	}
-	return nil
+	return g.checkServing(ctx, projectID, false)
+}
+
+// CheckServingFresh is CheckServing that trusts no cached read, for the moment
+// before a write that would serve a project, and for deciding whether an
+// unsuspend may restore it.
+func (g *Guard) CheckServingFresh(ctx context.Context, projectID string) error {
+	return g.checkServing(ctx, projectID, true)
 }
 
 // CheckServingUnlessAdmin is CheckServing for work done on a person's behalf:
@@ -68,11 +70,37 @@ func (g *Guard) CheckServingUnlessAdmin(ctx context.Context, projectID string) e
 	return g.CheckServing(ctx, projectID)
 }
 
-func (g *Guard) projectOwnerOf(projectID string) (projectOwner, error) {
+// CheckServingFreshUnlessAdmin is CheckServingFresh with the admin's override.
+func (g *Guard) CheckServingFreshUnlessAdmin(ctx context.Context, projectID string) error {
+	if overridden(ctx) {
+		return nil
+	}
+	return g.CheckServingFresh(ctx, projectID)
+}
+
+func (g *Guard) checkServing(ctx context.Context, projectID string, fresh bool) error {
+	if g == nil {
+		return nil
+	}
+	owner, err := g.projectOwnerOf(projectID, fresh)
+	if err != nil || !owner.known {
+		return err
+	}
+	lists, err := g.servingLists(ctx, fresh)
+	if err != nil {
+		return err
+	}
+	if lists.orgs[owner.orgID] {
+		return ErrOrgSuspended
+	}
+	return nil
+}
+
+func (g *Guard) projectOwnerOf(projectID string, fresh bool) (projectOwner, error) {
 	g.mu.Lock()
 	cached, ok := g.projects[projectID]
 	g.mu.Unlock()
-	if ok && g.now().Sub(cached.at) < g.servingTTL {
+	if ok && !fresh && g.now().Sub(cached.at) < g.servingTTL {
 		return cached, nil
 	}
 	inst, err := g.instances.FindByProjectID(projectID)
@@ -92,24 +120,25 @@ func (g *Guard) projectOwnerOf(projectID string) (projectOwner, error) {
 	return owner, nil
 }
 
-func (g *Guard) servingLists(ctx context.Context) (servingLists, error) {
+func (g *Guard) servingLists(ctx context.Context, fresh bool) (servingLists, error) {
 	g.mu.Lock()
 	cached := g.lists
 	g.mu.Unlock()
-	if cached.loaded && g.now().Sub(cached.at) < g.servingTTL {
+	if cached.loaded && !fresh && g.now().Sub(cached.at) < g.servingTTL {
 		return cached, nil
 	}
-	fresh, err := g.readLists(ctx)
+	read, err := g.readLists(ctx)
 	if err != nil {
-		if cached.loaded {
+		// A fresh check is asked because the last answer is not good enough.
+		if cached.loaded && !fresh {
 			return cached, nil
 		}
 		return servingLists{}, fmt.Errorf("%w: %w", ErrCheckUnavailable, err)
 	}
 	g.mu.Lock()
-	g.lists = fresh
+	g.lists = read
 	g.mu.Unlock()
-	return fresh, nil
+	return read, nil
 }
 
 func (g *Guard) readLists(ctx context.Context) (servingLists, error) {
@@ -119,11 +148,5 @@ func (g *Guard) readLists(ctx context.Context) (servingLists, error) {
 	if err != nil {
 		return servingLists{}, err
 	}
-	users := map[string]bool{}
-	if g.users != nil {
-		if users, err = g.users(lookupCtx); err != nil {
-			return servingLists{}, err
-		}
-	}
-	return servingLists{orgs: orgs, users: users, at: g.now(), loaded: true}, nil
+	return servingLists{orgs: orgs, at: g.now(), loaded: true}, nil
 }

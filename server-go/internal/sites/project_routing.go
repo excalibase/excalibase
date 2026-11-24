@@ -148,7 +148,7 @@ func (s *Service) ReconcileServerSites(ctx context.Context) error {
 			failures = append(failures, err)
 		}
 	}
-	return errors.Join(failures...)
+	return errors.Join(append(failures, s.unrouteSuspended(ctx)...)...)
 }
 
 // reconcileInTime gives each site its own time, so one slow answer leaves no other site routed.
@@ -187,4 +187,31 @@ func (s *Service) unrouteSite(ctx context.Context, site *Site) error {
 		return publishFailure(site, stepUnroute, err)
 	}
 	return s.unrouteSiteHostnames(ctx, site)
+}
+
+// unrouteSuspended takes every site and preview of a suspended owner off the
+// router, static ones included: the suspension unrouted them once, and this
+// keeps them off however they got routed again (a deploy that raced it, a
+// hostname check, an admin). Each failure is returned; every site is tried.
+func (s *Service) unrouteSuspended(ctx context.Context) []error {
+	all, err := s.store.ListSites(ctx)
+	if err != nil {
+		return []error{err}
+	}
+	var failures []error
+	for _, site := range all {
+		if !errors.Is(s.options.OrgGuard.CheckServing(ctx, site.ProjectID), orgguard.ErrOrgSuspended) {
+			continue
+		}
+		siteCtx, cancel := context.WithTimeout(ctx, reconcileSiteTimeout)
+		err := s.unrouteSite(siteCtx, site)
+		if err == nil {
+			err = s.routeSitePreviews(siteCtx, site, false)
+		}
+		cancel()
+		if err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return failures
 }

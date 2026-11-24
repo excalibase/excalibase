@@ -247,18 +247,31 @@ func TestOwnerSuspendedOrgsNamesOrgsOfSuspendedOwners(t *testing.T) {
 	}
 }
 
-func TestOwnedProjectsListsTheProjectsOfOrgsTheAccountOwns(t *testing.T) {
+func TestSuspensionTakesDownOnlyWhatTheAccountsOrgsHold(t *testing.T) {
 	store, console := consoleFixture(t)
 	ctx := context.Background()
-	// A project the account made in someone else's org is the account's too.
+	// A project the account made in someone else's org is that org's, not the account's.
 	if _, err := store.db.ExecContext(ctx,
 		`INSERT INTO database_instances (project_id, org_id, owner_id, status, project_name, namespace, storage_size, no_database, created_at)
 		 VALUES ('p-made', 'o-other', 'u-cust', 'ACTIVE', 'p-made', 'ns-made', '1Gi', FALSE, NOW())`); err != nil {
 		t.Fatal(err)
 	}
-	got, err := console.OwnedProjects(ctx, "u-cust")
-	if err != nil || len(got) != 2 || got[0] != "p-cust" || got[1] != "p-made" {
-		t.Fatalf("projects = %v, %v; want the owned org's and the one it created", got, err)
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO apps (project_id, id, name, status, doc) VALUES ('p-made', 'a-made', 'a-made', 'ACTIVE', '{"replicas":1}'::jsonb)`); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := console.OwnedProjects(ctx, "u-cust")
+	if err != nil || len(projects) != 1 || projects[0] != "p-cust" {
+		t.Fatalf("projects = %v, %v; want only the org the account owns", projects, err)
+	}
+	apps, err := console.OwnedApps(ctx, "u-cust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, app := range apps {
+		if app.ProjectID == "p-made" {
+			t.Fatalf("app %s of a good-standing org's project is listed for the suspension", app.AppID)
+		}
 	}
 }
 

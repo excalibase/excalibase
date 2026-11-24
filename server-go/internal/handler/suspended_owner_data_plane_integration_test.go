@@ -153,3 +153,46 @@ func unsuspendOwner(t *testing.T, store *pgstore.Store) {
 		t.Fatalf("Unsuspend: %v", err)
 	}
 }
+
+// A suspended account that only created a project in a good-standing org must
+// not take that org's project down; the org owner's suspension does.
+func TestProjectInfo_KeysOnTheOrgOwnerNotTheCreator(t *testing.T) {
+	store := pgtest.New(t)
+	ctx := context.Background()
+	for _, id := range []string{"acme-owner", "bob"} {
+		if err := store.CreateUser(ctx, &domain.User{ID: id, Username: testutil.FixtureToken(id), Email: id + "@test.com",
+			PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}); err != nil {
+			t.Fatalf("CreateUser %s: %v", id, err)
+		}
+	}
+	if err := store.CreateOrg(ctx, &domain.Org{ID: "7c1f0c2e-1b7a-4e0e-9d55-6a2f3f0a9b22", Name: "Acme", Slug: "acme", Tier: domain.Free, OwnerID: "acme-owner"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: "proj-acme1", ProjectName: "site", OrgID: "7c1f0c2e-1b7a-4e0e-9d55-6a2f3f0a9b22", OwnerID: "bob", Status: "ACTIVE"}); err != nil {
+		t.Fatal(err)
+	}
+	h := NewProvisioningHandler(service.NewProvisioningService(store, provisioner.NewFactory(), nil), store)
+	h.SetCorsStore(store)
+	h.SetServingGuard(suspensionGuard(store))
+	r := chi.NewRouter()
+	r.Get("/api/projects/{projectId}/info", h.GetProjectInfo)
+	get := func() int {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/projects/proj-acme1/info", nil))
+		return w.Code
+	}
+	suspend := func(id string) {
+		if err := pgstore.NewAdminConsole(store.DB()).Suspend(ctx, adminconsole.Suspension{UserID: id, Email: id + "@test.com", Reason: "x",
+			Code: adminconsole.ReasonSpamOrPhishing, At: time.Now()}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	suspend("bob")
+	if code := get(); code != http.StatusOK {
+		t.Fatalf("/info after the creator was suspended = %d, want 200: the org is in good standing", code)
+	}
+	suspend("acme-owner")
+	if code := get(); code != http.StatusNotFound {
+		t.Fatalf("/info after the org owner was suspended = %d, want 404", code)
+	}
+}

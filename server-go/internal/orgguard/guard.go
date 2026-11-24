@@ -44,6 +44,9 @@ func WithPlatformOverride(ctx context.Context) context.Context {
 	return context.WithValue(ctx, overrideKey{}, true)
 }
 
+// Overridden reports whether ctx acts for a platform admin.
+func Overridden(ctx context.Context) bool { return overridden(ctx) }
+
 func overridden(ctx context.Context) bool {
 	v, _ := ctx.Value(overrideKey{}).(bool)
 	return v

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -79,5 +80,30 @@ func TestRequireServableProjectRefusesASuspendedOwnersPublicFiles(t *testing.T) 
 	}
 	if got := serveReq(build(suspendedGuard(false)), http.MethodGet, path).Code; got != http.StatusOK {
 		t.Fatalf("good standing: got %d, want 200", got)
+	}
+}
+
+// A check that could not be made must not read as good standing (the write
+// gate) or as a missing project (public files): both answer a retryable 503.
+func TestSuspensionCheckUnavailable_Answers503(t *testing.T) {
+	instances := fakestore.NewInstances()
+	instances.Create(&domain.DatabaseInstance{ProjectID: "proj-s", OrgID: "org-s", Status: "ACTIVE"})
+	down := orgguard.New(instances, func(context.Context) (map[string]bool, error) { return nil, errors.New("db down") })
+
+	writes := chi.NewRouter()
+	writes.Route("/api/projects/{projectId}", func(r chi.Router) {
+		r.Use(RefuseSuspendedWrites(down))
+		r.HandleFunc("/*", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	})
+	if got := serveReq(writes, http.MethodPost, "/api/projects/proj-s/apps/").Code; got != http.StatusServiceUnavailable {
+		t.Fatalf("write gate with the check down: %d, want 503", got)
+	}
+
+	files := chi.NewRouter()
+	files.With(RequireServableProject(instances, down)).Get("/storage/v1/object/public/{projectId}/{bucket}/*",
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	w := serveReq(files, http.MethodGet, "/storage/v1/object/public/proj-s/pub/logo.png")
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("public files with the check down: %d, want 503 with Retry-After", w.Code)
 	}
 }

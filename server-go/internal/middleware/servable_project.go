@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -40,8 +41,16 @@ func RequireServableProject(instances storage.InstanceStore, owners ...*orgguard
 			// A suspended owner's project reads as absent too, so its public
 			// files and end-user storage stop being served (EXC-845).
 			for _, guard := range owners {
-				if guard.CheckServing(r.Context(), projectID) != nil {
+				err := guard.CheckServing(r.Context(), projectID)
+				switch {
+				case err == nil:
+				case errors.Is(err, orgguard.ErrOrgSuspended):
 					http.Error(w, errBodyProjectNotFound, http.StatusNotFound)
+					return
+				default:
+					// Not judged: a retryable 503, never the 404 that says the project is gone.
+					w.Header().Set("Retry-After", "5")
+					writeSuspendedBody(w, http.StatusServiceUnavailable, errBodyUnavailable)
 					return
 				}
 			}

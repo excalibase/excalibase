@@ -244,7 +244,7 @@ func runServer(cfg config.AppConfig) {
 		deps.dbAllowListHandler.SetAPI(dbEndpointSvc)
 		deps.dbReadAddressHandler.SetAPI(withReadAddress)
 		provSvc.SetPublicEndpointReconciler(withReadAddress)
-		deps.suspensions.AddServingSteps(service.NewSuspendedEndpoints(store, withReadAddress))
+		deps.suspensions.AddServingSteps(service.NewSuspendedEndpoints(store, withReadAddress, newOrgGuard(store, sqlStore)))
 	}
 	if singleHostEndpoints := buildSingleHostEndpoints(cfg, store, dockerClientRef); singleHostEndpoints != nil {
 		deps.provHandler.SetDBEndpointService(singleHostEndpoints)
@@ -1994,7 +1994,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	adminHandler.SetOwnerSuspender(suspensions)
 	// A suspension also takes the account's sites, functions and public database
 	// ports offline (EXC-845); the database endpoint step joins in runServer.
-	suspensions.AddServingSteps(service.NewSuspendedSites(sitesSvc), service.NewSuspendedWorkloads(appDeploySvc))
+	servingGuard := newOrgGuard(store, sqlStore)
+	suspensions.AddServingSteps(service.NewSuspendedSites(sitesSvc, store, servingGuard), service.NewSuspendedWorkloads(appDeploySvc, store, servingGuard))
 	return &handlerDeps{
 		orgGuard:              newOrgGuard(store, sqlStore),
 		suspensions:           suspensions,

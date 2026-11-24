@@ -41,8 +41,9 @@ func SuspendedMayWrite(method, path string) bool {
 	return false
 }
 
-// RefuseSuspendedWrites answers 403 to a write on a project whose org owner,
-// or creator, is abuse-suspended (EXC-845). It sits after RequireProjectAccess,
+// RefuseSuspendedWrites answers 403 to a write on a project whose org owner is
+// abuse-suspended (EXC-845); a suspended account that only created a project
+// in a good-standing org changes nothing here. It sits after RequireProjectAccess,
 // which carries a platform admin's override: an admin may still act. The
 // service-level checks of EXC-843 stay as the second line; this is the one
 // place that already resolves the project, so no handler can forget it.
@@ -55,7 +56,7 @@ func RefuseSuspendedWrites(guard *orgguard.Guard) func(http.Handler) http.Handle
 				next.ServeHTTP(w, r)
 				return
 			}
-			err := guard.CheckProject(r.Context(), projectID)
+			err := guard.CheckServingUnlessAdmin(r.Context(), projectID)
 			switch {
 			case err == nil:
 				next.ServeHTTP(w, r)

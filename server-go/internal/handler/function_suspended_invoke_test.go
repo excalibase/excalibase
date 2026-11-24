@@ -11,6 +11,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
+	"github.com/excalibase/provisioning-poc/internal/scheduler"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -75,8 +76,9 @@ func TestSchedulerInvoker_WarmClientRefusesASuspendedOrg(t *testing.T) {
 	h.clients["proj_p1"] = client
 	h.clientMu.Unlock()
 
-	if err := h.SchedulerInvoker().Invoke(context.Background(), "proj_p1", "hello", "default", nil); err == nil {
-		t.Fatal("a scheduled task of a suspended org ran")
+	err := h.SchedulerInvoker().Invoke(context.Background(), "proj_p1", "hello", "default", nil)
+	if !errors.Is(err, scheduler.ErrNotServable) {
+		t.Fatalf("a scheduled task of a suspended org: %v, want scheduler.ErrNotServable so the worker closes it instead of retrying", err)
 	}
 }
 
