@@ -62,6 +62,10 @@ type SuspensionNotice struct {
 	OrgClosed bool
 }
 
+// ErrClosureNoticeInFlight: another revoke of the org is sending the closure
+// mail now, so this one must leave the org for a retry.
+var ErrClosureNoticeInFlight = errors.New("the closure notice is being sent by another revoke")
+
 // SuspensionNotifier tells the account holder about a suspension.
 type SuspensionNotifier interface {
 	Suspended(ctx context.Context, notice SuspensionNotice) error
@@ -139,9 +143,15 @@ func (s *SuspensionService) NotifyOrgClosed(ctx context.Context, userID, orgID s
 		return nil
 	}
 	user, err := s.store.FindUser(ctx, userID)
-	if err != nil || user == nil {
+	if err != nil {
 		metrics.SuspensionMail("failed")
-		return fmt.Errorf("closure mail: look up user %s: %w", userID, errOrMissing(err))
+		return fmt.Errorf("closure mail: look up user %s: %w", userID, err)
+	}
+	if user == nil || user.Email == "" {
+		// An owner that is gone, not a person, or without an address is owed
+		// nothing, and must not keep the org from being revoked.
+		log.Printf("closure mail for org %s: owner %s has no account or address, nothing to send", orgID, userID)
+		return nil
 	}
 	claimed, err := s.store.ClaimClosureMail(ctx, userID, orgID)
 	if err != nil {
@@ -149,7 +159,7 @@ func (s *SuspensionService) NotifyOrgClosed(ctx context.Context, userID, orgID s
 		return fmt.Errorf("closure mail: claim for org %s: %w", orgID, err)
 	}
 	if !claimed {
-		return nil
+		return s.closureAlreadyClaimed(ctx, userID, orgID)
 	}
 	if err := s.notifier.Suspended(ctx, SuspensionNotice{Email: user.Email, Code: ReasonOther, OrgClosed: true}); err != nil {
 		metrics.SuspensionMail("failed")
@@ -158,15 +168,25 @@ func (s *SuspensionService) NotifyOrgClosed(ctx context.Context, userID, orgID s
 		}
 		return fmt.Errorf("closure mail for org %s: %w", orgID, err)
 	}
+	if err := s.store.MarkClosureMailSent(ctx, userID, orgID); err != nil {
+		log.Printf("ERROR: closure mail for org %s sent but not recorded: %v", orgID, err)
+	}
 	metrics.SuspensionMail("sent")
 	return nil
 }
 
-func errOrMissing(err error) error {
+// closureAlreadyClaimed: the mail was sent by an earlier revoke (nothing is
+// owed), or another revoke is sending it now and the caller must not finish
+// the job, because that send may still fail.
+func (s *SuspensionService) closureAlreadyClaimed(ctx context.Context, userID, orgID string) error {
+	sent, err := s.store.ClosureMailSent(ctx, userID, orgID)
 	if err != nil {
-		return err
+		return fmt.Errorf("closure mail: read the claim for org %s: %w", orgID, err)
 	}
-	return ErrUserNotFound
+	if !sent {
+		return ErrClosureNoticeInFlight
+	}
+	return nil
 }
 
 // withoutFailed drops the apps this run could not stop; the mail names only what stopped.

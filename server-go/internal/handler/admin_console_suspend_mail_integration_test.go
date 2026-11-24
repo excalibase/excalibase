@@ -277,3 +277,21 @@ func TestClosureMail_AFailedSendIsOwedAgain(t *testing.T) {
 		t.Fatalf("mails = %d, want the retry to send it", len(box.sent))
 	}
 }
+
+// A claim still being sent makes another revoke wait; once sent, it may finish.
+func TestClosureMail_AClaimBeingSentIsInFlightUntilItIsSent(t *testing.T) {
+	svc, queries, box := closureRig(t)
+	ctx := context.Background()
+	if ok, err := queries.ClaimClosureMail(ctx, testAliceID, "org-a"); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := svc.NotifyOrgClosed(ctx, testAliceID, "org-a"); !errors.Is(err, adminconsole.ErrClosureNoticeInFlight) {
+		t.Fatalf("got %v, want in flight", err)
+	}
+	if err := queries.MarkClosureMailSent(ctx, testAliceID, "org-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.NotifyOrgClosed(ctx, testAliceID, "org-a"); err != nil || len(box.sent) != 0 {
+		t.Fatalf("got %v, mails = %d: already sent, nothing more is owed", err, len(box.sent))
+	}
+}

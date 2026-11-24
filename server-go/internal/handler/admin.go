@@ -314,7 +314,7 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 	if len(failed) == 0 && org.OwnerID != "" && h.suspender != nil {
 		if err := h.suspender.NotifyOrgClosed(r.Context(), org.OwnerID, orgID); err != nil {
 			log.Printf("ERROR: revoke org %s: closure notice: %v", orgID, err)
-			h.writeClosureNoticeFailed(w, orgID, dropped)
+			h.writeClosureNoticePending(w, r, org, dropped, err)
 			return
 		}
 	}
@@ -348,16 +348,29 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// writeClosureNoticeFailed answers a revoke whose projects are gone but whose
-// owner could not be told. The org is kept so revoking again retries the mail.
-func (h *AdminHandler) writeClosureNoticeFailed(w http.ResponseWriter, orgID string, dropped int) {
+// writeClosureNoticePending answers a revoke whose projects are gone but whose
+// owner is not yet told, either because the send failed or because another
+// revoke is sending it. The org is kept so revoking again finishes the job; the
+// revoke is audited, as the projects it dropped are gone.
+func (h *AdminHandler) writeClosureNoticePending(w http.ResponseWriter, r *http.Request, org *domain.Org, dropped int, cause error) {
+	note, message := "not_sent", "organisation closed but the notice email was not sent; revoke again to retry"
+	if errors.Is(cause, adminconsole.ErrClosureNoticeInFlight) {
+		note, message = "in_flight", "organisation closed; the notice email is being sent by another revoke, revoke again to finish"
+	}
+	h.auditFireAndForget(r, &domain.AuditEntry{
+		UserID:     extractUserID(r),
+		Action:     "admin.revoke_org",
+		Resource:   "org",
+		ResourceID: org.ID,
+		Details:    fmt.Sprintf("dropped=%d failed=0 slug=%s notice=%s", dropped, org.Slug, note),
+	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusMultiStatus)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"orgId":   orgID,
+		"orgId":   org.ID,
 		"dropped": dropped,
 		"failed":  []string{},
-		"message": "organisation closed but the notice email was not sent; revoke again to retry",
+		"message": message,
 	})
 }
 

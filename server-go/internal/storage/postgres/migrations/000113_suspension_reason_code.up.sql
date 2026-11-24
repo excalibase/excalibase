@@ -15,5 +15,7 @@ CREATE TABLE IF NOT EXISTS abuse_org_closures (
     user_id   TEXT NOT NULL,
     org_id    TEXT NOT NULL,
     claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Null while the mail is being sent; a retry finishing the revoke waits for it.
+    sent_at    TIMESTAMPTZ,
     PRIMARY KEY (user_id, org_id)
 );

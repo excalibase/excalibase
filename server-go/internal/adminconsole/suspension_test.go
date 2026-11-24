@@ -20,6 +20,7 @@ type fakeSuspensions struct {
 	mailSent    map[string]bool
 	suspended   map[string]bool
 	closureSent map[string]bool
+	closureDone map[string]bool
 	// calls is the order the store was used in.
 	calls []string
 }
@@ -34,6 +35,7 @@ func newFakeSuspensions() *fakeSuspensions {
 		mailSent:    map[string]bool{},
 		suspended:   map[string]bool{},
 		closureSent: map[string]bool{},
+		closureDone: map[string]bool{},
 	}
 }
 
@@ -108,6 +110,19 @@ func (f *fakeSuspensions) ReleaseClosureMail(_ context.Context, userID, orgID st
 	defer f.mu.Unlock()
 	delete(f.closureSent, userID+"/"+orgID)
 	return nil
+}
+
+func (f *fakeSuspensions) MarkClosureMailSent(_ context.Context, userID, orgID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closureDone[userID+"/"+orgID] = true
+	return nil
+}
+
+func (f *fakeSuspensions) ClosureMailSent(_ context.Context, userID, orgID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closureDone[userID+"/"+orgID], nil
 }
 
 func (f *fakeSuspensions) Unsuspend(_ context.Context, userID string) error {

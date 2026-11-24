@@ -168,8 +168,12 @@ func (deactivatingStore) ReleaseMail(context.Context, string) error       { retu
 func (deactivatingStore) ClaimClosureMail(context.Context, string, string) (bool, error) {
 	return false, nil
 }
-func (deactivatingStore) ReleaseClosureMail(context.Context, string, string) error { return nil }
-func (deactivatingStore) Unsuspend(context.Context, string) error                  { return nil }
+func (deactivatingStore) ReleaseClosureMail(context.Context, string, string) error  { return nil }
+func (deactivatingStore) MarkClosureMailSent(context.Context, string, string) error { return nil }
+func (deactivatingStore) ClosureMailSent(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+func (deactivatingStore) Unsuspend(context.Context, string) error { return nil }
 func (deactivatingStore) SuspendedApps(context.Context, string) ([]adminconsole.SuspendedApp, error) {
 	return nil, nil
 }
@@ -373,5 +377,30 @@ func TestAdmin_RevokeOrg_KeepsTheOrgWhenTheClosureMailFailsAndRetries(t *testing
 	}
 	if !orgs.deleted || len(sus.closures) != 2 {
 		t.Fatalf("org deleted = %v, closure attempts = %d, want the retry to mail and delete", orgs.deleted, len(sus.closures))
+	}
+}
+
+// A revoke that dropped projects but could not tell the owner is still audited.
+func TestAdmin_RevokeOrg_AuditsTheRevokeWhenTheNoticeFails(t *testing.T) {
+	for name, err := range map[string]error{"not_sent": errors.New("smtp down"), "in_flight": adminconsole.ErrClosureNoticeInFlight} {
+		t.Run(name, func(t *testing.T) {
+			audit := &syncAudit{}
+			store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+				"proj-1": {ProjectID: "proj-1", OrgID: "org-9", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeDocker, Namespace: "ctr-1"},
+			}}
+			orgs := &adminOrgStore{org: &domain.Org{ID: "org-9", Slug: "acme", OwnerID: "owner-1"}}
+			h := NewAdminHandler(newDockerProvSvc(t, store), store, orgs, audit, nil, "", nil)
+			h.SetOwnerSuspender(&fakeOwnerSuspender{closureErr: err})
+			r := chi.NewRouter()
+			r.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
+			w := revoke(r, revokeReasonBody)
+			if w.Code != http.StatusMultiStatus || orgs.deleted {
+				t.Fatalf("got %d, deleted = %v", w.Code, orgs.deleted)
+			}
+			entry := audit.first(t)
+			if entry.Action != "admin.revoke_org" || !strings.Contains(entry.Details, "dropped=1") || !strings.Contains(entry.Details, "notice="+name) {
+				t.Fatalf("audit = %+v", entry)
+			}
+		})
 	}
 }

@@ -348,3 +348,39 @@ func TestSuspendCountsMailOutcomes(t *testing.T) {
 		t.Fatalf("sent mails rose by %v, want 1", got)
 	}
 }
+
+// An owner the store cannot find, or one with no address, is owed nothing: the
+// revoke must still be able to finish.
+func TestClosureMailForAnOwnerWithNoAddressOrNoAccountIsNotAnError(t *testing.T) {
+	svc, store, _, notifier := noticeFixture(true)
+	if err := svc.NotifyOrgClosed(context.Background(), "ghost", "org-1"); err != nil {
+		t.Fatalf("missing owner: %v", err)
+	}
+	store.users["victim"].Email = ""
+	if err := svc.NotifyOrgClosed(context.Background(), "victim", "org-1"); err != nil {
+		t.Fatalf("empty email: %v", err)
+	}
+	if notifier.count() != 0 {
+		t.Fatalf("notices = %d, nothing is owed", notifier.count())
+	}
+}
+
+// While one revoke's send is in flight, another must not finish the job: if the
+// send fails the org row is what a retry needs.
+func TestAClosureSendInFlightMakesAConcurrentRevokeWait(t *testing.T) {
+	svc, _, _, notifier := noticeFixture(true)
+	notifier.hold = make(chan struct{})
+	first := make(chan error, 1)
+	go func() { first <- svc.NotifyOrgClosed(context.Background(), "victim", "org-1") }()
+	time.Sleep(50 * time.Millisecond)
+	if err := svc.NotifyOrgClosed(context.Background(), "victim", "org-1"); !errors.Is(err, ErrClosureNoticeInFlight) {
+		t.Fatalf("second revoke got %v, want ErrClosureNoticeInFlight", err)
+	}
+	close(notifier.hold)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.NotifyOrgClosed(context.Background(), "victim", "org-1"); err != nil {
+		t.Fatalf("after the send succeeded a revoke may finish: %v", err)
+	}
+}

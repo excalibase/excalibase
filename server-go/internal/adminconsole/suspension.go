@@ -100,6 +100,11 @@ type SuspensionStore interface {
 	ClaimClosureMail(ctx context.Context, userID, orgID string) (bool, error)
 	// ReleaseClosureMail gives the claim back after a send that failed.
 	ReleaseClosureMail(ctx context.Context, userID, orgID string) error
+	// MarkClosureMailSent records that the claimed mail went out.
+	MarkClosureMailSent(ctx context.Context, userID, orgID string) error
+	// ClosureMailSent says whether the claimed mail went out; false for a
+	// claim still being sent.
+	ClosureMailSent(ctx context.Context, userID, orgID string) (bool, error)
 }
 
 // AppControl stops and restarts an app through the app lifecycle, which scales

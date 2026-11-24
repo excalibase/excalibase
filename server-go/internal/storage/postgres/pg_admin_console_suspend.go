@@ -105,15 +105,35 @@ func (a *AdminConsole) ReleaseMail(ctx context.Context, userID string) error {
 }
 
 // ClaimClosureMail records that the closure mail of this org is being sent; a
-// second caller finds the row and gets false. The row outlives an unsuspend:
-// an org is closed once.
+// second caller gets false. A claim that was never finished (a crash mid-send)
+// is taken over after five minutes. The row outlives an unsuspend: an org is
+// closed once.
 func (a *AdminConsole) ClaimClosureMail(ctx context.Context, userID, orgID string) (bool, error) {
-	result, err := a.db.ExecContext(ctx, `INSERT INTO abuse_org_closures (user_id, org_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, userID, orgID)
+	result, err := a.db.ExecContext(ctx, `
+		INSERT INTO abuse_org_closures (user_id, org_id) VALUES ($1, $2)
+		ON CONFLICT (user_id, org_id) DO UPDATE SET claimed_at = NOW()
+		WHERE abuse_org_closures.sent_at IS NULL AND abuse_org_closures.claimed_at < NOW() - INTERVAL '5 minutes'`, userID, orgID)
 	if err != nil {
 		return false, err
 	}
 	claimed, err := result.RowsAffected()
 	return claimed == 1, err
+}
+
+// MarkClosureMailSent records that the claimed mail went out.
+func (a *AdminConsole) MarkClosureMailSent(ctx context.Context, userID, orgID string) error {
+	_, err := a.db.ExecContext(ctx, `UPDATE abuse_org_closures SET sent_at = NOW() WHERE user_id = $1 AND org_id = $2`, userID, orgID)
+	return err
+}
+
+// ClosureMailSent says whether the claimed mail went out.
+func (a *AdminConsole) ClosureMailSent(ctx context.Context, userID, orgID string) (bool, error) {
+	var sent bool
+	err := a.db.QueryRowContext(ctx, `SELECT sent_at IS NOT NULL FROM abuse_org_closures WHERE user_id = $1 AND org_id = $2`, userID, orgID).Scan(&sent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return sent, err
 }
 
 // ReleaseClosureMail makes the closure mail owed again after a send that failed.
