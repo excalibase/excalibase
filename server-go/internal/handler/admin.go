@@ -339,9 +339,7 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 	if len(failed) > 0 {
 		status = http.StatusMultiStatus
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSONStatus(w, status, map[string]interface{}{
 		"orgId":   orgID,
 		"dropped": dropped,
 		"failed":  failed,
@@ -364,9 +362,7 @@ func (h *AdminHandler) writeClosureNoticePending(w http.ResponseWriter, r *http.
 		ResourceID: org.ID,
 		Details:    fmt.Sprintf("dropped=%d failed=0 slug=%s notice=%s", dropped, org.Slug, note),
 	})
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusMultiStatus)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSONStatus(w, http.StatusMultiStatus, map[string]interface{}{
 		"orgId":   org.ID,
 		"dropped": dropped,
 		"failed":  []string{},
