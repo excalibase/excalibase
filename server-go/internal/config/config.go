@@ -114,6 +114,10 @@ type AppConfig struct {
 	// so per-deployment overrides don't require touching the secret.
 	EmailFromAddress string
 	EmailFromName    string
+	// SupportEmail is where a suspended account holder appeals; AcceptableUseURL
+	// is the policy page their mail links to, one anchor per rule (EXC-841).
+	SupportEmail     string
+	AcceptableUseURL string
 	EmailProductName string
 	EmailReplyTo     string
 	StoragePublicURL string
@@ -352,6 +356,8 @@ type AppConfig struct {
 	DarkFeatures []features.Feature
 	// SignupsPerHour is how many accounts one network (a /24, or an IPv6 /64) may open per hour (EXC-755).
 	SignupsPerHour int
+	// CrashLoop is the crash-loop guard's threshold and exemptions (EXC-839).
+	CrashLoop CrashLoopConfig
 	// LogRetention is how long Loki keeps each plan's project logs (EXC-659).
 	LogRetention LogRetention
 	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
@@ -548,6 +554,8 @@ func load() AppConfig {
 		PodNamespace:                   os.Getenv("POD_NAMESPACE"),
 		EmailFromAddress:               envOr("EMAIL_FROM", "noreply@excalibase.io"),
 		EmailFromName:                  envOr("EMAIL_FROM_NAME", "Excalibase"),
+		SupportEmail:                   envOr("SUPPORT_EMAIL", "hello@excalibase.io"),
+		AcceptableUseURL:               envOr("ACCEPTABLE_USE_URL", "https://excalibase.io/acceptable-use"),
 		EmailProductName:               envOr("EMAIL_PRODUCT_NAME", "Excalibase"),
 		EmailReplyTo:                   envOr("EMAIL_REPLY_TO", ""),
 		StoragePublicURL:               envOr("STORAGE_PUBLIC_URL", ""),
@@ -622,6 +630,7 @@ func load() AppConfig {
 		Sites:                          loadSites(),
 		DarkFeatures:                   loadDarkFeatures(),
 		SignupsPerHour:                 envInt("SIGNUPS_PER_NETWORK_PER_HOUR", 10),
+		CrashLoop:                      loadCrashLoop(),
 		LogRetention:                   loadLogRetention(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
 		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",

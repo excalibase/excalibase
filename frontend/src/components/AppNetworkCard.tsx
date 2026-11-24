@@ -79,7 +79,7 @@ export function AppNetworkCard({ projectId, status }: AppNetworkCardProps) {
       )}
       {current && current.privateNetwork !== current.applied && (
         <p className="text-xs text-color-error mt-2" data-testid="app-network-not-applied">
-          The cluster does not match this setting right now. Set it again to apply it.
+          The running service does not match this setting right now. Set it again to apply it.
         </p>
       )}
       {current && canChange && !active && !current.privateNetwork && (

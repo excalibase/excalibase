@@ -27,7 +27,7 @@ function optionTileClass(disabled: boolean | undefined, selected: boolean): stri
 }
 
 const DEPLOY_MODES = [
-  { mode: 'k8s' as DeployMode, icon: Cloud, label: 'Kubernetes', desc: 'CloudNativePG operator' },
+  { mode: 'k8s' as DeployMode, icon: Cloud, label: 'Managed', desc: 'Runs on the platform' },
   { mode: 'docker' as DeployMode, icon: Server, label: 'Docker', desc: 'Docker container (coming soon)', disabled: true },
 ];
 
@@ -38,7 +38,7 @@ const DEPLOY_MODES = [
 type Engine = 'POSTGRESQL' | 'DOCUMENTDB' | 'MYSQL' | 'NONE';
 
 const ENGINES: readonly { engine: Engine; icon: string; label: string; desc: string; disabled: boolean }[] = [
-  { engine: 'POSTGRESQL', icon: '🐘', label: 'PostgreSQL',      desc: 'CloudNativePG operator',             disabled: false },
+  { engine: 'POSTGRESQL', icon: '🐘', label: 'PostgreSQL',      desc: 'Managed Postgres',                    disabled: false },
   { engine: 'DOCUMENTDB', icon: '🍃', label: DOCUMENTDB_LABEL, desc: 'MongoDB wire protocol on PostgreSQL', disabled: false },
   { engine: 'MYSQL',      icon: '🐬', label: 'MySQL',           desc: 'Coming soon',                        disabled: true  },
   { engine: 'NONE',       icon: '📦', label: 'No database',     desc: 'Containers, functions and storage',  disabled: false },

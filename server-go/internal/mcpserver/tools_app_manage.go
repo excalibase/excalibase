@@ -32,7 +32,7 @@ func appManageTools() []entry {
 		tool("update_app", "Change a container app's image or tag, port, replicas (within the plan), health check path, environment variables, the database variables it reads (database_env, e.g. DATABASE_URL for a backend), or the project's private network between apps. "+
 			"Only what you pass changes; variables not named are kept and secrets stay as they are. A change reaches the running app on the next deploy_app.", writeTool, updateApp),
 		tool("delete_app", "Delete one container app: it stops, and the CORS origin its create_app added goes with it. Other apps, the database and the rest of the CORS list are untouched. "+
-			"An app that has a disk is refused: its data would be lost, so that one is deleted in Studio.", writeTool, deleteApp),
+			"An app that has a disk is refused: its data would be lost, so that one is deleted in Studio."+confirmNote, writeTool, deleteApp),
 	}
 }
 
@@ -164,7 +164,12 @@ func mergeEnv(stored []json.RawMessage, set []envSetting, remove []string) ([]js
 	return merged, nil
 }
 
-func deleteApp(ctx context.Context, c *call, in appArgs) (any, error) {
+type deleteAppArgs struct {
+	appArgs
+	confirmArg
+}
+
+func deleteApp(ctx context.Context, c *call, in deleteAppArgs) (any, error) {
 	projectID, err := c.useProject(in.ProjectID)
 	if err != nil {
 		return nil, err
@@ -172,6 +177,20 @@ func deleteApp(ctx context.Context, c *call, in appArgs) (any, error) {
 	path, err := appPath(projectID, in.AppID)
 	if err != nil {
 		return nil, err
+	}
+	preview, err := c.guard(ctx, destruction{
+		tool: "delete_app", target: confirmTarget{projectID, in.AppID}, token: in.ConfirmationToken,
+		describe: func(ctx context.Context) (string, error) {
+			var app appView
+			if err := c.get(ctx, path+"/", nil, &app); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("the container app %q (%s): it stops, its image %s with %d replica(s) is no longer run, its public URL %s stops answering, and the CORS origin its create_app added is removed",
+				app.Name, app.ID, app.Image, app.Replicas, orNone(app.URL)), nil
+		},
+	})
+	if preview != nil || err != nil {
+		return preview, err
 	}
 	if err := c.send(ctx, http.MethodDelete, path+"/", nil, nil, nil); err != nil {
 		return nil, err

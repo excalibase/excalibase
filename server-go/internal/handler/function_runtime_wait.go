@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 )
 
 // EXC-569: a secret or allowlist change can replace the project's runtime
@@ -103,6 +104,8 @@ func writeRuntimeFailure(w http.ResponseWriter, action string, err error) bool {
 		httpError(w, "project is being deleted", http.StatusConflict)
 	case errors.Is(err, ErrProjectRestoring):
 		httpError(w, "project is being restored", http.StatusConflict)
+	case orgguard.IsRefusal(err):
+		writeOrgGuardError(w, err)
 	case errors.Is(err, edgefn.ErrRuntimeUnreachable), errors.Is(err, errRuntimeNotRolledOut):
 		log.Printf("ERROR: %s: %v", action, err)
 		w.Header().Set("Retry-After", runtimeRetryAfter)

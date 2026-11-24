@@ -11,14 +11,9 @@ import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { Archive, Copy, RefreshCw, RotateCcw, type LucideIcon } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
 import { formatBytes } from '../utils/formatBytes';
+import { backupView } from '../utils/backupView';
 
 type Tab = 'backups' | 'restore' | 'copy';
-
-const HIBERNATED_FAILURE = 'cannot backup a hibernated cluster';
-
-function isHibernatedFailure(backup: { error?: string }): boolean {
-  return (backup.error ?? '').includes(HIBERNATED_FAILURE);
-}
 
 export function BackupsPage() {
   const projectId = useRouteProjectId();
@@ -29,15 +24,7 @@ export function BackupsPage() {
   const instance = useInstance(projectId).data;
   const mysql = isMySQLProject(instance);
   const paused = instance?.status === 'PAUSED';
-  const allBackups = Array.isArray(backupData?.backups) ? backupData.backups : [];
-  // A paused database cannot be backed up, so the failures CNPG recorded for
-  // that reason are noise; any other failure is a real problem and stays.
-  const backups = paused ? allBackups.filter((b) => !(b.status === 'FAILED' && isHibernatedFailure(b))) : allBackups;
-  const newestCompleted = paused
-    ? backups.filter((b) => b.status === 'COMPLETED').sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]
-    : undefined;
-  // Call it the final backup only when it is the one the pause took.
-  const isPauseBackup = !!newestCompleted && newestCompleted.id === instance?.pauseBackupId;
+  const { backups, newestCompleted, isPauseBackup } = backupView(backupData?.backups, paused, instance?.pauseBackupId);
   const triggerBackup = useTriggerBackup();
   // Copying into a new project ships dark (EXC-667).
   const { enabled: copyOn } = useFeatureEnabled('dbcopy');

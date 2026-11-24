@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { ProvisionFailure } from '../shared/ProvisionFailure';
 import { Database, Loader2 } from 'lucide-react';
 import { useInstance } from '../../hooks/useProvisioning';
 import { useProjectEndpoint } from '../../api/projectEndpoint';
@@ -57,7 +58,7 @@ function NoDatabase({ project }: { readonly project: DatabaseInstance }) {
         {!project.canAddDatabase && ' Only an org admin or owner can add one.'}
       </p>
       {project.failureReason && (
-        <p className="text-xs text-red-400 break-words">Last attempt failed: {project.failureReason}</p>
+        <ProvisionFailure reason={project.failureReason} className="text-xs text-red-400 break-words" />
       )}
       {project.canAddDatabase && (
         <div>
@@ -142,7 +143,7 @@ export function DatabaseServiceCard({ projectId }: { readonly projectId: string 
             </div>
           </dl>
           {project.failureReason && project.currentStage === 'FAILED' && (
-            <p className="text-xs text-red-400 break-words">{project.failureReason}</p>
+            <ProvisionFailure reason={project.failureReason} className="text-xs text-red-400 break-words" />
           )}
           {isMySQLProject(project) ? (
             <MySQLEndpoint project={project} />

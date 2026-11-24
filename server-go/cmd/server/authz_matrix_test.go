@@ -492,7 +492,7 @@ func (matrixConsole) Overview(context.Context) (*adminconsole.Overview, error) {
 func (matrixConsole) Project(context.Context, adminconsole.Actor, string, string) (*adminconsole.ProjectDetail, error) {
 	return nil, adminconsole.ErrProjectNotFound
 }
-func (matrixConsole) Suspend(context.Context, adminconsole.Actor, string, string) (*adminconsole.Result, error) {
+func (matrixConsole) Suspend(context.Context, adminconsole.Actor, string, adminconsole.Reason) (*adminconsole.Result, error) {
 	return &adminconsole.Result{}, nil
 }
 func (matrixConsole) Unsuspend(context.Context, adminconsole.Actor, string, string) (*adminconsole.Result, error) {

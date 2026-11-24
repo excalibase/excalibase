@@ -50,6 +50,7 @@ func NewPostgresAppStore(db *sql.DB) *PostgresAppStore {
 func (s *PostgresAppStore) Create(app *App, maxApps int) error {
 	now := time.Now().UTC()
 	app.LifecycleFailure = nil
+	app.Suspension = nil
 	app.Version = 1
 	app.CreatedAt = now
 	app.UpdatedAt = now
@@ -176,10 +177,10 @@ func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 	var version int
 	var createdAt time.Time
 	var status string
-	var failure []byte
+	var failure, suspension []byte
 	err = tx.QueryRow(
-		`SELECT version, created_at, status, doc->'lifecycleFailure' FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
-		app.ProjectID, app.ID).Scan(&version, &createdAt, &status, &failure)
+		`SELECT version, created_at, status, doc->'lifecycleFailure', doc->'suspension' FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
+		app.ProjectID, app.ID).Scan(&version, &createdAt, &status, &failure, &suspension)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrAppNotFound
 	}
@@ -202,6 +203,13 @@ func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 	if len(failure) > 0 {
 		if err := json.Unmarshal(failure, &app.LifecycleFailure); err != nil {
 			return fmt.Errorf("read app lifecycle failure: %w", err)
+		}
+	}
+	// Only RecordSuspension writes the suspension.
+	app.Suspension = nil
+	if len(suspension) > 0 {
+		if err := json.Unmarshal(suspension, &app.Suspension); err != nil {
+			return fmt.Errorf("read app suspension: %w", err)
 		}
 	}
 	app.UpdatedAt = time.Now().UTC()

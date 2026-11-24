@@ -79,6 +79,20 @@ func (s *AppDeployService) holdAppQueued(ctx context.Context, projectID, appID s
 // PauseApp scales the app to zero and records PAUSED only once no pod of it is
 // left. A pause that stops part way stays PAUSING and is finished by pausing again.
 func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string) (paused *apphost.App, err error) {
+	return s.pause(ctx, projectID, appID, pausableStatuses)
+}
+
+// StopApp is PauseApp for a suspension (EXC-845): it also takes an app whose
+// first deploy or resume is still rolling out, which holds pods before it
+// reads ACTIVE and would converge to running after the suspension. A user's
+// pause still refuses those; the rollout is not theirs to cut short.
+func (s *AppDeployService) StopApp(ctx context.Context, projectID, appID string) (*apphost.App, error) {
+	return s.pause(ctx, projectID, appID, append([]string{apphost.StatusCreated, apphost.StatusResuming}, pausableStatuses...))
+}
+
+var pausableStatuses = []string{apphost.StatusRunning, apphost.StatusFailed, apphost.StatusPausing}
+
+func (s *AppDeployService) pause(ctx context.Context, projectID, appID string, from []string) (paused *apphost.App, err error) {
 	defer func() { s.settleLifecycle(projectID, appID, OperationPause, err) }()
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdAppForLifecycle(ctx, projectID, appID, OperationPause)
@@ -96,7 +110,7 @@ func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string
 		return nil, s.noWorkload(err)
 	}
 	if _, err := s.apps.Transition(projectID, appID,
-		[]string{apphost.StatusRunning, apphost.StatusFailed, apphost.StatusPausing}, apphost.StatusPausing); err != nil {
+		from, apphost.StatusPausing); err != nil {
 		return nil, err
 	}
 	s.cancelActive(appID)
@@ -113,6 +127,9 @@ func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string
 // ready. A rollout that fails leaves the app FAILED; any other failure leaves
 // it RESUMING, for a retry.
 func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, actor string) (resumed *apphost.App, err error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	defer func() { s.settleLifecycle(projectID, appID, OperationResume, err) }()
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdAppForLifecycle(ctx, projectID, appID, OperationResume)
@@ -160,6 +177,7 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, acto
 		if err := s.restoreRoutes(ctx, namespace, app); err != nil {
 			return nil, err
 		}
+		s.clearSuspension(projectID, appID)
 		return s.apps.Transition(projectID, appID, []string{apphost.StatusResuming}, apphost.StatusRunning)
 	case errors.Is(err, k8s.ErrAppRollout):
 		if _, failErr := s.apps.Transition(projectID, appID, []string{apphost.StatusResuming}, apphost.StatusFailed); failErr != nil {

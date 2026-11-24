@@ -71,7 +71,21 @@ describe('UsersTable', () => {
     await userEvent.type(within(dialog).getByLabelText('Reason'), 'running an open proxy');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Suspend' }));
 
-    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledWith('/admin/console/users/u1/suspend', { reason: 'running an open proxy' }));
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledWith('/admin/console/users/u1/suspend', { reason: 'running an open proxy', reasonCode: 'other' }));
+  });
+
+  test('suspending sends the rule the admin picked', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { userId: 'u1', status: 'suspended', appsStopped: [], appsRestored: [], appsFailed: [] } } as never);
+    renderTable();
+    const row = (await screen.findByText('dev@acme.test')).closest('tr') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: 'Suspend' }));
+
+    const dialog = screen.getByRole('dialog');
+    await userEvent.selectOptions(within(dialog).getByLabelText(/Rule broken/), 'crypto_mining');
+    await userEvent.type(within(dialog).getByLabelText('Reason'), 'xmrig in the image');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Suspend' }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledWith('/admin/console/users/u1/suspend', { reason: 'xmrig in the image', reasonCode: 'crypto_mining' }));
   });
 
   test('unsuspending a suspended account also asks for a reason', async () => {

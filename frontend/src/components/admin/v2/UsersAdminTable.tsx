@@ -6,6 +6,7 @@ import { serverErrorMessage } from '../../../utils/serverError';
 import { useAccountAction, useConsoleUsers } from '../../../hooks/useAdminConsole';
 import { suspendUser, unsuspendUser, type ConsoleUser, type SuspendResult } from '../../../api/adminConsole';
 import { AccountStatusBadge } from '../AccountStatusBadge';
+import { SuspendReasonCode, type SuspendReasonCodeValue } from '../SuspendReasonCode';
 import { ReasonDialog } from '../ReasonDialog';
 import { BulkDialog, BulkOutcomeNotice, type BulkOutcome, type BulkRequest } from './BulkAction';
 import { appsFailedNote, refreshAdmin, skippedNote, suspendableUsers } from './adminRows';
@@ -87,11 +88,12 @@ export function UsersAdminTable() {
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
   const [result, setResult] = useState<SuspendResult | null>(null);
   const columns = useMemo(userColumns, []);
+  const [reasonCode, setReasonCode] = useState<SuspendReasonCodeValue>('other');
   const mutation = pending?.action === 'unsuspend' ? unsuspend : suspend;
 
   const confirm = async (reason: string) => {
     if (!pending) return;
-    const done = await mutation.mutateAsync({ userId: pending.user.id, reason }).catch(() => null);
+    const done = await mutation.mutateAsync({ userId: pending.user.id, reason, reasonCode: pending.action === 'suspend' ? reasonCode : undefined }).catch(() => null);
     if (done) {
       setResult(done);
       setPending(null);
@@ -150,7 +152,9 @@ export function UsersAdminTable() {
           error={mutation.error ? serverErrorMessage(mutation.error, 'The request failed') : undefined}
           onConfirm={confirm}
           onCancel={() => setPending(null)}
-        />
+        >
+          {pending.action === 'suspend' && <SuspendReasonCode value={reasonCode} onChange={setReasonCode} />}
+        </ReasonDialog>
       )}
       {bulk && <BulkDialog request={bulk} onFinished={(done) => { setBulk(null); setOutcome(done); }} onCancel={() => setBulk(null)} />}
     </div>

@@ -24,8 +24,8 @@ export const useConsoleOrgs = (query: ListQuery) =>
 export const useAccountAction = (action: 'suspend' | 'unsuspend') => {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ userId, reason }: { userId: string; reason: string }) =>
-      (action === 'suspend' ? suspendUser : unsuspendUser)(userId, reason),
+    mutationFn: ({ userId, reason, reasonCode }: { userId: string; reason: string; reasonCode?: string }) =>
+      action === 'suspend' ? suspendUser(userId, reason, reasonCode) : unsuspendUser(userId, reason),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ['admin'] });
       client.invalidateQueries({ queryKey: ['instances'] });

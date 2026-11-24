@@ -16,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -43,6 +44,8 @@ type ProvisioningHandler struct {
 	activity storage.ProjectActivityStore
 	// suspendedOrgs names the orgs whose owner is suspended (EXC-757); nil → no marker.
 	suspendedOrgs SuspendedOrgsLookup
+	// servingGuard refuses to serve a project whose owner is suspended (EXC-845); nil allows all.
+	servingGuard *orgguard.Guard
 	// corsStore backs /cors and the corsAllowedOrigins field on /info;
 	// nil → /cors returns 503 and /info reports no origins.
 	corsStore storage.ProjectCorsStore
@@ -114,6 +117,10 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 // a state that has not settled yet, and the same call repeated converges.
 func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, projectID string, err error) {
 	if writeIfPoolBusy(w, err) {
+		return
+	}
+	if orgguard.IsRefusal(err) {
+		writeOrgGuardError(w, err)
 		return
 	}
 	if errors.Is(err, service.ErrPauseUnsupported) {
@@ -765,6 +772,12 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}
+	// A suspended owner's project reads as unknown too, so the auth service
+	// and the engine stop serving it instead of keeping their cached copy. A
+	// 404 is what they act on; a 403 would only be logged as a failed refresh.
+	if h.refuseSuspendedProject(w, r, inst.ProjectID) {
+		return
+	}
 
 	org, ok := h.resolveInfoOrg(w, r, inst.OrgID)
 	if !ok {
@@ -798,7 +811,11 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 	if err != nil {
 		return domain.ProjectInfo{}, "cors allowlist unavailable"
 	}
-	oauth, err := h.authOAuthForInfo(ctx, projectID, orgSlug)
+	signIn, err := h.signInForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth sign-in settings unavailable"
+	}
+	oauth, err := h.authOAuthForInfo(ctx, signIn, projectID, orgSlug)
 	if err != nil {
 		return domain.ProjectInfo{}, "auth sign-in settings unavailable"
 	}
@@ -814,6 +831,7 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 		CorsAllowedOrigins:       corsOrigins,
 		RequireEmailVerification: authSettings.RequireEmailVerification,
 		SiteURL:                  authSettings.SiteURL,
+		AllowNewUsers:            signIn.AllowNewUsers,
 		ProjectOAuthInfo:         oauth,
 		UserAPIEnabled:           h.userAPIForInfo(ctx),
 		StableSubject:            h.stableSubjectForInfo(ctx),

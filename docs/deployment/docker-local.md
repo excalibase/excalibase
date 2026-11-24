@@ -636,6 +636,7 @@ the code.
 | `.env` | Default | Meaning |
 |---|---|---|
 | `FEATURE_FUNCTIONINVOKE` | unset (off) | the MCP `invoke_function` tool |
+| `FEATURE_MCPCONFIRM` | on (set `false` to switch off) | MCP's six destructive tools (`delete_app`, `delete_function`, `delete_site`, `delete_function_secret`, `revoke_publishable_key`, `revoke_s3_key`) delete nothing on the first call and need a second call with the token it returns |
 | `FEATURE_STUDIO_V2` | unset (off) | the cloud-console layout of Studio: new top bar, side navigation, command palette (⌘K) and shared table |
 
 ## Refusals you may see

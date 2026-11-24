@@ -16,6 +16,9 @@ const deployNotStarted = "the deploy could not start; deploy the app again"
 // every app has its record, and a new disk is prepared after the answer. A
 // deploy never run stays pending, and the rollout sweeper ends it failed.
 func (s *AppDeployService) QueueDeploy(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, func(), error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, nil, err
+	}
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdAppForDeploy(ctx, projectID, appID)
 	if err != nil {

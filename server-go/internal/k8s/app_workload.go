@@ -116,6 +116,9 @@ type AppRenderOptions struct {
 	DeployID string
 	// PullAuth is the credential for the image's registry, when the project has one.
 	PullAuth *RegistryAuth
+	// ReusePinnedImages lets a node keep running an image named by digest
+	// without asking the registry on each restart (features.AppImagePin).
+	ReusePinnedImages bool
 	// DiskStorageClass is the tenant storage class an app disk is made on;
 	// empty is the cluster's default, as for a database.
 	DiskStorageClass string
@@ -157,7 +160,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 		return nil, err
 	}
 
-	deployment, err := buildAppDeployment(namespace, app, env, resources, opts.RuntimeClass)
+	deployment, err := buildAppDeployment(namespace, app, env, resources, opts.RuntimeClass, appPullPolicy(app.Image, opts.ReusePinnedImages))
 	if err != nil {
 		return nil, err
 	}
@@ -417,8 +420,9 @@ func buildAppDeployment(
 	env []corev1.EnvVar,
 	resources corev1.ResourceRequirements,
 	runtimeClass string,
+	pull corev1.PullPolicy,
 ) (*appsv1.Deployment, error) {
-	container := buildAppContainer(app, env, resources)
+	container := buildAppContainer(app, env, resources, pull)
 	hash, err := appConfigHash(container)
 	if err != nil {
 		return nil, err
@@ -492,15 +496,25 @@ func containerSecurityContext() *corev1.SecurityContext {
 	}
 }
 
-// buildAppContainer always pulls: a node may hold a different build under the
+// appPullPolicy is Always, except for an image named by digest when the
+// install asked to reuse those (EXC-839): a digest never changes, so a node
+// that holds it has no reason to ask the registry again on a restart.
+func appPullPolicy(image string, reusePinned bool) corev1.PullPolicy {
+	if reusePinned && strings.Contains(image, "@sha256:") {
+		return corev1.PullIfNotPresent
+	}
+	return corev1.PullAlways
+}
+
+// buildAppContainer pulls as pull says (appPullPolicy): a node may hold a different build under the
 // same tag, or another tenant's private image, and only the registry can say
 // whether this pod's credentials may have it.
-func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.ResourceRequirements) corev1.Container {
+func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.ResourceRequirements, pull corev1.PullPolicy) corev1.Container {
 	return corev1.Container{
 		Name: app.Name,
 		// Used exactly as recorded; EXC-386 fills App.ResolvedDigest once one exists.
 		Image:           app.Image,
-		ImagePullPolicy: corev1.PullAlways,
+		ImagePullPolicy: pull,
 		// Args only: the image's entrypoint always runs; $(NAME) is filled from Env by the kubelet.
 		Args:            slices.Clone(app.Args),
 		Ports:           appContainerPorts(app),

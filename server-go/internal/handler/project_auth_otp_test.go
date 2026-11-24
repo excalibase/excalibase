@@ -70,6 +70,6 @@ func TestAuthOTP_BothOffKeepTodaysShape(t *testing.T) {
 	f.signIn.signIn[testOAuthProject] = domain.ProjectAuthSignIn{EmailOTPEnabled: true}
 	for _, path := range []string{testOAuthSettings, testOAuthInfo} {
 		w := doJSON(f.router, http.MethodGet, path, nil)
-		assertNoSignInKeys(t, w.Body.Bytes(), "emailOtpEnabled", "redirectUrls", "allowNewUsers", "oauthProviders")
+		assertNoSignInKeys(t, w.Body.Bytes(), "emailOtpEnabled", "redirectUrls", "oauthProviders")
 	}
 }

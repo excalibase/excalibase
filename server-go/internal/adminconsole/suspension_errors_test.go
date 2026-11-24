@@ -74,7 +74,7 @@ func (failingAudit) LogAudit(context.Context, *domain.AuditEntry) error { return
 func TestSuspendReportsEachFailedStep(t *testing.T) {
 	for _, step := range []string{"find", "owned", "suspend"} {
 		service, _ := flakyService(step)
-		if _, err := service.Suspend(context.Background(), admin, "victim", "proxy abuse confirmed"); !errors.Is(err, errBoom) {
+		if _, err := service.Suspend(context.Background(), admin, "victim", Reason{Text: "proxy abuse confirmed"}); !errors.Is(err, errBoom) {
 			t.Errorf("%s: err = %v", step, err)
 		}
 	}
@@ -101,7 +101,7 @@ func TestUnsuspendOfAnUnknownAccountIsNotFound(t *testing.T) {
 
 func TestAReasonOverTheLimitIsRefused(t *testing.T) {
 	service, _ := flakyService("")
-	if _, err := service.Suspend(context.Background(), admin, "victim", strings.Repeat("x", maxReasonLength+1)); !errors.Is(err, ErrReasonTooLong) {
+	if _, err := service.Suspend(context.Background(), admin, "victim", Reason{Text: strings.Repeat("x", maxReasonLength+1)}); !errors.Is(err, ErrReasonTooLong) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -110,7 +110,7 @@ func TestAReasonOverTheLimitIsRefused(t *testing.T) {
 func TestASuspensionStandsWhenItsAuditWriteFails(t *testing.T) {
 	service, base := flakyService("")
 	service.now = func() time.Time { return time.Unix(0, 0) }
-	if _, err := service.Suspend(context.Background(), admin, "victim", "proxy abuse confirmed"); err != nil {
+	if _, err := service.Suspend(context.Background(), admin, "victim", Reason{Text: "proxy abuse confirmed"}); err != nil {
 		t.Fatal(err)
 	}
 	if !base.suspended["victim"] {

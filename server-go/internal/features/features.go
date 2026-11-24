@@ -127,6 +127,28 @@ const (
 	// own instead of the database owner's, which can create and change logins
 	// on Postgres 16 and later (EXC-765). On unless switched off.
 	AppRuntimeLogin Feature = "appruntimelogin"
+	// FunctionHTMLGuard serves a function's HTML, XHTML and SVG answers as plain
+	// text on the shared API origin, so no fake page is served from the
+	// platform's host (EXC-810). On unless switched off.
+	FunctionHTMLGuard Feature = "functionhtmlguard"
+	// MCPConfirm makes MCP's destructive tools (delete_app, delete_function,
+	// delete_site, delete_function_secret, revoke_publishable_key,
+	// revoke_s3_key) do nothing on the first call and answer with what would be
+	// destroyed plus a short-lived token; only a second call with the token
+	// destroys it. On unless switched off.
+	MCPConfirm Feature = "mcpconfirm"
+	// AppImagePin deploys a customer app by the digest its image resolved to
+	// and runs it with imagePullPolicy IfNotPresent, so a pod restart never
+	// asks the registry again (EXC-839). Off: apps are rendered as before.
+	AppImagePin Feature = "appimagepin"
+	// CrashLoopGuard stops a customer app that keeps crashing (scales it to
+	// zero with a recorded reason Studio shows) and only alerts for a
+	// database that does (EXC-839).
+	CrashLoopGuard Feature = "crashloopguard"
+	// SuspensionEmails mails the account holder when an admin suspends the
+	// account: the rule, what was stopped and how to appeal (EXC-841). Off, a
+	// suspension is silent as before.
+	SuspensionEmails Feature = "suspensionemails"
 	// StudioV2 is the cloud-console layout of Studio: new top bar, navigation
 	// and shared tables. Frontend only; the server just reports it (EXC-762).
 	StudioV2 Feature = "studio_v2"
@@ -134,7 +156,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails}
 }
 
 type Flags interface {

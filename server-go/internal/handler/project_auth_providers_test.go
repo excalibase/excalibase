@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"net/http"
 	"strings"
 	"testing"
@@ -114,6 +115,8 @@ func (failingPutSecrets) PutIfAbsent(string, map[string]string) (bool, error) {
 	return false, errors.New("vault sealed")
 }
 
+const testRoleHeader = "X-Test-Role"
+
 type oauthFixture struct {
 	router    *chi.Mux
 	handler   *ProvisioningHandler
@@ -154,6 +157,20 @@ func setupSignInHandler(t *testing.T, on ...features.Feature) oauthFixture {
 		PublicBaseURL: testOAuthBaseURL, Audit: f.audit})
 
 	r := chi.NewRouter()
+	// The auth-settings route gate's resolved access: an admin unless the request names a role.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if !strings.HasSuffix(req.URL.Path, "/auth-settings") {
+				next.ServeHTTP(w, req)
+				return
+			}
+			access := &custommw.ProjectAccess{PlatformAdmin: true}
+			if role := req.Header.Get(testRoleHeader); role != "" {
+				access = &custommw.ProjectAccess{Member: &domain.OrgMember{Role: role}}
+			}
+			next.ServeHTTP(w, req.WithContext(custommw.WithProjectAccess(req.Context(), access)))
+		})
+	})
 	r.Get("/api/projects/{projectId}/info", h.GetProjectInfo)
 	r.Route("/api/projects/{projectId}/auth-settings", func(r chi.Router) {
 		r.Get("/", h.GetAuthSettings)

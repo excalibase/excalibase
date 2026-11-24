@@ -58,14 +58,14 @@ func tool[In any](name, description string, level access, run func(context.Conte
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: level != writeTool},
 		}
 		mcp.AddTool(server, definition, func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
-			c := &call{dispatcher: dispatcher{router: e.router, caller: caller, answered: &[]routeReply{}}, settings: e.settings, probes: e.probes}
+			c := &call{dispatcher: dispatcher{router: e.router, caller: caller, answered: &[]routeReply{}}, settings: e.settings, probes: e.probes, confirms: e.confirms}
 			if caller.Refused != "" {
 				err := errors.New(caller.Refused)
-				e.record(ctx, caller, name, "", err)
+				e.record(ctx, caller, name, "", "", err)
 				return nil, nil, err
 			}
 			out, err := run(ctx, c, in)
-			e.record(ctx, caller, name, c.answeredProject(), err)
+			e.record(ctx, caller, name, c.answeredProject(), c.stage, err)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -122,7 +122,10 @@ type call struct {
 	dispatcher
 	settings Settings
 	probes   *probeLimits
+	confirms *confirmations
 	project  string
+	// stage is what this call did about confirmation (confirm.go); empty when nothing was guarded.
+	stage string
 }
 
 // useProject resolves and remembers the project this call acts on.

@@ -2,6 +2,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useAppHostingEnabled, useFeatureEnabled, useSitesEnabled } from '../hooks/useDeploymentMode';
 import { useInstance, useInstances } from '../hooks/useProvisioning';
 import { DatabaseServiceCard } from '../components/services/DatabaseServiceCard';
+import { SitesUnavailable } from '../components/services/SitesUnavailable';
 import { ContainersServiceCard } from '../components/services/ContainersServiceCard';
 
 // CopiedFrom names the database a copy was made from (EXC-667), linked when
@@ -56,13 +57,7 @@ export function ProjectOverviewPage() {
         {appHosting && <ContainersServiceCard projectId={projectId} />}
       </div>
       {!sites.isLoading && !sites.enabled && (
-        <p className="text-xs text-text-tertiary" data-testid="sites-unavailable">
-          Static frontend hosting isn&apos;t available on this install; deploy your frontend as a{' '}
-          <Link to={`/project/${projectId}/containers`} className="text-purple-400 hover:underline">
-            container
-          </Link>
-          .
-        </p>
+        <SitesUnavailable projectId={projectId} />
       )}
     </div>
   );

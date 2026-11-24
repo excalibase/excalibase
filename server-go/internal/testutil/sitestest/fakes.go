@@ -122,6 +122,18 @@ func (m *MemoryStore) List(_ context.Context, projectID string) ([]*sites.Site, 
 	return out, nil
 }
 
+func (m *MemoryStore) ListSites(_ context.Context) ([]*sites.Site, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*sites.Site{}
+	for _, site := range m.Sites {
+		copied := site
+		out = append(out, &copied)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
 func (m *MemoryStore) ListServerSites(_ context.Context) ([]*sites.Site, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

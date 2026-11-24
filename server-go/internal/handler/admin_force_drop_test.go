@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -88,10 +89,13 @@ func (a *adminOrgStore) ListPendingInvites(context.Context, string) ([]*domain.P
 // captureAudit records audit entries so the admin path's auditFireAndForget
 // has a non-nil writer to call.
 type captureAudit struct {
+	mu      sync.Mutex
 	entries []*domain.AuditEntry
 }
 
 func (c *captureAudit) LogAudit(_ context.Context, e *domain.AuditEntry) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.entries = append(c.entries, e)
 	return nil
 }
