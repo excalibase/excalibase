@@ -60,6 +60,16 @@ describe('orgUsage', () => {
     expect(usage.limitsKnown).toBe(true);
   });
 
+  test('self-hosted is only believed once the config has answered', () => {
+    const usage = orgUsage([proj('a')], undefined, new Map(), { selfHosted: true, ready: false });
+    expect(usage.limitsKnown).toBe(false);
+  });
+
+  test('a cloud install without its plan list does not know its limits', () => {
+    const usage = orgUsage([proj('a')], undefined, new Map(), { selfHosted: false });
+    expect(usage.limitsKnown).toBe(false);
+  });
+
   test('before the config answers no plan is read and no limit is known', () => {
     const usage = orgUsage([proj('a')], tier({ maxProjects: 1 }), new Map(), { ready: false });
     expect(usage.projects.limit).toBeNull();
