@@ -45,7 +45,7 @@ func (m *mailBox) Send(_ context.Context, msg email.Message) (string, error) {
 
 type pausedApps struct{ store *pgstore.Store }
 
-func (p pausedApps) PauseApp(_ context.Context, projectID, appID string) (*apphost.App, error) {
+func (p pausedApps) StopApp(_ context.Context, projectID, appID string) (*apphost.App, error) {
 	_, err := p.store.DB().Exec(`UPDATE apps SET status = $3 WHERE project_id = $1 AND id = $2`, projectID, appID, apphost.StatusStopped)
 	return nil, err
 }

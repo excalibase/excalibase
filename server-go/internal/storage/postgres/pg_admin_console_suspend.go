@@ -25,15 +25,14 @@ func (a *AdminConsole) FindUser(ctx context.Context, id string) (*adminconsole.U
 	return &user, nil
 }
 
-// OwnedApps lists the apps in projects of orgs the account owns, and in
-// projects it created itself.
+// OwnedApps lists the apps in projects of orgs the account owns.
 func (a *AdminConsole) OwnedApps(ctx context.Context, userID string) ([]adminconsole.OwnedApp, error) {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT ap.project_id, ap.id, ap.name, ap.status, COALESCE((ap.doc->>'replicas')::int, 0), COALESCE(di.project_name, '')
 		FROM apps ap
 		JOIN database_instances di ON di.project_id = ap.project_id
 		JOIN orgs o ON o.id = di.org_id
-		WHERE o.owner_id = $1 OR di.owner_id = $1
+		WHERE o.owner_id = $1
 		ORDER BY ap.project_id, ap.created_at, ap.id`, userID)
 	if err != nil {
 		return nil, err
@@ -46,6 +45,30 @@ func (a *AdminConsole) OwnedApps(ctx context.Context, userID string) ([]admincon
 			return nil, err
 		}
 		out = append(out, app)
+	}
+	return out, rows.Err()
+}
+
+// OwnedProjects lists the projects of the orgs the account owns. A project it
+// merely created in someone else's org is not its to take down.
+func (a *AdminConsole) OwnedProjects(ctx context.Context, userID string) ([]string, error) {
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT di.project_id
+		FROM database_instances di
+		JOIN orgs o ON o.id = di.org_id
+		WHERE o.owner_id = $1
+		ORDER BY di.project_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
 	}
 	return out, rows.Err()
 }

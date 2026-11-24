@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -47,6 +48,8 @@ type RestoreOrchestrator struct {
 	after     func(time.Duration) <-chan time.Time
 	instances storage.InstanceStore
 	slots     RestoreSlotSource
+	// orgGuard refuses a restore or copy for a suspended owner's organisation (EXC-845); nil allows all.
+	orgGuard *orgguard.Guard
 
 	mu    sync.Mutex
 	steps []RestoreStep
@@ -132,6 +135,9 @@ func newInstanceID() string {
 
 // SetSteps replaces the step pipeline. Order matters — steps run
 // in slice order. Tests use this to inject deterministic fakes.
+// SetOrgGuard makes Start refuse a suspended owner's organisation.
+func (o *RestoreOrchestrator) SetOrgGuard(guard *orgguard.Guard) { o.orgGuard = guard }
+
 func (o *RestoreOrchestrator) SetSteps(steps []RestoreStep) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -144,6 +150,9 @@ func (o *RestoreOrchestrator) SetSteps(steps []RestoreStep) {
 // job so the snapshot returned to the caller is safe to read without
 // synchronisation.
 func (o *RestoreOrchestrator) Start(ctx context.Context, source *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.RestoreJob, error) {
+	if err := o.orgGuard.CheckProject(ctx, source.ProjectID); err != nil {
+		return nil, err
+	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -121,7 +122,13 @@ type DBEndpointService struct {
 	// a cloud controller may hold one by its finalizer for a moment.
 	goneTimeout time.Duration
 	gonePoll    time.Duration
+	// orgGuard refuses to open a suspended owner's database to the internet (EXC-845); nil allows all.
+	orgGuard *orgguard.Guard
 }
+
+// SetOrgGuard makes opening a public port, a read address or an allow-list
+// change refuse an organisation whose owner is suspended. Closing stays allowed.
+func (s *DBEndpointService) SetOrgGuard(guard *orgguard.Guard) { s.orgGuard = guard }
 
 const (
 	defaultServiceGoneTimeout = 30 * time.Second
@@ -258,6 +265,9 @@ func (s *DBEndpointService) SetPublic(ctx context.Context, projectID string, pub
 	if !public {
 		return s.disable(ctx, inst)
 	}
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return DBEndpointView{}, err
+	}
 	if domain.IsNotServable(inst.Status) {
 		return DBEndpointView{}, errors.New(domain.NotServableReason(inst.Status))
 	}
@@ -388,6 +398,9 @@ func (s *DBEndpointService) Withdraw(ctx context.Context, inst *domain.DatabaseI
 func (s *DBEndpointService) Publish(ctx context.Context, inst *domain.DatabaseInstance) error {
 	if s.inert(inst) {
 		return nil
+	}
+	if err := s.orgGuard.CheckProject(ctx, inst.ProjectID); err != nil {
+		return err
 	}
 	endpoint, err := s.endpoints.GetDatabaseEndpoint(ctx, inst.ProjectID)
 	if err != nil {

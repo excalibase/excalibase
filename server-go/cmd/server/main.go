@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/advisors"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
@@ -39,6 +40,7 @@ import (
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 	"github.com/excalibase/provisioning-poc/internal/objectcreds"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/permissions"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -242,6 +244,7 @@ func runServer(cfg config.AppConfig) {
 		deps.dbAllowListHandler.SetAPI(dbEndpointSvc)
 		deps.dbReadAddressHandler.SetAPI(withReadAddress)
 		provSvc.SetPublicEndpointReconciler(withReadAddress)
+		deps.suspensions.AddServingSteps(service.NewSuspendedEndpoints(store, withReadAddress, newOrgGuard(store, sqlStore)))
 	}
 	if singleHostEndpoints := buildSingleHostEndpoints(cfg, store, dockerClientRef); singleHostEndpoints != nil {
 		deps.provHandler.SetDBEndpointService(singleHostEndpoints)
@@ -418,7 +421,9 @@ func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStor
 		// A copy takes its organisation's slot when it is submitted.
 		Slots: slots,
 	})
+	orchestrator.SetOrgGuard(newOrgGuard(store, sqlStore))
 	backupSvc := deps.backupHandler.Service()
+	backupSvc.SetOrgGuard(newOrgGuard(store, sqlStore))
 	// Wrap the existing synchronous adapter.Restore as a single
 	// orchestrator step. K8s mode keeps its CNPG flow untouched
 	// (BackupService dispatches to K8sBackupAdapter); Docker mode
@@ -1095,6 +1100,9 @@ func functionCronLock(cfg config.AppConfig, sqlStore storage.PlatformStore) stor
 // handlerDeps groups all wired handlers + middleware used during route mounting.
 // Centralising the bag keeps buildRouter focused on routing rather than wiring.
 type handlerDeps struct {
+	// orgGuard refuses writes on a suspended owner's projects at the project gate (EXC-845); nil allows all.
+	orgGuard          *orgguard.Guard
+	suspensions       *adminconsole.SuspensionService
 	provHandler       *handler.ProvisioningHandler
 	sdkKeysHandler    *handler.SDKKeysHandler
 	aiActivityHandler *handler.AIActivityHandler
@@ -1687,6 +1695,7 @@ func buildBackupService(
 func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceStore, nodes handler.NodePlacement, planChanged func()) *handler.OrgHandler {
 	h := handler.NewOrgHandler(sqlStore, sqlStore)
 	h.SetInstanceStore(instances)
+	h.SetOrgGuard(newOrgGuard(instances, sqlStore))
 	h.SetNodePlacement(nodes)
 	h.SetPlanChangeHook(planChanged)
 	h.SetAudit(sqlStore)
@@ -1888,6 +1897,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
 	authHandler.SetAccountFailureCap(cfg.LoginAccountFailureCap)
 	authHandler.SetOrgStore(sqlStore)
+	authHandler.SetOrgGuard(newOrgGuard(store, sqlStore))
 	authHandler.SetAuditLog(sqlStore)
 	authHandler.SetSignupGuard(newSignupGuard(cfg))
 	authHandler.SetInstanceStore(store)
@@ -1913,6 +1923,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		// The engine and the auth service fetch tenant credentials here; a
 		// project the platform must not serve must not answer (EXC-401).
 		vaultHandler.SetInstanceStore(store)
+		vaultHandler.SetServingGuard(newOrgGuard(store, sqlStore))
 		// A human caller's read is bound to the project the path names, which
 		// needs the membership lookup as well as the project row (EXC-418).
 		vaultHandler.SetOrgStore(sqlStore)
@@ -1934,6 +1945,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provHandler.SetActivityStore(sqlStore)
 	suspendedOwners := pgstore.NewAdminConsole(sqlStore.DB()).OwnerSuspendedOrgs
 	provHandler.SetSuspendedOrgs(suspendedOwners)
+	provHandler.SetServingGuard(newOrgGuard(store, sqlStore))
 	provHandler.SetAuthHookDeny(cfg.ExtraDenyPrefixes())
 	wireProjectCors(sqlStore, provHandler)
 	wireProjectAuthSettings(sqlStore, provHandler)
@@ -1980,7 +1992,13 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	adminConsole, suspensions := buildAdminConsole(cfg, sqlStore, appRuntime, appDeploySvc, emailSender, a.provSvc)
 	// Revoking an org suspends its owner through the same operation the console uses.
 	adminHandler.SetOwnerSuspender(suspensions)
+	// A suspension also takes the account's sites, functions and public database
+	// ports offline (EXC-845); the database endpoint step joins in runServer.
+	servingGuard := newOrgGuard(store, sqlStore)
+	suspensions.AddServingSteps(service.NewSuspendedSites(sitesSvc, store, servingGuard), service.NewSuspendedWorkloads(appDeploySvc, store, servingGuard))
 	return &handlerDeps{
+		orgGuard:              newOrgGuard(store, sqlStore),
+		suspensions:           suspensions,
 		appRegistry:           appRegistry,
 		siteBuilds:            builds,
 		provHandler:           provHandler,
@@ -2223,7 +2241,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 
 		r.Route("/{projectId}", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(d.rlDataPlane)
 			r.Use(d.activity)
 
@@ -2350,7 +2368,7 @@ func mountSimpleAuthRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 		// other project route, under the segment where {projectId} exists.
 		r.Route("/project/{projectId}", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			d.alertHandler.ProjectRoutes(r)
 		})
 	})
@@ -2490,7 +2508,7 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 	r.Route("/api/schema/{projectId}", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.TenantContext)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		// Viewers may browse (GET); DDL / /query / row writes require Developer+ (RBAC gate).
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(custommw.RequireProjectDatabase(store))
@@ -2542,7 +2560,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(d.activity)
 		// Edge functions are a tenant-developer feature (author + deploy via
 		// Studio), so gate on ORG role, not platform perms — a normal developer
@@ -2575,7 +2593,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Route("/api/projects/{projectId}/apps", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(d.activity)
 			dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
 			r.Get("/", d.appHandler.List)
@@ -2614,7 +2632,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Route("/api/projects/{projectId}/app-network", func(r chi.Router) {
 				r.Use(custommw.TenantContext)
 				r.Use(auth.RequireAuth)
-				r.Use(custommw.RequireProjectAccess(store, sqlStore))
+				r.Use(projectAccess(store, sqlStore, d)...)
 				r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
 				r.Use(d.activity)
 				d.appNetworkHandler.Routes(r)
@@ -2625,7 +2643,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Route("/api/projects/{projectId}/app-templates", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(d.activity)
 			d.appTemplateHandler.ReadRoutes(r)
 			r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).
@@ -2634,7 +2652,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Route("/api/projects/{projectId}/registry-credentials", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(d.activity)
 			dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
 			r.Get("/", d.registryCredHandler.List)
@@ -2647,7 +2665,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	r.Route("/api/projects/{projectId}/sites", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(d.activity)
 		d.siteHandler.Routes(r, custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		d.siteBuilds.handler.Routes(r, custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
@@ -2660,14 +2678,14 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	r.Route("/api/projects/{projectId}/schema", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(d.activity)
 		r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore), custommw.RequireProjectDatabase(store)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
 	})
 	r.Route("/api/projects/{projectId}/info", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetProjectInfo)
 	})
@@ -2680,7 +2698,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	r.Route("/api/projects/{projectId}/sdk-keys", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		d.sdkKeysHandler.Routes(r) // a secret (service-role) key is Admin-only, checked in Create
 	})
@@ -2697,7 +2715,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(features.Require(d.features, features.MCP))
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		d.aiActivityHandler.Routes(r)
 	})
@@ -2707,7 +2725,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		endUserAdmin := func(r chi.Router) {
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
 			r.Use(d.activity)
 		}
@@ -2732,7 +2750,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	r.Route("/api/projects/{projectId}/cors", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetCors)
@@ -2747,7 +2765,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	r.Route("/api/projects/{projectId}/db-endpoint", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		endpointWrites := []func(http.Handler) http.Handler{
 			custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore),
@@ -2767,7 +2785,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Group(func(r chi.Router) {
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 			// With end-user sign-in on, these settings decide where sign-in codes go (EXC-662).
 			r.Use(features.WhenAnyOn(d.features, []features.Feature{features.AuthOAuth, features.AuthOTP, features.AuthGuest},
@@ -2782,7 +2800,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Use(features.Require(d.features, features.AuthGuest))
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
 			r.Use(d.activity)
 			r.Put("/guest-captcha", d.provHandler.PutGuestCaptcha)
@@ -2794,7 +2812,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Use(features.Require(d.features, features.AuthMFA))
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
 			r.Use(d.activity)
 			r.Put("/mfa", d.provHandler.PutAuthMFA)
@@ -2803,7 +2821,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	r.Route("/api/projects/{projectId}/realtime", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		// Listing the published tables is a read any member may make; enabling
 		// or disabling one alters the database publication, so it sits on the
 		// same Developer+ rung as every other data-plane authoring surface. The
@@ -2821,7 +2839,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Route("/api/projects/{projectId}/documentdb", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 			r.Use(custommw.RequireProjectDatabase(store))
 			r.Use(d.activity)
@@ -2832,7 +2850,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Route("/api/projects/{projectId}/storage", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			// Listing buckets and objects and minting a download URL are reads
 			// any member may make; creating or dropping a bucket, uploading,
 			// confirming and deleting objects change what the project stores,
@@ -2855,7 +2873,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		// project-access gate and carries the rule itself: no downloads are
 		// signed for a project the platform must not serve (EXC-401).
 		r.Group(func(r chi.Router) {
-			r.Use(custommw.RequireServableProject(store))
+			r.Use(custommw.RequireServableProject(store, d.orgGuard))
 			d.storageHandler.PublicRoutes(r)
 		})
 		// Phase 10: ctx.storage runtime-to-provisioning routes. Auth via
@@ -2876,7 +2894,7 @@ func mountMetricsEndpoint(r *chi.Mux, sqlStore storage.OrgStore, store storage.I
 			r.Use(features.Require(d.features, features.MetricsEndpoint))
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(d.rlMetricsScrape)
 			r.Get("/", d.metricsEndpointHandler.Serve)
 		})
@@ -2886,7 +2904,7 @@ func mountMetricsEndpoint(r *chi.Mux, sqlStore storage.OrgStore, store storage.I
 			r.Use(features.Require(d.features, features.MetricsEndpoint))
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
 			d.metricsKeysHandler.Routes(d.rlTokenCreate)(r)
 		})
@@ -2901,7 +2919,7 @@ func mountLogDrains(r *chi.Mux, sqlStore storage.OrgStore, store storage.Instanc
 			r.Use(features.Require(d.features, features.LogDrains))
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
-			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(projectAccess(store, sqlStore, d)...)
 			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
 			r.Use(d.rlAuthed)
 			d.logDrainsHandler.Routes(r)
@@ -2923,7 +2941,7 @@ func mountAuthProviders(r *chi.Mux, sqlStore storage.OrgStore, store storage.Ins
 		r.Use(features.Require(d.features, features.AuthOAuth))
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
 		r.Use(d.activity)
@@ -2941,7 +2959,7 @@ func mountAuthHooks(r *chi.Mux, sqlStore storage.OrgStore, store storage.Instanc
 		r.Use(features.Require(d.features, features.AuthHooks))
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
 		r.Use(d.activity)
@@ -2964,7 +2982,7 @@ func mountAppStorage(r *chi.Mux, sqlStore storage.OrgStore, store storage.Instan
 	r.Route("/storage/v1/{projectId}", func(r chi.Router) {
 		r.Use(features.Require(d.features, features.AppStorage))
 		r.Use(custommw.TenantContext)
-		r.Use(custommw.RequireServableProject(store))
+		r.Use(custommw.RequireServableProject(store, d.orgGuard))
 		r.Use(d.activity)
 		endUsers.Routes(r)
 	})
@@ -3219,7 +3237,7 @@ func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore
 		return nil
 	}
 	allowList, _ := sqlStore.(storage.DBSourceAllowListStore)
-	return service.NewDBEndpointService(service.DBEndpointServiceConfig{
+	endpointSvc := service.NewDBEndpointService(service.DBEndpointServiceConfig{
 		Endpoints:    endpoints,
 		Instances:    instances,
 		Kube:         k8sClient,
@@ -3231,6 +3249,8 @@ func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore
 		AllowList:    allowList,
 		Flags:        cfg.Features(),
 	})
+	endpointSvc.SetOrgGuard(newOrgGuard(instances, sqlStore))
+	return endpointSvc
 }
 
 // buildProvisionerFactory selects the K8s (CNPG) or Docker provisioner based

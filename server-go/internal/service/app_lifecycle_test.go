@@ -559,3 +559,17 @@ func TestResumeRollouts_ADeployWithoutItsNameFails(t *testing.T) {
 		t.Fatalf("deploy = %+v", got)
 	}
 }
+
+// A suspension stops an app whose deploy or resume is still rolling out, which
+// a user's pause refuses: its pods would converge to running after the suspension.
+func TestStopApp_TakesAnAppStillRollingOut(t *testing.T) {
+	for _, status := range []string{apphost.StatusCreated, apphost.StatusResuming} {
+		f := newLifecycleFixture(t, status)
+		if _, err := f.svc.StopApp(context.Background(), f.app.ProjectID, f.app.ID); err != nil {
+			t.Fatalf("%s: %v", status, err)
+		}
+		if got := f.status(); got != apphost.StatusStopped {
+			t.Errorf("%s: status = %q, want it stopped", status, got)
+		}
+	}
+}
