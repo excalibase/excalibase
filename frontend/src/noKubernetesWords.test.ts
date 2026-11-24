@@ -21,7 +21,7 @@ const ALLOWED_LITERALS: ReadonlyArray<{ file: string; literal: string; reason: s
   { file: 'components/sites/SiteBuildSettingsForm.tsx', literal: 'Node version', reason: 'the Node.js runtime a site builds with' },
   { file: 'components/sites/SiteBuildSettingsForm.tsx', literal: 'The Node major the build runs on.', reason: 'the Node.js runtime a site builds with' },
   { file: 'components/sites/SiteBuildSettingsForm.tsx', literal: 'Node', reason: 'the Node.js runtime option' },
-  { file: 'pages/BackupsPage.tsx', literal: 'cannot backup a hibernated cluster', reason: 'matched against the failure text the server records, not shown as is' },
+  { file: 'utils/backupView.ts', literal: 'cannot backup a hibernated cluster', reason: 'matched against the failure text the server records, not shown as is' },
   { file: 'pages/ProvisionPage.tsx', literal: 'k8s', reason: 'internal deploy-mode value, never rendered' },
   { file: 'utils/permissionRules.ts', literal: 'nodes', reason: 'nodes of a permission expression tree' },
   { file: 'utils/permissionRules.ts', literal: '" is not a comparison operator', reason: 'a comparison operator in a permission rule' },
