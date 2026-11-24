@@ -87,9 +87,20 @@ func recordSuspendedApps(ctx context.Context, tx *sql.Tx, userID string, apps []
 	return nil
 }
 
-// MarkMailSent records that the suspension mail went.
-func (a *AdminConsole) MarkMailSent(ctx context.Context, userID string) error {
-	_, err := a.db.ExecContext(ctx, `UPDATE abuse_suspensions SET mail_sent_at = NOW() WHERE user_id = $1`, userID)
+// ClaimMail settles the suspension mail for the one caller that finds it
+// unsettled; a concurrent caller gets false.
+func (a *AdminConsole) ClaimMail(ctx context.Context, userID string) (bool, error) {
+	result, err := a.db.ExecContext(ctx, `UPDATE abuse_suspensions SET mail_sent_at = NOW() WHERE user_id = $1 AND mail_sent_at IS NULL`, userID)
+	if err != nil {
+		return false, err
+	}
+	claimed, err := result.RowsAffected()
+	return claimed == 1, err
+}
+
+// ReleaseMail makes the mail owed again after a send that failed.
+func (a *AdminConsole) ReleaseMail(ctx context.Context, userID string) error {
+	_, err := a.db.ExecContext(ctx, `UPDATE abuse_suspensions SET mail_sent_at = NULL WHERE user_id = $1`, userID)
 	return err
 }
 

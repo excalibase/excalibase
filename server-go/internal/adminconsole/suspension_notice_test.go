@@ -3,20 +3,36 @@ package adminconsole
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 type captureNotifier struct {
+	mu      sync.Mutex
 	notices []SuspensionNotice
 	err     error
+	// hold, when set, keeps every send waiting until it is closed.
+	hold chan struct{}
 }
 
 func (n *captureNotifier) Suspended(_ context.Context, notice SuspensionNotice) error {
+	if n.hold != nil {
+		<-n.hold
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	n.notices = append(n.notices, notice)
 	return n.err
+}
+
+func (n *captureNotifier) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.notices)
 }
 
 func noticeFixture(enabled bool) (*SuspensionService, *fakeSuspensions, *fakeControl, *captureNotifier) {
@@ -120,13 +136,72 @@ func TestSuspendRetrySendsAFailedMailExactlyOnce(t *testing.T) {
 	}
 }
 
-func TestSuspendWithTheFlagOffLeavesTheMailOwed(t *testing.T) {
-	svc, store, _, _ := noticeFixture(false)
+// Turning the flag on later must never mail about a suspension made while it was off.
+func TestSuspendWithTheFlagOffOwesNoMailLater(t *testing.T) {
+	svc, store, _, notifier := noticeFixture(false)
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if !store.mailSent["victim"] {
+		t.Fatal("a suspension made with the flag off must be settled, not owed")
+	}
+	enabled := true
+	svc.SetNotifier(notifier, func(context.Context) bool { return enabled })
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.notices) != 0 {
+		t.Fatalf("notices = %d, the old suspension must stay unmailed", len(notifier.notices))
+	}
+}
+
+// With no mail sender the mail is still owed when the flag is on.
+func TestSuspendWithNoSenderLeavesTheMailOwed(t *testing.T) {
+	svc, store, _, _ := noticeFixture(true)
+	svc.SetNotifier(nil, func(context.Context) bool { return true })
 	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	if store.mailSent["victim"] {
-		t.Fatal("nothing was sent, so nothing is marked sent")
+		t.Fatal("nothing could be sent, so the mail stays owed")
+	}
+}
+
+// Two admins suspending at once produce one mail.
+func TestConcurrentSuspendsSendOneMail(t *testing.T) {
+	svc, _, _, notifier := noticeFixture(true)
+	notifier.hold = make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"})
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(notifier.hold)
+	wg.Wait()
+	if got := notifier.count(); got != 1 {
+		t.Fatalf("notices = %d, want exactly one", got)
+	}
+}
+
+// A revoke closes the organisation: its notice is its own, and a client cannot ask for it.
+func TestSuspendForAnOrgRevokeCarriesTheClosureNotice(t *testing.T) {
+	svc, _, _, notifier := noticeFixture(true)
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Code: ReasonOther, Text: "org revoked: x", OrgClosed: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.notices) != 1 || !notifier.notices[0].OrgClosed {
+		t.Fatalf("notices = %+v, want one marked as an org closure", notifier.notices)
+	}
+	svc2, _, _, notifier2 := noticeFixture(true)
+	if _, err := svc2.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if notifier2.notices[0].OrgClosed {
+		t.Fatal("an ordinary suspension is not a closure")
 	}
 }
 

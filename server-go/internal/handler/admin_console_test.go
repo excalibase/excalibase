@@ -241,7 +241,7 @@ func TestAdminConsole_SuspendPassesTheReasonCode(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d: %s", w.Code, w.Body.String())
 	}
-	if suspender.reason.Code != adminconsole.ReasonCryptoMining || suspender.reason.Text != "xmrig in the image" {
+	if suspender.reason.OrgClosed || suspender.reason.Code != adminconsole.ReasonCryptoMining || suspender.reason.Text != "xmrig in the image" {
 		t.Fatalf("reason = %+v", suspender.reason)
 	}
 }

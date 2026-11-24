@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/adminconsole"
@@ -27,11 +28,14 @@ import (
 // row with its rule, stops the app and mails the account holder once.
 
 type mailBox struct {
+	mu   sync.Mutex
 	sent []email.Message
 	fail error
 }
 
 func (m *mailBox) Send(_ context.Context, msg email.Message) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.fail != nil {
 		return "", m.fail
 	}
@@ -136,6 +140,9 @@ func TestAdminSuspendRoute_FlagOffSuspendsInSilence(t *testing.T) {
 	if len(box.sent) != 0 {
 		t.Fatalf("mails = %d with the flag off", len(box.sent))
 	}
+	if !mailMarked(t, store) {
+		t.Fatal("a suspension made with the flag off must be settled, so a later flag never mails it")
+	}
 	var n int
 	if err := store.DB().QueryRow(`SELECT count(*) FROM abuse_suspensions WHERE user_id = $1 AND reason_code = 'proxy_vpn'`, testAliceID).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("suspension rows = %d, %v", n, err)
@@ -187,4 +194,25 @@ func mailMarked(t *testing.T, store *pgstore.Store) bool {
 		t.Fatal(err)
 	}
 	return marked
+}
+
+func TestAdminSuspendRoute_ConcurrentSuspendsMailOnce(t *testing.T) {
+	store, r, box := suspendMailRig(t, true)
+	body := `{"reason":"xmrig in the image","reasonCode":"crypto_mining"}`
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			suspendAlice(r, body)
+		}()
+	}
+	wg.Wait()
+	box.mu.Lock()
+	sent := len(box.sent)
+	box.mu.Unlock()
+	if sent != 1 || !mailMarked(t, store) {
+		t.Fatalf("mails = %d marked = %v, want exactly one", sent, mailMarked(t, store))
+	}
 }

@@ -28,6 +28,9 @@ var ErrReasonCodeUnknown = errors.New("unknown reason code: use proxy_vpn, crypt
 type Reason struct {
 	Code ReasonCode
 	Text string
+	// OrgClosed is set only by an org revoke, which deletes the organisation:
+	// its mail says so. A request cannot set it.
+	OrgClosed bool
 }
 
 // ParseReasonCode reads a code from a request; an empty one is "other".
@@ -54,6 +57,8 @@ type SuspensionNotice struct {
 	Email    string
 	Code     ReasonCode
 	Projects []NoticeProject
+	// OrgClosed: the organisation is being deleted, not only suspended.
+	OrgClosed bool
 }
 
 // SuspensionNotifier tells the account holder about a suspension.
@@ -67,12 +72,22 @@ func (s *SuspensionService) SetNotifier(notifier SuspensionNotifier, enabled fun
 	s.notifier, s.mailEnabled = notifier, enabled
 }
 
-// notify sends the one mail while the flag is on and none has gone yet, and
-// marks it sent only after the send worked, so suspending again retries a mail
-// that failed and never repeats one that went. A failure is logged and
-// counted, never a reason to undo a suspension that is already in force.
-func (s *SuspensionService) notify(ctx context.Context, user *UserRef, code ReasonCode, failed []AppFailure) {
-	if s.notifier == nil || s.mailEnabled == nil || !s.mailEnabled(ctx) || user.MailSent {
+// notify sends the one mail while the flag is on. The mail is claimed before
+// it is sent, so two suspends at once send one, and given back if the send
+// fails, so suspending again retries it. With the flag off the mail is settled
+// at once: turning the flag on later never mails about an older suspension.
+// A failure is logged and counted, never a reason to undo the suspension.
+func (s *SuspensionService) notify(ctx context.Context, user *UserRef, why Reason, code ReasonCode, failed []AppFailure) {
+	if s.mailEnabled == nil || user.MailSent {
+		return
+	}
+	if !s.mailEnabled(ctx) {
+		if _, err := s.store.ClaimMail(ctx, user.ID); err != nil {
+			log.Printf("ERROR: settle suspension mail for user %s: %v", user.ID, err)
+		}
+		return
+	}
+	if s.notifier == nil {
 		return
 	}
 	recorded, err := s.store.SuspendedApps(ctx, user.ID)
@@ -81,16 +96,25 @@ func (s *SuspensionService) notify(ctx context.Context, user *UserRef, code Reas
 		metrics.SuspensionMail("failed")
 		return
 	}
-	notice := SuspensionNotice{Email: user.Email, Code: code, Projects: noticeProjects(withoutFailed(recorded, failed))}
-	if err := s.notifier.Suspended(ctx, notice); err != nil {
-		log.Printf("ERROR: suspension mail for user %s: %v", user.ID, err)
+	claimed, err := s.store.ClaimMail(ctx, user.ID)
+	if err != nil {
+		log.Printf("ERROR: suspension mail for user %s: claim: %v", user.ID, err)
 		metrics.SuspensionMail("failed")
 		return
 	}
-	metrics.SuspensionMail("sent")
-	if err := s.store.MarkMailSent(ctx, user.ID); err != nil {
-		log.Printf("ERROR: suspension mail for user %s sent but not recorded: %v", user.ID, err)
+	if !claimed {
+		return
 	}
+	notice := SuspensionNotice{Email: user.Email, Code: code, OrgClosed: why.OrgClosed, Projects: noticeProjects(withoutFailed(recorded, failed))}
+	if err := s.notifier.Suspended(ctx, notice); err != nil {
+		log.Printf("ERROR: suspension mail for user %s: %v", user.ID, err)
+		metrics.SuspensionMail("failed")
+		if err := s.store.ReleaseMail(ctx, user.ID); err != nil {
+			log.Printf("ERROR: suspension mail for user %s not released for a retry: %v", user.ID, err)
+		}
+		return
+	}
+	metrics.SuspensionMail("sent")
 }
 
 // withoutFailed drops the apps this run could not stop; the mail names only what stopped.

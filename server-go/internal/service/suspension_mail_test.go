@@ -105,3 +105,61 @@ func TestSuspensionMail_NeverGoesToBlank(t *testing.T) {
 		t.Fatalf("an account without an address is an error, nothing is sent: %v %d", err, len(sender.messages))
 	}
 }
+
+// A revoke deletes the organisation, so its mail must not say data is kept.
+func TestSuspensionMail_AnOrgClosureSaysTheDataIsBeingDeleted(t *testing.T) {
+	mail, sender, notice := suspensionMailFixture(adminconsole.ReasonOther)
+	notice.OrgClosed = true
+	if err := mail.Suspended(context.Background(), notice); err != nil {
+		t.Fatal(err)
+	}
+	msg := sender.messages[0]
+	for _, want := range []string{"closed", "being deleted", "14 days", "support@example.test", "https://example.test/acceptable-use"} {
+		if !strings.Contains(msg.TextBody, want) {
+			t.Errorf("closure mail lacks %q:\n%s", want, msg.TextBody)
+		}
+	}
+	for _, banned := range []string{"not deleted", "kept as they are", "suspended"} {
+		if strings.Contains(msg.TextBody+msg.Subject, banned) {
+			t.Errorf("closure mail says %q, which is false for a closure:\n%s", banned, msg.TextBody)
+		}
+	}
+	if msg.Tags["kind"] != "org-closed" || msg.Subject != "Your Excalibase organisation was closed" {
+		t.Errorf("subject %q tags %v", msg.Subject, msg.Tags)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("messages = %d", len(sender.messages))
+	}
+}
+
+// Names are typed by the user. A line break in one must never start a line of its own.
+func TestSuspensionMail_ANameCannotInjectALine(t *testing.T) {
+	mail, sender, notice := suspensionMailFixture(adminconsole.ReasonOther)
+	notice.Projects = []adminconsole.NoticeProject{
+		{Name: "Shop\nPay at evil.test now", Apps: []string{"web\r\nClick evil.test", "plain", "tab\there\u2028split"}},
+	}
+	if err := mail.Suspended(context.Background(), notice); err != nil {
+		t.Fatal(err)
+	}
+	body := sender.messages[0].TextBody
+	want := `- Project "ShopPay at evil.test now": "webClick evil.test", "plain", "tabheresplit"`
+	if !strings.Contains(body, want+"\n") {
+		t.Fatalf("project line is not the cleaned, quoted one %q:\n%s", want, body)
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "Pay at") || strings.HasPrefix(line, "Click") || strings.ContainsAny(line, "\r\u2028") {
+			t.Errorf("injected line %q", line)
+		}
+	}
+}
+
+func TestSuspensionMail_NamesAreQuoted(t *testing.T) {
+	mail, sender, notice := suspensionMailFixture(adminconsole.ReasonOther)
+	notice.Projects = []adminconsole.NoticeProject{{Name: `say "hi"`, Apps: []string{`a"b`}}}
+	if err := mail.Suspended(context.Background(), notice); err != nil {
+		t.Fatal(err)
+	}
+	if want := `- Project "say \"hi\"": "a\"b"`; !strings.Contains(sender.messages[0].TextBody, want) {
+		t.Fatalf("want %s in:\n%s", want, sender.messages[0].TextBody)
+	}
+}

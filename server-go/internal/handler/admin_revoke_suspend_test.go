@@ -21,13 +21,14 @@ import (
 
 type fakeOwnerSuspender struct {
 	userID, reason string
+	closed         bool
 	err            error
 	calls          int
 }
 
 func (f *fakeOwnerSuspender) Suspend(_ context.Context, _ adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error) {
 	f.calls++
-	f.userID, f.reason = userID, reason.Text
+	f.userID, f.reason, f.closed = userID, reason.Text, reason.OrgClosed
 	return &adminconsole.Result{}, f.err
 }
 
@@ -64,6 +65,9 @@ func TestAdmin_RevokeOrg_SuspendsTheOwnerWithTheReason(t *testing.T) {
 	}
 	if sus.calls != 1 || sus.userID != "owner-1" {
 		t.Fatalf("owner not suspended: %+v", sus)
+	}
+	if !sus.closed {
+		t.Error("a revoke deletes the org, so its suspension must carry the closure notice")
 	}
 	if sus.reason == "" || !strings.Contains(sus.reason, "proxy abuse on every project") {
 		t.Errorf("the reason did not reach the suspension: %q", sus.reason)
@@ -142,8 +146,9 @@ func (d deactivatingStore) Suspend(_ context.Context, s adminconsole.Suspension,
 	d.users.users[s.UserID].Active = false
 	return nil
 }
-func (deactivatingStore) MarkMailSent(context.Context, string) error { return nil }
-func (deactivatingStore) Unsuspend(context.Context, string) error    { return nil }
+func (deactivatingStore) ClaimMail(context.Context, string) (bool, error) { return false, nil }
+func (deactivatingStore) ReleaseMail(context.Context, string) error       { return nil }
+func (deactivatingStore) Unsuspend(context.Context, string) error         { return nil }
 func (deactivatingStore) SuspendedApps(context.Context, string) ([]adminconsole.SuspendedApp, error) {
 	return nil, nil
 }

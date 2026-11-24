@@ -73,10 +73,20 @@ func (f *fakeSuspensions) Suspend(_ context.Context, s Suspension, apps []Suspen
 	return nil
 }
 
-func (f *fakeSuspensions) MarkMailSent(_ context.Context, userID string) error {
+func (f *fakeSuspensions) ClaimMail(_ context.Context, userID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.mailSent[userID] {
+		return false, nil
+	}
 	f.mailSent[userID] = true
+	return true, nil
+}
+
+func (f *fakeSuspensions) ReleaseMail(_ context.Context, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.mailSent, userID)
 	return nil
 }
 

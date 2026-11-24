@@ -344,7 +344,7 @@ func (h *AdminHandler) suspendOwner(w http.ResponseWriter, r *http.Request, org 
 		return false
 	}
 	actor := adminconsole.Actor{ID: extractUserID(r), IP: clientIP(r)}
-	if _, err := h.suspender.Suspend(r.Context(), actor, org.OwnerID, adminconsole.Reason{Code: adminconsole.ReasonOther, Text: "org revoked: " + reason}); err != nil {
+	if _, err := h.suspender.Suspend(r.Context(), actor, org.OwnerID, adminconsole.Reason{Code: adminconsole.ReasonOther, Text: "org revoked: " + reason, OrgClosed: true}); err != nil {
 		switch {
 		case errors.Is(err, adminconsole.ErrProtectedAccount):
 			httpError(w, "the org's owner is a platform account and cannot be suspended; nothing was deleted", http.StatusConflict)

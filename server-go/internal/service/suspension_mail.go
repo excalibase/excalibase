@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/email"
@@ -62,22 +63,49 @@ func (m *SuspensionMail) Suspended(ctx context.Context, notice adminconsole.Susp
 	if notice.Email == "" {
 		return errors.New("the account has no email address")
 	}
+	if notice.OrgClosed {
+		return m.send(ctx, notice, "Your Excalibase organisation was closed", m.closureBody(), "org-closed")
+	}
 	rule, known := suspensionRules[notice.Code]
 	if !known {
 		rule = suspensionRules[adminconsole.ReasonOther]
 		notice.Code = adminconsole.ReasonOther
 	}
+	return m.send(ctx, notice, rule.subject, m.body(rule.rule, notice), "account-suspended")
+}
+
+func (m *SuspensionMail) send(ctx context.Context, notice adminconsole.SuspensionNotice, subject, body, kind string) error {
 	ctx, cancel := context.WithTimeout(ctx, adminMailTimeout)
 	defer cancel()
 	msg := email.Message{
 		To: []string{notice.Email}, From: m.cfg.From, FromName: m.cfg.FromName, ReplyTo: m.cfg.SupportEmail,
-		Subject: rule.subject, TextBody: m.body(rule.rule, notice),
-		Tags: map[string]string{"kind": "account-suspended", "reason": string(notice.Code)},
+		Subject: subject, TextBody: body,
+		Tags: map[string]string{"kind": kind, "reason": string(notice.Code)},
 	}
 	if _, err := m.sender.Send(ctx, msg); err != nil {
 		return fmt.Errorf("send suspension mail: %w", err)
 	}
 	return nil
+}
+
+// closureBody is the mail for an organisation closed for a policy breach. A
+// revoke deletes the projects at once, with no grace period, and keeps their
+// backups 14 days (service.RetainedBackupPeriod) before purging them.
+func (m *SuspensionMail) closureBody() string {
+	var b strings.Builder
+	b.WriteString("Hello,\n\nWe have closed your Excalibase organisation and deactivated your account, because use of it broke our Acceptable Use Policy.\n")
+	if m.cfg.PolicyURL != "" {
+		fmt.Fprintf(&b, "The policy is here: %s\n", m.cfg.PolicyURL)
+	}
+	b.WriteString("\nYour data\nThe organisation's projects, apps, databases and files are being deleted now. Backups of the databases are kept for 14 days after that, then permanently removed.\n")
+	b.WriteString("\nIf you think this is a mistake\n")
+	if m.cfg.SupportEmail != "" {
+		fmt.Fprintf(&b, "Reply to this email or write to %s within those 14 days. Tell us what your apps did and we will review the decision.\n", m.cfg.SupportEmail)
+	} else {
+		b.WriteString("Reply to this email within those 14 days and tell us what your apps did. We will review the decision.\n")
+	}
+	b.WriteString("\nThe Excalibase team\n")
+	return b.String()
 }
 
 func (m *SuspensionMail) body(rule string, notice adminconsole.SuspensionNotice) string {
@@ -92,7 +120,7 @@ func (m *SuspensionMail) body(rule string, notice adminconsole.SuspensionNotice)
 		b.WriteString("Your account is deactivated. No apps were running, so none were stopped.\n")
 	}
 	for _, project := range notice.Projects {
-		fmt.Fprintf(&b, "- Project %q: %s\n", project.Name, quotedList(project.Apps))
+		fmt.Fprintf(&b, "- Project %q: %s\n", cleanName(project.Name), quotedList(project.Apps))
 	}
 	b.WriteString("\nYour data\nWe have not deleted your data. Your databases, files and backups are kept as they are while your account is suspended.\n")
 	b.WriteString("\nIf you think this is a mistake\n")
@@ -108,7 +136,24 @@ func (m *SuspensionMail) body(rule string, notice adminconsole.SuspensionNotice)
 func quotedList(names []string) string {
 	quoted := make([]string, len(names))
 	for i, name := range names {
-		quoted[i] = fmt.Sprintf("%q", name)
+		quoted[i] = fmt.Sprintf("%q", cleanName(name))
 	}
 	return strings.Join(quoted, ", ")
+}
+
+const maxNameLength = 100
+
+// cleanName drops control characters and line separators from a name a user
+// typed, so it cannot start a line of its own in the mail, and caps its length.
+func cleanName(name string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return -1
+		}
+		return r
+	}, name)
+	if runes := []rune(cleaned); len(runes) > maxNameLength {
+		cleaned = string(runes[:maxNameLength]) + "..."
+	}
+	return cleaned
 }

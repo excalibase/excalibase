@@ -44,7 +44,7 @@ type UserRef struct {
 	Role      string
 	Active    bool
 	Suspended bool
-	// MailSent is set once the account holder has been told of the suspension.
+	// MailSent is set once the suspension mail is settled: sent, or not owed.
 	MailSent bool
 }
 
@@ -89,8 +89,11 @@ type SuspensionStore interface {
 	RecordSuspendedApps(ctx context.Context, userID string, apps []SuspendedApp) error
 	Unsuspend(ctx context.Context, userID string) error
 	SuspendedApps(ctx context.Context, userID string) ([]SuspendedApp, error)
-	// MarkMailSent records that the suspension mail went, so a retry does not repeat it.
-	MarkMailSent(ctx context.Context, userID string) error
+	// ClaimMail settles the suspension mail for one caller: true only for the
+	// one that found it unsettled, so concurrent suspends send one mail.
+	ClaimMail(ctx context.Context, userID string) (bool, error)
+	// ReleaseMail gives the claim back after a send that failed, so a retry sends it.
+	ReleaseMail(ctx context.Context, userID string) error
 	ForgetSuspendedApp(ctx context.Context, userID, projectID, appID string) error
 }
 
@@ -185,7 +188,7 @@ func (s *SuspensionService) Suspend(ctx context.Context, actor Actor, userID str
 		}
 		result.AppsStopped = append(result.AppsStopped, app)
 	}
-	s.notify(ctx, user, code, result.AppsFailed)
+	s.notify(ctx, user, why, code, result.AppsFailed)
 	return result, nil
 }
 
