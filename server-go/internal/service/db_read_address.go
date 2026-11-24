@@ -198,6 +198,9 @@ func (r *DBReadAddressService) SetReadAddress(ctx context.Context, projectID str
 		}
 		return r.view(ctx, inst)
 	}
+	if err := r.inner.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return DBReadAddressView{}, err
+	}
 	if err := r.open(ctx, inst); err != nil {
 		return DBReadAddressView{}, err
 	}

@@ -121,6 +121,9 @@ func (s *Service) publishPreview(ctx context.Context, site *Site, preview *Previ
 	if err := s.publisher.PutScript(publishCtx, script, cfworkers.ScriptVersion{AssetsJWT: completion, Assets: assetConfig(site.SPAFallback)}); err != nil {
 		return publishFailure(site, stepPublish, err)
 	}
+	if err := s.options.OrgGuard.CheckServingFreshUnlessAdmin(ctx, site.ProjectID); err != nil {
+		return publishFailure(site, stepRoute, err)
+	}
 	if err := s.publisher.PutKV(publishCtx, preview.Hostname, script); err != nil {
 		return publishFailure(site, stepRoute, err)
 	}

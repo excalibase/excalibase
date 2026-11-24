@@ -50,6 +50,20 @@ func (f *fakeSuspensions) OwnedApps(_ context.Context, userID string) ([]OwnedAp
 	return f.owned[userID], nil
 }
 
+func (f *fakeSuspensions) OwnedProjects(_ context.Context, userID string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := map[string]bool{}
+	out := []string{}
+	for _, app := range f.owned[userID] {
+		if !seen[app.ProjectID] {
+			seen[app.ProjectID] = true
+			out = append(out, app.ProjectID)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeSuspensions) RecordSuspendedApps(_ context.Context, userID string, apps []SuspendedApp) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -100,7 +114,7 @@ type fakeControl struct {
 	failResume      map[string]error
 }
 
-func (c *fakeControl) PauseApp(_ context.Context, projectID, appID string) (*apphost.App, error) {
+func (c *fakeControl) StopApp(_ context.Context, projectID, appID string) (*apphost.App, error) {
 	if err := c.failPause[appID]; err != nil {
 		return nil, err
 	}

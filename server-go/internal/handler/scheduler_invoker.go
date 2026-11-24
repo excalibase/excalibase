@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
 )
 
@@ -54,7 +55,7 @@ func (i *RuntimeInvoker) Invoke(
 
 	client, err := i.handler.runtimeClientFor(ctx, projectID)
 	if err != nil {
-		if errors.Is(err, ErrProjectDeleting) || errors.Is(err, ErrProjectRestoring) {
+		if errors.Is(err, ErrProjectDeleting) || errors.Is(err, ErrProjectRestoring) || errors.Is(err, orgguard.ErrOrgSuspended) {
 			return fmt.Errorf("%w: %v", scheduler.ErrNotServable, err)
 		}
 		return fmt.Errorf("resolve runtime for %s: %w", projectID, err)
