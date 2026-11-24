@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Bell, ChevronDown, CircleHelp, LogOut, Moon, Search, Sun, KeyRound } from 'lucide-react';
+import { ChevronDown, CircleHelp, LogOut, Moon, Search, Sun, KeyRound } from 'lucide-react';
 import { DOCS_URL } from './navV2';
 import { useAuthStore } from '../../../stores/auth-store';
 import { useDarkMode } from '../../../hooks/useDarkMode';
@@ -22,6 +22,7 @@ export function usePopup() {
   return { open, setOpen, ref };
 }
 
+// No notifications API exists yet, so the top bar has no bell; it returns with the API.
 export function TopBar({ left, onSearch }: { readonly left: ReactNode; readonly onSearch: () => void }) {
   return (
     <header className="flex flex-wrap items-center gap-3 px-4 py-2 bg-surface-card border-b border-border-primary flex-shrink-0">
@@ -40,27 +41,9 @@ export function TopBar({ left, onSearch }: { readonly left: ReactNode; readonly 
         <a href={DOCS_URL} target="_blank" rel="noreferrer" aria-label="Help and docs" className={ICON_BUTTON}>
           <CircleHelp className="w-[18px] h-[18px]" aria-hidden="true" />
         </a>
-        <Notifications />
         <AccountMenu />
       </div>
     </header>
-  );
-}
-
-function Notifications() {
-  const { open, setOpen, ref } = usePopup();
-  return (
-    <div ref={ref} className="relative">
-      <button type="button" aria-label="Notifications" aria-expanded={open} onClick={() => setOpen(!open)} className={ICON_BUTTON}>
-        <Bell className="w-[18px] h-[18px]" aria-hidden="true" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-64 rounded-xl border border-border-primary bg-surface-card p-4 text-sm text-text-secondary shadow-lg">
-          <output className="block">You have no notifications.</output>
-          <Link to="/usage" onClick={() => setOpen(false)} className="mt-2 inline-block text-purple-400 hover:underline">Usage &amp; credits</Link>
-        </div>
-      )}
-    </div>
   );
 }
 

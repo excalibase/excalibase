@@ -22,7 +22,8 @@ export function OrgsPage() {
   const [searchParams] = useSearchParams();
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(searchParams.get('new') === '1');
+  const wantsCreate = searchParams.get('new') === '1';
+  const [showCreate, setShowCreate] = useState(wantsCreate);
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
   // Once the slug is typed by hand, a name change no longer replaces it.
@@ -40,6 +41,8 @@ export function OrgsPage() {
   };
 
   useEffect(() => { void fetchOrgs(); }, []);
+  // The link can be followed while this page is already open.
+  useEffect(() => { if (wantsCreate) setShowCreate(true); }, [wantsCreate]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();

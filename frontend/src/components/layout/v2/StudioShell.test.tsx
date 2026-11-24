@@ -28,17 +28,19 @@ function Where() {
   return <p data-testid="where">{useLocation().pathname}</p>;
 }
 
-function renderShell(role = 'user') {
+interface Setup { readonly orgs?: unknown[]; readonly features?: Record<string, boolean>; readonly path?: string; readonly adminHost?: string }
+
+function renderShell(role = 'user', { orgs = ORGS, features = {}, path = '/', adminHost }: Setup = {}) {
   useAuthStore.setState({ user: { id: 'u1', username: 'dev', email: 'dev@example.test', role }, isAuthenticated: true });
   vi.mocked(api.get).mockImplementation((url: string) => {
-    if (url === '/orgs') return Promise.resolve({ data: ORGS }) as never;
+    if (url === '/orgs') return Promise.resolve({ data: orgs }) as never;
     if (url === '/provision') return Promise.resolve({ data: PROJECTS }) as never;
-    return Promise.resolve({ data: { deploymentMode: 'cloud', features: { studio_v2: true } } }) as never;
+    return Promise.resolve({ data: { deploymentMode: 'cloud', adminHost, features: { studio_v2: true, ...features } } }) as never;
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/']}>
+      <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route element={<StudioShell />}>
             <Route path="*" element={<Where />} />
@@ -117,11 +119,69 @@ describe('StudioShell', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  test('the top bar has help and notifications that lead to real pages', async () => {
+  // No notifications API exists in the platform (server-go has no such route), so the bell stays hidden.
+  test('the top bar has a help link and no notification bell', async () => {
     renderShell();
     expect(await screen.findByRole('link', { name: /help and docs/i })).toHaveAttribute('href', expect.stringContaining('/docs'));
-    await userEvent.click(screen.getByRole('button', { name: /notifications/i }));
-    expect(screen.getAllByRole('link', { name: /usage & credits/i })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /notifications/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/no notifications/i)).not.toBeInTheDocument();
+  });
+
+  test('the left nav links to the Organizations list', async () => {
+    renderShell();
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    expect(within(nav).getByRole('link', { name: 'Organizations' })).toHaveAttribute('href', '/orgs');
+  });
+
+  test('the org switcher offers the list and a create-organization entry', async () => {
+    renderShell();
+    await userEvent.click(await screen.findByRole('button', { name: /organization: acme/i }));
+    expect(screen.getByRole('link', { name: /all organizations/i })).toHaveAttribute('href', '/orgs');
+    expect(screen.getByRole('link', { name: /create organization/i })).toHaveAttribute('href', '/orgs?new=1');
+  });
+
+  test('a platform admin on a host-monitoring install gets the Host link', async () => {
+    renderShell('platform_admin', { features: { hostmetrics: true } });
+    expect(await screen.findByRole('link', { name: 'Host' })).toHaveAttribute('href', '/admin/host');
+  });
+
+  test('Host is hidden from non-admins, and where host monitoring is off', async () => {
+    renderShell('user', { features: { hostmetrics: true } });
+    await screen.findByRole('navigation', { name: 'Main' });
+    expect(screen.queryByRole('link', { name: 'Host' })).not.toBeInTheDocument();
+  });
+
+  test('Host is hidden when host monitoring is off', async () => {
+    renderShell('platform_admin');
+    await screen.findByRole('link', { name: /admin console/i });
+    expect(screen.queryByRole('link', { name: 'Host' })).not.toBeInTheDocument();
+  });
+
+  test('the admin links are hidden on a host that is not the admin host', async () => {
+    renderShell('platform_admin', { features: { hostmetrics: true }, adminHost: 'admin.example.test' });
+    await screen.findByRole('navigation', { name: 'Main' });
+    expect(await screen.findByRole('link', { name: 'Organizations' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Host' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /admin console/i })).not.toBeInTheDocument();
+  });
+
+  test('a person with no organization sees a page to create one or accept an invite', async () => {
+    renderShell('user', { orgs: [] });
+    expect(await screen.findByRole('heading', { name: /join or create an organization/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /create an organization/i })).toHaveAttribute('href', '/orgs?new=1');
+    expect(screen.getByLabelText(/invite link or code/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('where')).not.toBeInTheDocument();
+  });
+
+  test('the no-organization page does not cover the pages that need no org', async () => {
+    renderShell('user', { orgs: [], path: '/account/tokens' });
+    expect(await screen.findByTestId('where')).toHaveTextContent('/account/tokens');
+    expect(screen.queryByRole('heading', { name: /join or create an organization/i })).not.toBeInTheDocument();
+  });
+
+  test('the org switcher of a person with no organization links to create one', async () => {
+    renderShell('user', { orgs: [] });
+    expect(await screen.findByRole('link', { name: /no organization/i })).toHaveAttribute('href', '/orgs?new=1');
   });
 
   test('the palette finds docs links', async () => {

@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { Link, MemoryRouter } from 'react-router-dom';
 import { OrgsPage } from './OrgsPage';
 import { listMyOrgs, createOrg } from '../api/orgs';
 
@@ -28,6 +28,21 @@ describe('OrgsPage — create', () => {
   // The create-project form links here when the user has no organization.
   test('?new=1 opens the create form', async () => {
     renderAt('/orgs?new=1');
+    expect(await screen.findByLabelText('Name')).toBeInTheDocument();
+  });
+
+  // The org switcher's "Create organization" link is followed while this page is already open.
+  test('following a ?new=1 link from the open list opens the create form', async () => {
+    vi.mocked(listMyOrgs).mockResolvedValue([]);
+    render(
+      <MemoryRouter initialEntries={['/orgs']}>
+        <Link to="/orgs?new=1">create elsewhere</Link>
+        <OrgsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('No organizations yet.');
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('link', { name: 'create elsewhere' }));
     expect(await screen.findByLabelText('Name')).toBeInTheDocument();
   });
 

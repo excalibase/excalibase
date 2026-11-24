@@ -62,12 +62,12 @@ describe('ProjectShell', () => {
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 
-  test('the tab bar offers Services, Usage, Activity and Settings, each a real page', async () => {
+  test('the tab bar offers Services, Metrics, Logs and Settings, each named for the page it opens', async () => {
     renderShell('/project/p1');
     const tabs = await screen.findByRole('navigation', { name: 'Project' });
-    expect(within(tabs).getAllByRole('link').map((a) => a.textContent)).toEqual(['Services', 'Usage', 'Activity', 'Settings']);
-    expect(within(tabs).getByRole('link', { name: 'Usage' })).toHaveAttribute('href', '/project/p1/monitoring/metrics');
-    expect(within(tabs).getByRole('link', { name: 'Activity' })).toHaveAttribute('href', '/project/p1/monitoring/logs');
+    expect(within(tabs).getAllByRole('link').map((a) => a.textContent)).toEqual(['Services', 'Metrics', 'Logs', 'Settings']);
+    expect(within(tabs).getByRole('link', { name: 'Metrics' })).toHaveAttribute('href', '/project/p1/monitoring/metrics');
+    expect(within(tabs).getByRole('link', { name: 'Logs' })).toHaveAttribute('href', '/project/p1/monitoring/logs');
   });
 
   test('activeTab matches sub-paths and leaves unlisted pages unmarked', () => {
