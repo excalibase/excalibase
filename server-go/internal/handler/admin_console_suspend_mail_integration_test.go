@@ -236,9 +236,9 @@ func TestClosureMail_OnARealDatabaseIsClaimedPerOrg(t *testing.T) {
 	if _, err := svc.Suspend(ctx, adminconsole.Actor{ID: platformAdminID}, testAliceID, adminconsole.Reason{Code: adminconsole.ReasonCryptoMining, Text: "xmrig"}); err != nil {
 		t.Fatal(err)
 	}
-	svc.NotifyOrgClosed(ctx, testAliceID, "org-a")
-	svc.NotifyOrgClosed(ctx, testAliceID, "org-a")
-	svc.NotifyOrgClosed(ctx, testAliceID, "org-b")
+	_ = svc.NotifyOrgClosed(ctx, testAliceID, "org-a")
+	_ = svc.NotifyOrgClosed(ctx, testAliceID, "org-a")
+	_ = svc.NotifyOrgClosed(ctx, testAliceID, "org-b")
 	if len(box.sent) != 3 {
 		t.Fatalf("mails = %d, want the suspension mail and one closure mail per org (3)", len(box.sent))
 	}
@@ -254,7 +254,7 @@ func TestClosureMail_ConcurrentRevokesOfOneOrgMailOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			svc.NotifyOrgClosed(context.Background(), testAliceID, "org-a")
+			_ = svc.NotifyOrgClosed(context.Background(), testAliceID, "org-a")
 		}()
 	}
 	wg.Wait()
@@ -266,9 +266,13 @@ func TestClosureMail_ConcurrentRevokesOfOneOrgMailOnce(t *testing.T) {
 func TestClosureMail_AFailedSendIsOwedAgain(t *testing.T) {
 	svc, _, box := closureRig(t)
 	box.fail = errors.New("smtp down")
-	svc.NotifyOrgClosed(context.Background(), testAliceID, "org-a")
+	if err := svc.NotifyOrgClosed(context.Background(), testAliceID, "org-a"); err == nil {
+		t.Fatal("a failed send must be returned")
+	}
 	box.fail = nil
-	svc.NotifyOrgClosed(context.Background(), testAliceID, "org-a")
+	if err := svc.NotifyOrgClosed(context.Background(), testAliceID, "org-a"); err != nil {
+		t.Fatal(err)
+	}
 	if len(box.sent) != 1 {
 		t.Fatalf("mails = %d, want the retry to send it", len(box.sent))
 	}

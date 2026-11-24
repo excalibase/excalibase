@@ -3,6 +3,7 @@ package adminconsole
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 
 	"github.com/excalibase/provisioning-poc/internal/metrics"
@@ -130,36 +131,42 @@ func (s *SuspensionService) notify(ctx context.Context, user *UserRef, why Reaso
 // deleted, once per (owner, org): the claim is per org, so it does not depend on
 // whether the owner was suspended before, and revoking a second org mails again.
 // The caller sends it only after the teardown succeeded. A failed send gives the
-// claim back, so the next revoke of the org sends it. Failures are logged and
-// counted, never returned: the deletion is not undone for a mail.
-func (s *SuspensionService) NotifyOrgClosed(ctx context.Context, userID, orgID string) {
+// claim back and is returned: the caller keeps the org row, so a second revoke
+// finds the org again and sends the mail. A flag that is off, or no mail
+// sender, is not a failure; there is nothing to retry.
+func (s *SuspensionService) NotifyOrgClosed(ctx context.Context, userID, orgID string) error {
 	if s.mailEnabled == nil || s.notifier == nil || !s.mailEnabled(ctx) {
-		return
+		return nil
 	}
 	user, err := s.store.FindUser(ctx, userID)
 	if err != nil || user == nil {
-		log.Printf("ERROR: closure mail for user %s org %s: look up user: %v", userID, orgID, err)
 		metrics.SuspensionMail("failed")
-		return
+		return fmt.Errorf("closure mail: look up user %s: %w", userID, errOrMissing(err))
 	}
 	claimed, err := s.store.ClaimClosureMail(ctx, userID, orgID)
 	if err != nil {
-		log.Printf("ERROR: closure mail for user %s org %s: claim: %v", userID, orgID, err)
 		metrics.SuspensionMail("failed")
-		return
+		return fmt.Errorf("closure mail: claim for org %s: %w", orgID, err)
 	}
 	if !claimed {
-		return
+		return nil
 	}
 	if err := s.notifier.Suspended(ctx, SuspensionNotice{Email: user.Email, Code: ReasonOther, OrgClosed: true}); err != nil {
-		log.Printf("ERROR: closure mail for user %s org %s: %v", userID, orgID, err)
 		metrics.SuspensionMail("failed")
-		if err := s.store.ReleaseClosureMail(ctx, userID, orgID); err != nil {
-			log.Printf("ERROR: closure mail for user %s org %s not released for a retry: %v", userID, orgID, err)
+		if releaseErr := s.store.ReleaseClosureMail(ctx, userID, orgID); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release the claim: %w", releaseErr))
 		}
-		return
+		return fmt.Errorf("closure mail for org %s: %w", orgID, err)
 	}
 	metrics.SuspensionMail("sent")
+	return nil
+}
+
+func errOrMissing(err error) error {
+	if err != nil {
+		return err
+	}
+	return ErrUserNotFound
 }
 
 // withoutFailed drops the apps this run could not stop; the mail names only what stopped.

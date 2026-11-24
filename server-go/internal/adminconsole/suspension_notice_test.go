@@ -215,7 +215,7 @@ func TestClosureMailIsSentToAnOwnerAlreadySuspended(t *testing.T) {
 	if _, err := svc.Suspend(ctx, admin, "victim", closing); err != nil {
 		t.Fatal(err)
 	}
-	svc.NotifyOrgClosed(ctx, "victim", "org-1")
+	_ = svc.NotifyOrgClosed(ctx, "victim", "org-1")
 	if notifier.count() != 2 || !notifier.notices[1].OrgClosed || notifier.notices[0].OrgClosed {
 		t.Fatalf("notices = %+v, want the suspension mail then the closure mail", notifier.notices)
 	}
@@ -224,9 +224,9 @@ func TestClosureMailIsSentToAnOwnerAlreadySuspended(t *testing.T) {
 func TestClosureMailIsSentOncePerOrg(t *testing.T) {
 	svc, _, _, notifier := noticeFixture(true)
 	ctx := context.Background()
-	svc.NotifyOrgClosed(ctx, "victim", "org-1")
-	svc.NotifyOrgClosed(ctx, "victim", "org-2")
-	svc.NotifyOrgClosed(ctx, "victim", "org-1")
+	_ = svc.NotifyOrgClosed(ctx, "victim", "org-1")
+	_ = svc.NotifyOrgClosed(ctx, "victim", "org-2")
+	_ = svc.NotifyOrgClosed(ctx, "victim", "org-1")
 	if notifier.count() != 2 {
 		t.Fatalf("notices = %d, want one per closed org (2)", notifier.count())
 	}
@@ -240,7 +240,7 @@ func TestConcurrentRevokesOfOneOrgSendOneClosureMail(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			svc.NotifyOrgClosed(context.Background(), "victim", "org-1")
+			_ = svc.NotifyOrgClosed(context.Background(), "victim", "org-1")
 		}()
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -254,17 +254,31 @@ func TestConcurrentRevokesOfOneOrgSendOneClosureMail(t *testing.T) {
 func TestClosureMailIsOwedAgainAfterAFailedSend(t *testing.T) {
 	svc, _, _, notifier := noticeFixture(true)
 	notifier.err = errors.New("smtp down")
-	svc.NotifyOrgClosed(context.Background(), "victim", "org-1")
+	if err := svc.NotifyOrgClosed(context.Background(), "victim", "org-1"); err == nil {
+		t.Fatal("a failed send must be returned, so the revoke can keep the org for a retry")
+	}
 	notifier.err = nil
-	svc.NotifyOrgClosed(context.Background(), "victim", "org-1")
+	if err := svc.NotifyOrgClosed(context.Background(), "victim", "org-1"); err != nil {
+		t.Fatal(err)
+	}
 	if notifier.count() != 2 {
 		t.Fatalf("notices = %d, a failed send must be retried by the next revoke", notifier.count())
 	}
 }
 
+func TestClosureMailWithNoSenderIsNotAFailure(t *testing.T) {
+	svc, _, _, _ := noticeFixture(true)
+	svc.SetNotifier(nil, func(context.Context) bool { return true })
+	if err := svc.NotifyOrgClosed(context.Background(), "victim", "org-1"); err != nil {
+		t.Fatalf("no mail sender is not a failure: %v", err)
+	}
+}
+
 func TestClosureMailWithTheFlagOffSendsNothing(t *testing.T) {
 	svc, _, _, notifier := noticeFixture(false)
-	svc.NotifyOrgClosed(context.Background(), "victim", "org-1")
+	if err := svc.NotifyOrgClosed(context.Background(), "victim", "org-1"); err != nil {
+		t.Fatalf("flag off is not a failure: %v", err)
+	}
 	if notifier.count() != 0 {
 		t.Fatalf("notices = %d with the flag off", notifier.count())
 	}

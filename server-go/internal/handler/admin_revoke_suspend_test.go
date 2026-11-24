@@ -28,17 +28,19 @@ type fakeOwnerSuspender struct {
 	err            error
 	calls          int
 	// closures records each closure mail asked for, as "user/org".
-	closures []string
+	closures   []string
+	closureErr error
 	// whenClosed is how many orgs were deleted when the closure mail was asked.
 	orgs             *adminOrgStore
 	deletedAtClosure []bool
 }
 
-func (f *fakeOwnerSuspender) NotifyOrgClosed(_ context.Context, userID, orgID string) {
+func (f *fakeOwnerSuspender) NotifyOrgClosed(_ context.Context, userID, orgID string) error {
 	f.closures = append(f.closures, userID+"/"+orgID)
 	if f.orgs != nil {
 		f.deletedAtClosure = append(f.deletedAtClosure, f.orgs.deleted)
 	}
+	return f.closureErr
 }
 
 func (f *fakeOwnerSuspender) Suspend(_ context.Context, _ adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error) {
@@ -344,5 +346,32 @@ func TestAdmin_RevokeOrg_NoClosureMailWhenAProjectDropFails(t *testing.T) {
 	}
 	if len(sus.closures) != 0 || orgs.deleted {
 		t.Fatalf("closure mails = %v, org deleted = %v", sus.closures, orgs.deleted)
+	}
+}
+
+// A closure mail that failed keeps the org: the org row is what lets a second
+// revoke find the work and send the mail. Deleting it would leave the owner
+// with no notice and no way to send one.
+func TestAdmin_RevokeOrg_KeepsTheOrgWhenTheClosureMailFailsAndRetries(t *testing.T) {
+	sus := &fakeOwnerSuspender{closureErr: errors.New("smtp down")}
+	_, orgs, _, r := revokeRig(t, sus)
+
+	w := revoke(r, revokeReasonBody)
+	if w.Code != http.StatusMultiStatus {
+		t.Fatalf("got %d %s, want 207", w.Code, w.Body.String())
+	}
+	if orgs.deleted {
+		t.Fatal("the org was deleted though the owner was never told")
+	}
+	if !strings.Contains(w.Body.String(), "revoke again to retry") || strings.Contains(w.Body.String(), "smtp") {
+		t.Errorf("the message must say what to do and leak nothing: %s", w.Body.String())
+	}
+
+	sus.closureErr = nil
+	if w := revoke(r, revokeReasonBody); w.Code != http.StatusOK {
+		t.Fatalf("retry got %d %s", w.Code, w.Body.String())
+	}
+	if !orgs.deleted || len(sus.closures) != 2 {
+		t.Fatalf("org deleted = %v, closure attempts = %d, want the retry to mail and delete", orgs.deleted, len(sus.closures))
 	}
 }

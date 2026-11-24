@@ -55,8 +55,8 @@ type ProjectFactsLookup func(ctx context.Context) (map[string]adminconsole.Proje
 type OwnerSuspender interface {
 	Suspend(ctx context.Context, actor adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error)
 	// NotifyOrgClosed mails the owner that the org was closed; called only
-	// once every project of the org is gone.
-	NotifyOrgClosed(ctx context.Context, userID, orgID string)
+	// once every project of the org is gone. A send that failed is an error.
+	NotifyOrgClosed(ctx context.Context, userID, orgID string) error
 }
 
 // SetOwnerSuspender wires the suspension a revoke applies to the org's owner.
@@ -309,9 +309,14 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 
 	// The owner is told once the projects are really gone, and before the org
 	// row goes: if some drops failed, nothing is sent and the mail stays owed
-	// for the revoke that finishes the job.
+	// for the revoke that finishes the job. If the mail fails the org row is
+	// kept: it is what lets a second revoke find the org, re-claim and send.
 	if len(failed) == 0 && org.OwnerID != "" && h.suspender != nil {
-		h.suspender.NotifyOrgClosed(r.Context(), org.OwnerID, orgID)
+		if err := h.suspender.NotifyOrgClosed(r.Context(), org.OwnerID, orgID); err != nil {
+			log.Printf("ERROR: revoke org %s: closure notice: %v", orgID, err)
+			h.writeClosureNoticeFailed(w, orgID, dropped)
+			return
+		}
 	}
 
 	// Delete org row last — only after all projects are gone, so org listing
@@ -340,6 +345,19 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 		"orgId":   orgID,
 		"dropped": dropped,
 		"failed":  failed,
+	})
+}
+
+// writeClosureNoticeFailed answers a revoke whose projects are gone but whose
+// owner could not be told. The org is kept so revoking again retries the mail.
+func (h *AdminHandler) writeClosureNoticeFailed(w http.ResponseWriter, orgID string, dropped int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusMultiStatus)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"orgId":   orgID,
+		"dropped": dropped,
+		"failed":  []string{},
+		"message": "organisation closed but the notice email was not sent; revoke again to retry",
 	})
 }
 

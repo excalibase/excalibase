@@ -110,7 +110,7 @@ func TestSuspensionMail_NeverGoesToBlank(t *testing.T) {
 // A revoke deletes the organisation, so its mail must not say data is kept.
 func TestSuspensionMail_AnOrgClosureSaysTheDataIsBeingDeleted(t *testing.T) {
 	mail, sender, notice := suspensionMailFixture(adminconsole.ReasonOther)
-	mail.cfg.BackupsKept = true
+	mail.cfg.BackupsKept = func() bool { return true }
 	notice.OrgClosed = true
 	if err := mail.Suspended(context.Background(), notice); err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func closureMessage(t *testing.T, cfg SuspensionMailConfig) string {
 
 // The retention comes from the same period the purge uses.
 func TestClosureMail_NamesTheBackupRetentionWhenBackupsAreKept(t *testing.T) {
-	body := closureMessage(t, SuspensionMailConfig{SupportEmail: "support@example.test", BackupsKept: true})
+	body := closureMessage(t, SuspensionMailConfig{SupportEmail: "support@example.test", BackupsKept: func() bool { return true }})
 	days := int(RetainedBackupPeriod.Hours() / 24)
 	for _, want := range []string{
 		fmt.Sprintf("Backups of the databases are kept for %d days after that, then permanently removed.", days),

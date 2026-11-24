@@ -9,10 +9,10 @@ import (
 
 func TestSuspensionNotifier_NeedsARealMailSender(t *testing.T) {
 	cfg := config.AppConfig{EmailFromAddress: "noreply@example.test", SupportEmail: "support@example.test", AcceptableUseURL: "https://example.test/acceptable-use"}
-	if suspensionNotifier(cfg, nil) != nil || suspensionNotifier(cfg, email.NewNoopSender()) != nil {
+	if suspensionNotifier(cfg, nil, nil) != nil || suspensionNotifier(cfg, email.NewNoopSender(), nil) != nil {
 		t.Fatal("without a mail sender there is no notifier: the suspension stands, nothing is mailed")
 	}
-	if suspensionNotifier(cfg, liveSender{}) == nil {
+	if suspensionNotifier(cfg, liveSender{}, nil) == nil {
 		t.Fatal("a configured sender gets a notifier")
 	}
 }

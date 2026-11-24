@@ -18,9 +18,10 @@ type SuspensionMailConfig struct {
 	SupportEmail string
 	// PolicyURL is the Acceptable Use Policy page; each rule is an anchor on it.
 	PolicyURL string
-	// BackupsKept is whether a backup target is configured: only then do a
-	// closed org's database backups exist to be kept (RetainedBackupPeriod).
-	BackupsKept bool
+	// BackupsKept says whether backup storage is configured, asked at send
+	// time: only then do a closed org's database backups exist to be kept
+	// (RetainedBackupPeriod). Nil means no.
+	BackupsKept func() bool
 }
 
 // SuspensionMail tells an account holder their account was suspended, which
@@ -96,19 +97,20 @@ func (m *SuspensionMail) send(ctx context.Context, notice adminconsole.Suspensio
 // kept RetainedBackupPeriod before being purged, if a backup target exists.
 func (m *SuspensionMail) closureBody() string {
 	days := int(RetainedBackupPeriod.Hours() / 24)
+	backups := m.cfg.BackupsKept != nil && m.cfg.BackupsKept()
 	var b strings.Builder
 	b.WriteString("Hello,\n\nWe have closed your Excalibase organisation and deactivated your account, because use of it broke our Acceptable Use Policy.\n")
 	if m.cfg.PolicyURL != "" {
 		fmt.Fprintf(&b, "The policy is here: %s\n", m.cfg.PolicyURL)
 	}
 	b.WriteString("\nYour data\nThe organisation's projects, apps, databases and files are being deleted now. ")
-	if m.cfg.BackupsKept {
+	if backups {
 		fmt.Fprintf(&b, "Backups of the databases are kept for %d days after that, then permanently removed.\n", days)
 	} else {
 		b.WriteString("No backups of the databases exist, so the data cannot be recovered.\n")
 	}
 	window := ""
-	if m.cfg.BackupsKept {
+	if backups {
 		window = fmt.Sprintf(" within those %d days", days)
 	}
 	b.WriteString("\nIf you think this is a mistake\n")

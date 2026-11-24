@@ -20,12 +20,12 @@ import (
 // buildAdminConsole serves the platform admin console. Running state comes
 // from the same app runtime the deploy service uses, and a suspension stops
 // apps through the app lifecycle, never by reaching around it.
-func buildAdminConsole(cfg config.AppConfig, sqlStore storage.PlatformStore, runtime service.AppRuntime, apps *service.AppDeployService, mail email.Sender) (*handler.AdminConsoleHandler, *adminconsole.SuspensionService) {
+func buildAdminConsole(cfg config.AppConfig, sqlStore storage.PlatformStore, runtime service.AppRuntime, apps *service.AppDeployService, mail email.Sender, backups service.BackupStorageSource) (*handler.AdminConsoleHandler, *adminconsole.SuspensionService) {
 	queries := postgres.NewAdminConsole(sqlStore.DB())
 	console := adminconsole.NewConsole(queries, apphost.NewPostgresAppStore(sqlStore.DB()), runtime)
 	console.SetAudit(sqlStore)
 	suspensions := adminconsole.NewSuspensionService(queries, apps, sqlStore)
-	suspensions.SetNotifier(suspensionNotifier(cfg, mail), func(ctx context.Context) bool {
+	suspensions.SetNotifier(suspensionNotifier(cfg, mail, backups), func(ctx context.Context) bool {
 		return features.Enabled(ctx, cfg.Features(), features.SuspensionEmails)
 	})
 	return handler.NewAdminConsoleHandler(console, suspensions), suspensions
@@ -49,13 +49,19 @@ func adminGate(cfg config.AppConfig, d *handlerDeps) adminaccess.GateConfig {
 
 // suspensionNotifier mails the suspended account holder through the platform's
 // mail sender. Without one the suspension still stands and the flag does nothing.
-func suspensionNotifier(cfg config.AppConfig, mail email.Sender) adminconsole.SuspensionNotifier {
+func suspensionNotifier(cfg config.AppConfig, mail email.Sender, backups service.BackupStorageSource) adminconsole.SuspensionNotifier {
 	if !email.Configured(mail) {
 		log.Printf("suspension mail: no mail sender configured, suspended account holders are not emailed")
 		return nil
 	}
 	return service.NewSuspensionMail(mail, service.SuspensionMailConfig{
 		From: cfg.EmailFromAddress, FromName: cfg.EmailFromName, SupportEmail: cfg.SupportEmail, PolicyURL: cfg.AcceptableUseURL,
-		BackupsKept: cfg.BackupBucket != "",
+		BackupsKept: func() bool {
+			if backups == nil {
+				return false
+			}
+			_, configured := backups.BackupStorage()
+			return configured
+		},
 	})
 }
