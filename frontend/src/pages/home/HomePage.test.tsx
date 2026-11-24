@@ -89,11 +89,15 @@ describe('Home', () => {
     expect(security.queryByText(/two-factor/i)).not.toBeInTheDocument();
   });
 
-  test('credits shows no invented figures and links to usage', async () => {
-    mountWith({ projects: [project('p1')] }, <HomePage />);
+  test('credits & usage shows the plan and project use, no money figure, and links to usage', async () => {
+    const free = { tier: 'FREE', version: 0, maxProjects: 2, maxApps: 2, storageSize: '5Gi', maxStorageSize: '5Gi', cpu: '0.5', memory: '512Mi' };
+    mountWith({ projects: [project('p1'), project('p2')], tiers: [free] }, <HomePage />);
     const credits = within(await screen.findByRole('region', { name: 'Credits & usage' }));
+    expect(await credits.findByText('Projects')).toBeInTheDocument();
+    expect(credits.getByText('Plan').nextSibling).toHaveTextContent('Free');
+    expect(credits.getByText('Projects').nextSibling).toHaveTextContent('2 of 2');
     expect(credits.getByRole('link', { name: /usage details/i })).toHaveAttribute('href', '/usage');
-    expect(credits.queryByText(/\$/)).not.toBeInTheDocument();
+    expect(credits.queryByText(/\$|soon|yet/i)).not.toBeInTheDocument();
   });
 
   test('recently visited lists what this browser opened, newest first, without deleted projects', async () => {

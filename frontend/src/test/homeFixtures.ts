@@ -23,6 +23,7 @@ export interface Backend {
   apps?: Record<string, unknown[]>;
   sites?: Record<string, unknown[]>;
   allowed?: Record<string, unknown>;
+  tiers?: unknown[];
   features?: Record<string, boolean>;
   config?: Record<string, unknown>;
   failApps?: string[];
@@ -41,6 +42,7 @@ export function mountWith(backend: Backend, ui: ReactElement, route = '/') {
     if (url === '/orgs') return reply(ORGS);
     if (url === '/provision' && backend.hangProjects) return new Promise(() => {});
     if (url === '/provision') return backend.failProjects ? Promise.reject(Object.assign(new Error('forbidden'), { response: { status: 403 } })) : reply(backend.projects);
+    if (url === '/tiers') return reply(backend.tiers ?? []);
     if (url === '/auth/tokens') return reply(backend.tokens ?? []);
     const scoped = /^\/projects\/([^/]+)\/(.*?)\/?$/.exec(url);
     if (scoped?.[2] === 'apps' && backend.failApps?.includes(scoped[1])) return Promise.reject(Object.assign(new Error('boom'), { response: { status: 500 } }));

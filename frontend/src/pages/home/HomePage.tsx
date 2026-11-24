@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, SlidersHorizontal } from 'lucide-react';
+import { useTiers } from '../../api/tiers';
+import { orgUsage } from '../usage/usageModel';
 import { useAccessTokens } from '../../api/accessTokens';
 import { useAppHostingEnabled, useFeatureEnabled, useSitesEnabled } from '../../hooks/useDeploymentMode';
 import { useCurrentOrg, useMyProjects } from '../../hooks/useMemberOrgs';
@@ -68,6 +70,8 @@ export function HomePage() {
   const { org } = useCurrentOrg();
   const { data, isLoading, error } = useMyProjects();
   const projects = org ? data.filter((p) => p.orgId === org.id) : data;
+  const tiers = useTiers();
+  const plan = org ? orgUsage(projects, tiers.data?.find((t) => t.tier === org.tier), new Map()) : undefined;
   const tokens = useAccessTokens();
   const { byProject } = useProjectServices(projects);
   const openDatabases = useOpenDatabases(projects);
@@ -114,7 +118,7 @@ export function HomePage() {
         {shown('health') && !error && !isLoading && (
           <HealthWidget counts={healthCounts(projects)} failingApps={appsKnown ? apps.filter((a) => a.status === 'FAILED').length : null} />
         )}
-        {shown('credits') && <CreditsWidget />}
+        {shown('credits') && projectsReady && <CreditsWidget planName={org?.tier} projects={plan?.projects} limitsKnown={plan?.limitsKnown ?? false} />}
         {shown('security') && (
           <SecurityWidget
             summary={{ ...securitySummary({ tokens: tokenList, openDatabases: 0, now }), openDatabases: openDatabases.open }}
