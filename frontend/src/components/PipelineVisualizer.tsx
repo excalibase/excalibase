@@ -9,8 +9,8 @@ interface PipelineVisualizerProps {
 
 const STAGES = [
   { key: ProvisioningStage.VALIDATING, label: 'Validating' },
-  { key: ProvisioningStage.NAMESPACE_CREATION, label: 'Creating Namespace' },
-  { key: ProvisioningStage.CRD_DEPLOYMENT, label: 'Deploying CRD' },
+  { key: ProvisioningStage.NAMESPACE_CREATION, label: 'Creating Environment' },
+  { key: ProvisioningStage.CRD_DEPLOYMENT, label: 'Deploying database' },
   { key: ProvisioningStage.WAITING_FOR_READY, label: 'Waiting for Ready' },
   { key: ProvisioningStage.CREDENTIAL_GENERATION, label: 'Generating Credentials' },
   { key: ProvisioningStage.BACKUP_CONFIGURATION, label: 'Configuring Backup' },

@@ -12,8 +12,8 @@ interface StageTimelineProps {
 
 const STAGES = [
   { key: ProvisioningStage.VALIDATING,            label: 'Validating',  icon: ShieldCheck },
-  { key: ProvisioningStage.NAMESPACE_CREATION,    label: 'Namespace',   icon: FolderPlus  },
-  { key: ProvisioningStage.CRD_DEPLOYMENT,        label: 'Deploy CRD',  icon: Package     },
+  { key: ProvisioningStage.NAMESPACE_CREATION,    label: 'Environment', icon: FolderPlus  },
+  { key: ProvisioningStage.CRD_DEPLOYMENT,        label: 'Database',    icon: Package     },
   { key: ProvisioningStage.WAITING_FOR_READY,     label: 'Waiting',     icon: Clock       },
   { key: ProvisioningStage.CREDENTIAL_GENERATION, label: 'Credentials', icon: KeyRound    },
   { key: ProvisioningStage.BACKUP_CONFIGURATION,  label: 'Backup',      icon: Archive     },

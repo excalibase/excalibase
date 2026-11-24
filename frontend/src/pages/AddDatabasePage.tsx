@@ -19,7 +19,7 @@ import { ProjectPasswordPanel } from '../components/ProjectPasswordPanel';
 type Engine = 'POSTGRESQL' | 'DOCUMENTDB' | 'MYSQL';
 
 const ENGINES: readonly { engine: Engine; icon: string; label: string; desc: string }[] = [
-  { engine: 'POSTGRESQL', icon: '🐘', label: 'PostgreSQL', desc: 'CloudNativePG operator' },
+  { engine: 'POSTGRESQL', icon: '🐘', label: 'PostgreSQL', desc: 'Managed Postgres' },
   { engine: 'DOCUMENTDB', icon: '🍃', label: DOCUMENTDB_LABEL, desc: 'MongoDB wire protocol on PostgreSQL' },
   { engine: 'MYSQL', icon: '🐬', label: 'MySQL', desc: 'MySQL 8.4, TLS required' },
 ];
