@@ -142,4 +142,32 @@ describe('MetricsPage containers', () => {
     renderPage();
     expect(await screen.findByText(/0\.5 limit/)).not.toHaveTextContent(/null|instance/);
   });
+
+  test.each([
+    [1, /0\.5 limit \(1 instance\)/],
+    [3, /0\.5 limit \(3 instances\)/],
+  ])('prints the instance count %i with the right noun', async (count, expected) => {
+    serve(false);
+    const real = vi.mocked(api.get).getMockImplementation()!;
+    vi.mocked(api.get).mockImplementation(async (url: string) =>
+      url.includes('/metrics/current')
+        ? ({ data: { ...METRICS, instanceCount: count } } as never)
+        : real(url),
+    );
+    renderPage();
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+  });
+
+  test('prints no CPU subtitle when there is no CPU limit', async () => {
+    serve(false);
+    const real = vi.mocked(api.get).getMockImplementation()!;
+    vi.mocked(api.get).mockImplementation(async (url: string) =>
+      url.includes('/metrics/current')
+        ? ({ data: { ...METRICS, cpuLimitCores: null } } as never)
+        : real(url),
+    );
+    renderPage();
+    await screen.findByText('0.10 cores');
+    expect(screen.queryByText(/^\/ [\d.]+ limit/)).not.toBeInTheDocument();
+  });
 });
