@@ -54,7 +54,7 @@ function useInertBehind(drawer: RefObject<HTMLElement | null>) {
 
 // A modal drawer: focus moves in and stays in, Escape and the backdrop close it.
 export function NavDrawer({ onClose, children }: DrawerProps) {
-  const panel = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDialogElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
@@ -81,14 +81,15 @@ export function NavDrawer({ onClose, children }: DrawerProps) {
   return (
     <div ref={frame} className="fixed inset-0 z-40">
       <button type="button" aria-label="Close menu" tabIndex={-1} onClick={onClose} className="absolute inset-0 bg-black/50" />
-      <div ref={panel} id={DRAWER_ID} role="dialog" aria-modal="true" aria-label="Project navigation" tabIndex={-1}
-        className="relative flex h-full w-[85vw] max-w-xs flex-col overflow-y-auto overscroll-contain bg-surface-card shadow-xl">
+      {/* Not showModal(): the browser's top layer and Escape handling would fight ours. */}
+      <dialog ref={panel} id={DRAWER_ID} open aria-modal="true" aria-label="Project navigation"
+        className="relative inset-auto m-0 flex h-full max-h-none w-[85vw] max-w-xs flex-col overflow-y-auto overscroll-contain border-0 bg-surface-card p-0 text-text-primary shadow-xl">
         <button type="button" aria-label="Close navigation" onClick={onClose}
           className="ml-auto mr-2 mt-2 inline-flex min-h-10 min-w-10 flex-shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover">
           <X className="w-5 h-5" aria-hidden="true" />
         </button>
         {children}
-      </div>
+      </dialog>
     </div>
   );
 }

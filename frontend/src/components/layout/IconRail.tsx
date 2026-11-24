@@ -19,6 +19,11 @@ interface IconRailProps {
   readonly drawer?: boolean;
 }
 
+function railWidth(drawer: boolean, expanded: boolean): string {
+  if (drawer) return 'w-full flex-none';
+  return expanded ? 'w-48' : 'w-12';
+}
+
 export function IconRail({ activeSection, onSectionClick, drawer = false }: IconRailProps) {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -74,7 +79,7 @@ export function IconRail({ activeSection, onSectionClick, drawer = false }: Icon
       aria-label="Project navigation rail"
       className={cn(
         'flex-shrink-0 flex flex-col bg-surface-card border-r border-border-primary transition-all duration-200',
-        drawer ? 'w-full flex-none' : isExpanded ? 'w-48' : 'w-12'
+        railWidth(drawer, isExpanded)
       )}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setShowModeMenu(false); }}
