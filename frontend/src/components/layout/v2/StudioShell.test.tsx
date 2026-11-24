@@ -282,6 +282,12 @@ describe('StudioShell', () => {
     expect(within(dialog).getByText('Documentation')).toBeInTheDocument();
   });
 
+  test('the account menu opens the Account page', async () => {
+    renderShell();
+    await userEvent.click(await screen.findByRole('button', { name: /account menu/i }));
+    expect(screen.getByRole('menuitem', { name: 'Account' })).toHaveAttribute('href', '/account');
+  });
+
   test('the account menu signs out', async () => {
     renderShell();
     await userEvent.click(await screen.findByRole('button', { name: /account menu/i }));
