@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -43,6 +44,9 @@ func WithPlatformOverride(ctx context.Context) context.Context {
 	return context.WithValue(ctx, overrideKey{}, true)
 }
 
+// Overridden reports whether ctx acts for a platform admin.
+func Overridden(ctx context.Context) bool { return overridden(ctx) }
+
 func overridden(ctx context.Context) bool {
 	v, _ := ctx.Value(overrideKey{}).(bool)
 	return v
@@ -54,10 +58,19 @@ type Guard struct {
 	orgs      SuspendedOrgs
 	users     SuspendedUsers
 	timeout   time.Duration
+
+	// serving state: CheckServing sits on request paths, so it reads the
+	// suspension lists and each project's owner at most once per servingTTL.
+	servingTTL time.Duration
+	now        func() time.Time
+	mu         sync.Mutex
+	lists      servingLists
+	projects   map[string]projectOwner
 }
 
 func New(instances storage.InstanceStore, orgs SuspendedOrgs) *Guard {
-	return &Guard{instances: instances, orgs: orgs, timeout: defaultLookupTimeout}
+	return &Guard{instances: instances, orgs: orgs, timeout: defaultLookupTimeout,
+		servingTTL: defaultServingTTL, now: time.Now, projects: map[string]projectOwner{}}
 }
 
 // WithSuspendedUsers also refuses projects an abuse-suspended account created

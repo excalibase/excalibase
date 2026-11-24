@@ -1401,3 +1401,40 @@ search-replace will quietly drop it.
 | `GET /api/capacity` | platform_admin | Cluster CPU/mem allocatable, requested, free, per-tier project headroom |
 | `GET /api/admin/projects` | platform_admin | Every project across orgs with live CPU/mem |
 | Grafana → Excalibase folder | grafana admin | Per-service dashboards (Auth, GraphQL, Provisioning, CNPG) with per-tenant filtering |
+
+## Suspending an account
+
+Suspend from the admin console (or by revoking an org); both use one operation
+that deactivates the account, records the row in `abuse_suspensions` and stops
+its apps. A crash-loop stop is not a suspension.
+
+What a suspension stops (EXC-845). It keys on the owner of the org: a suspended
+account that only created a project in a good-standing org changes nothing
+there, beyond being unable to start new compute in it (EXC-843). For each
+project in an org the account owns, the apps are paused (including one still
+rolling out), sites come off their hostnames (static sites and previews too,
+and the site timer keeps them off), the function runtime stops (so functions
+and cron stop), and, on Kubernetes, the public database port and read address
+close. Each step is best effort: a failure is logged and listed as
+`servingFailed` in the answer, and never undoes the suspension. On a single
+host the database is published when its container is created (loopback, or
+every interface with `DOCKER_DB_PUBLIC`), so there is no port to close per
+project. The project then reads as unknown to the data plane:
+`GET /api/projects/{id}/info` and the vault credential read answer 404 (503 if
+the standing cannot be read), public storage files answer 404, and every write
+on a project route answers 403 for the org's other members. DELETE and `/pause`
+stay open, and so does the read-only `GET /api/schema/{id}/query`. A platform
+admin keeps the override. The engine and the auth service keep their last copy
+until their caches expire (the engine's pool up to 30 minutes, the auth service
+up to 1 hour, issued end-user JWTs up to 1 hour); there is no evict call yet.
+
+Unsuspend restores sites, the function runtime, the database port (for a running
+project; a paused one comes back with its resume) and the apps the suspension
+stopped, but only for a project that may serve: one awaiting deletion, in
+teardown or restore, or in an org whose owner is still suspended stays down.
+Serving resumes within 5 seconds, the guard's cache.
+
+EXC-843's start rule still applies to starting compute: resuming an idle-paused
+project and the background app start refuse a project created by a suspended
+member, so an org in good standing cannot resume such a project until that
+member is unsuspended or the project is recreated.

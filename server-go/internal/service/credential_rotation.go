@@ -93,6 +93,9 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 // by the caller; empty has one generated. While OneTimeCredentials is on the
 // answer carries the owner's new password, this once, and never a reader's.
 func (s *ProvisioningService) RotateCredentialsTo(ctx context.Context, projectID, ownerPassword string) (*domain.CredentialsResponse, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	if ownerPassword != "" {
 		if err := ValidateDatabasePassword(ownerPassword); err != nil {
 			return nil, err

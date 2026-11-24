@@ -24,26 +24,36 @@ type DeployRequest struct {
 	SlotTaken bool
 }
 
+// deployable is the part of a deploy that needs nothing taken yet: the owner is
+// in good standing, the label is fine and the site may hold this kind of deploy.
+func (s *Service) deployable(ctx context.Context, request DeployRequest) (*Site, Limits, error) {
+	if err := s.options.OrgGuard.CheckProject(ctx, request.ProjectID); err != nil {
+		return nil, Limits{}, err
+	}
+	if err := ValidateLabel(request.Label); err != nil {
+		return nil, Limits{}, &InputError{Reason: err.Error()}
+	}
+	site, err := s.mustGet(ctx, request.ProjectID, request.SiteID)
+	if err != nil {
+		return nil, Limits{}, err
+	}
+	if err := s.requireKind(ctx, site.Kind); err != nil {
+		return nil, Limits{}, err
+	}
+	limits, err := s.limitsFor(ctx, request.ProjectID)
+	if err != nil {
+		return nil, Limits{}, err
+	}
+	return site, limits, nil
+}
+
 // Deploy checks the archive, uploads what Cloudflare lacks, publishes the
 // site's Worker and makes the deploy live. A deploy that fails is kept, FAILED.
 func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, error) {
 	if !s.Available() {
 		return nil, ErrSitesUnavailable
 	}
-	if err := s.options.OrgGuard.CheckProject(ctx, request.ProjectID); err != nil {
-		return nil, err
-	}
-	if err := ValidateLabel(request.Label); err != nil {
-		return nil, &InputError{Reason: err.Error()}
-	}
-	site, err := s.mustGet(ctx, request.ProjectID, request.SiteID)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.requireKind(ctx, site.Kind); err != nil {
-		return nil, err
-	}
-	limits, err := s.limitsFor(ctx, request.ProjectID)
+	site, limits, err := s.deployable(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -364,6 +374,10 @@ func (s *Service) publish(ctx context.Context, site *Site, rel release) error {
 	entry, err := RouteEntry(site, rel.limits)
 	if err != nil {
 		return err
+	}
+	// A suspension that landed while this deploy ran must not route the site.
+	if err := s.options.OrgGuard.CheckServingFreshUnlessAdmin(ctx, site.ProjectID); err != nil {
+		return publishFailure(site, stepRoute, err)
 	}
 	if err := s.publisher.PutKV(ctx, site.Hostname, entry); err != nil {
 		return publishFailure(site, stepRoute, err)

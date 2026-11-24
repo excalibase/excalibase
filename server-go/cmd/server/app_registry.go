@@ -128,7 +128,7 @@ func mountInternalRegistry(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 		r.Use(features.Require(d.features, features.AppGitBuilds))
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
 		r.Use(d.rlAuthed)
 		r.Use(d.activity)

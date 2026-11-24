@@ -113,6 +113,14 @@ func (h *FunctionHandler) ReconcileRuntimes(ctx context.Context) {
 		if namespace == "" {
 			continue
 		}
+		// Ensuring a stopped runtime starts it again: not for a project that
+		// is going away, nor one whose owner is suspended.
+		if _, err := h.instanceFor(projectID); err != nil {
+			continue
+		}
+		if err := h.orgGuard.CheckServingFresh(ctx, projectID); err != nil {
+			continue
+		}
 		exists, err := h.k8sClient.GetDeployment(ctx, namespace, "deno-runtime")
 		if err != nil || !exists {
 			continue
