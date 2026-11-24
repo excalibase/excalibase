@@ -554,7 +554,7 @@ func load() AppConfig {
 		PodNamespace:                   os.Getenv("POD_NAMESPACE"),
 		EmailFromAddress:               envOr("EMAIL_FROM", "noreply@excalibase.io"),
 		EmailFromName:                  envOr("EMAIL_FROM_NAME", "Excalibase"),
-		SupportEmail:                   envOr("SUPPORT_EMAIL", "support@excalibase.io"),
+		SupportEmail:                   envOr("SUPPORT_EMAIL", "hello@excalibase.io"),
 		AcceptableUseURL:               envOr("ACCEPTABLE_USE_URL", "https://excalibase.io/acceptable-use"),
 		EmailProductName:               envOr("EMAIL_PRODUCT_NAME", "Excalibase"),
 		EmailReplyTo:                   envOr("EMAIL_REPLY_TO", ""),
