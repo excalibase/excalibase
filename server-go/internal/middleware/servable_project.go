@@ -38,23 +38,31 @@ func RequireServableProject(instances storage.InstanceStore, owners ...*orgguard
 				http.Error(w, errBodyProjectNotFound, http.StatusNotFound)
 				return
 			}
-			// A suspended owner's project reads as absent too, so its public
-			// files and end-user storage stop being served (EXC-845).
-			for _, guard := range owners {
-				err := guard.CheckServing(r.Context(), projectID)
-				switch {
-				case err == nil:
-				case errors.Is(err, orgguard.ErrOrgSuspended):
-					http.Error(w, errBodyProjectNotFound, http.StatusNotFound)
-					return
-				default:
-					// Not judged: a retryable 503, never the 404 that says the project is gone.
-					w.Header().Set("Retry-After", "5")
-					writeSuspendedBody(w, http.StatusServiceUnavailable, errBodyUnavailable)
-					return
-				}
+			if refuseSuspendedServing(w, r, projectID, owners) {
+				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// refuseSuspendedServing answers for a project whose owner is suspended, so its
+// public files and end-user storage stop being served (EXC-845): 404 like an
+// absent project, or a retryable 503 when the standing could not be read.
+func refuseSuspendedServing(w http.ResponseWriter, r *http.Request, projectID string, owners []*orgguard.Guard) bool {
+	for _, guard := range owners {
+		err := guard.CheckServing(r.Context(), projectID)
+		switch {
+		case err == nil:
+		case errors.Is(err, orgguard.ErrOrgSuspended):
+			http.Error(w, errBodyProjectNotFound, http.StatusNotFound)
+			return true
+		default:
+			// Not judged: never the 404 that says the project is gone.
+			w.Header().Set("Retry-After", "5")
+			writeSuspendedBody(w, http.StatusServiceUnavailable, errBodyUnavailable)
+			return true
+		}
+	}
+	return false
 }

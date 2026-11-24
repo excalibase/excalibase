@@ -105,12 +105,8 @@ func (s *PostgresStore) List(ctx context.Context, projectID string) ([]*Site, er
 }
 
 func (s *PostgresStore) ListSites(ctx context.Context) ([]*Site, error) {
-	return s.listWhere(ctx, "")
-}
-
-func (s *PostgresStore) listWhere(ctx context.Context, where string) ([]*Site, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, project_id, name, hostname, kind, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at
-		FROM sites `+where+` ORDER BY project_id, name`)
+		FROM sites ORDER BY project_id, name`)
 	if err != nil {
 		return nil, fmt.Errorf("list sites: %w", err)
 	}

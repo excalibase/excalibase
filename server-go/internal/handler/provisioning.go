@@ -775,7 +775,7 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 	// A suspended owner's project reads as unknown too, so the auth service
 	// and the engine stop serving it instead of keeping their cached copy. A
 	// 404 is what they act on; a 403 would only be logged as a failed refresh.
-	if refused := h.refuseSuspendedProject(w, r, inst.ProjectID); refused {
+	if h.refuseSuspendedProject(w, r, inst.ProjectID) {
 		return
 	}
 

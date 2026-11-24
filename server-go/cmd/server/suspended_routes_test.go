@@ -65,34 +65,51 @@ func suspendedRequest(router http.Handler, method, path, token string) (int, str
 	return w.Code, string(body)
 }
 
+// suspendedWalk is the two routers of the walk: one whose org owner is
+// suspended, one in good standing, and the member's token.
+type suspendedWalk struct {
+	t                      *testing.T
+	suspended, unsuspended http.Handler
+	token                  string
+}
+
+// check sends one write to both routers and asserts what the gate does with it.
+func (w suspendedWalk) check(method, pattern string) {
+	w.t.Helper()
+	path := concretePath(pattern)
+	code, body := suspendedRequest(w.suspended, method, path, w.token)
+	refused := code == http.StatusForbidden && strings.Contains(body, orgguard.Message)
+	switch {
+	case suspendedMayWrite(method, path) && refused:
+		w.t.Errorf("%s %s: refused a write the suspended may make", method, pattern)
+	case !suspendedMayWrite(method, path) && !refused:
+		w.t.Errorf("%s %s: got %d %q for a suspended owner's org, want 403 %q", method, pattern, code, body, orgguard.Message)
+	}
+	// The same request to an org in good standing must not meet the refusal,
+	// or the 403 above says nothing about the gate.
+	if code, body := suspendedRequest(w.unsuspended, method, path, w.token); strings.Contains(body, orgguard.Message) {
+		w.t.Errorf("%s %s: refused an org in good standing: %d %q", method, pattern, code, body)
+	}
+}
+
+func isProjectWrite(method, pattern string) bool {
+	return strings.Contains(pattern, "{projectId}") && !isPublicProjectRoute(pattern) && isMutating(method)
+}
+
 func TestEveryProjectWriteRefusesASuspendedOwnersOrg(t *testing.T) {
 	suspended, token := suspendedMatrix(t, true)
 	unsuspended, _ := suspendedMatrix(t, false)
+	walker := suspendedWalk{t: t, suspended: suspended, unsuspended: unsuspended, token: token}
 	checked := 0
 	families := map[string]bool{}
 	walk := func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if !strings.Contains(pattern, "{projectId}") || isPublicProjectRoute(pattern) || !isMutating(method) {
+		if !isProjectWrite(method, pattern) {
 			return nil
 		}
-		path := concretePath(pattern)
-		code, body := suspendedRequest(suspended, method, path, token)
-		refused := code == http.StatusForbidden && strings.Contains(body, orgguard.Message)
-		switch {
-		case suspendedMayWrite(method, path) && refused:
-			t.Errorf("%s %s: refused a write the suspended may make", method, pattern)
-		case !suspendedMayWrite(method, path) && !refused:
-			t.Errorf("%s %s: got %d %q for a suspended owner's org, want 403 %q", method, pattern, code, body, orgguard.Message)
-		}
-		// The same request to an org in good standing must not meet the refusal,
-		// or the 403 above says nothing about the gate.
-		if code, body := suspendedRequest(unsuspended, method, path, token); strings.Contains(body, orgguard.Message) {
-			t.Errorf("%s %s: refused an org in good standing: %d %q", method, pattern, code, body)
-		}
+		walker.check(method, pattern)
 		checked++
 		for _, family := range mountedFamilies {
-			if strings.Contains(pattern, family) {
-				families[family] = true
-			}
+			families[family] = families[family] || strings.Contains(pattern, family)
 		}
 		return nil
 	}
