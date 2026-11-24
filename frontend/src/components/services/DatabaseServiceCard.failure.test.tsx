@@ -31,4 +31,20 @@ describe('DatabaseServiceCard, failed provisioning', () => {
     expect(view.container.innerHTML).not.toContain('secret-pod-7');
     expect(view.container.innerHTML).not.toContain('CrashLoopBackOff');
   });
+
+  test('a customer answer with only a failure kind still says it in plain words', async () => {
+    vi.mocked(api.get).mockImplementation((url: string) =>
+      url === '/provision/proj-1'
+        ? Promise.resolve({
+            data: { projectId: 'proj-1', orgId: 'o', databaseType: 'POSTGRESQL', postgresVersion: '17', tier: 'FREE', status: 'FAILED', currentStage: 'FAILED', failureKind: 'storage' },
+          } as never)
+        : Promise.resolve({ data: {} } as never),
+    );
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter><DatabaseServiceCard projectId="proj-1" /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/storage could not be attached/i)).toBeInTheDocument();
+  });
 });

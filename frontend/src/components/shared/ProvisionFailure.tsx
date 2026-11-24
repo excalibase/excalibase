@@ -4,6 +4,8 @@ import { plainProvisionFailure } from '../../utils/provisionFailure';
 
 interface ProvisionFailureProps {
   readonly reason?: string;
+  // The server's plain failureKind; a customer's answer carries it in place of the text.
+  readonly kind?: string;
   // Extra raw material (a rollback log); shown to a platform admin only.
   readonly detail?: ReactNode;
   readonly className?: string;
@@ -11,12 +13,12 @@ interface ProvisionFailureProps {
 
 // A failed provisioning in customer words. The server's raw text sits in a
 // collapsed block for a platform admin and is never shown to anyone else.
-export function ProvisionFailure({ reason, detail, className = 'text-xs text-text-secondary break-words' }: ProvisionFailureProps) {
+export function ProvisionFailure({ reason, kind, detail, className = 'text-xs text-text-secondary break-words' }: ProvisionFailureProps) {
   const admin = useAuthStore((s) => s.user?.role === 'platform_admin' || s.user?.role === 'platform_operator');
   const showTechnical = admin && (Boolean(reason) || Boolean(detail));
   return (
     <div>
-      <p className={className}>{plainProvisionFailure(reason)}</p>
+      <p className={className}>{plainProvisionFailure(reason, kind)}</p>
       {showTechnical && (
         <details className="mt-2">
           <summary className="text-xs text-text-tertiary cursor-pointer hover:text-text-secondary">Technical details</summary>

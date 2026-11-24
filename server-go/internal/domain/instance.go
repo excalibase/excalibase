@@ -106,9 +106,12 @@ type DatabaseInstance struct {
 	CurrentStage  ProvisioningStage `json:"currentStage,omitempty"`
 	CurrentStep   string            `json:"currentStep,omitempty"`
 	FailureReason string            `json:"failureReason,omitempty"`
-	FailureStage  ProvisioningStage `json:"failureStage,omitempty"`
-	FailureStep   string            `json:"failureStep,omitempty"`
-	RollbackLog   string            `json:"rollbackLog,omitempty"` // JSON array of cleanup results
+	// FailureKind is the plain class of FailureReason, set when an answer is
+	// written; it is never stored.
+	FailureKind  FailureKind       `json:"failureKind,omitempty"`
+	FailureStage ProvisioningStage `json:"failureStage,omitempty"`
+	FailureStep  string            `json:"failureStep,omitempty"`
+	RollbackLog  string            `json:"rollbackLog,omitempty"` // JSON array of cleanup results
 
 	// Deletion progress. Both empty until a teardown fails: DeletionStep is
 	// the step that did not complete and DeletionError why, so a retry of

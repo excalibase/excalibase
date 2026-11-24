@@ -70,3 +70,24 @@ describe('plainProvisionFailure', () => {
     }
   });
 });
+
+describe('plainProvisionFailure with the server kind', () => {
+  const [OOM, STORAGE, IMAGE, CRASH, ROOM, SLOW] = PROVISION_FAILURE_MESSAGES;
+  test.each([
+    ['out_of_memory', OOM],
+    ['storage', STORAGE],
+    ['image', IMAGE],
+    ['crashing', CRASH],
+    ['no_capacity', ROOM],
+    ['timeout', SLOW],
+    ['unknown', GENERIC_PROVISION_FAILURE],
+    ['a_kind_from_a_newer_server', GENERIC_PROVISION_FAILURE],
+  ])('kind %s gives its own wording', (kind, expected) => {
+    expect(plainProvisionFailure(undefined, kind)).toBe(expected);
+  });
+
+  test('the kind wins over the text, and the text is only the fallback', () => {
+    expect(plainProvisionFailure('CrashLoopBackOff', 'storage')).toBe(STORAGE);
+    expect(plainProvisionFailure('CrashLoopBackOff')).toBe(CRASH);
+  });
+});

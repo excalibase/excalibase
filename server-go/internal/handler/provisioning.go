@@ -115,7 +115,7 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 // An unobserved pause or resume is 409, not 500: the request was well formed
 // and nothing failed on the server's side of the contract; the project is in
 // a state that has not settled yet, and the same call repeated converges.
-func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, projectID string, err error) {
+func (h *ProvisioningHandler) writeLifecycleError(ctx context.Context, w http.ResponseWriter, projectID string, err error) {
 	if writeIfPoolBusy(w, err) {
 		return
 	}
@@ -148,7 +148,11 @@ func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, project
 			body["projectId"] = inst.ProjectID
 			body["status"] = inst.Status
 			body["currentStep"] = inst.CurrentStep
-			body["failureReason"] = domain.ScrubClusterText(inst.FailureReason, inst.Namespace)
+			kind, reason, _ := failureForCaller(ctx, inst.FailureReason, "")
+			body["failureKind"] = kind
+			if reason != "" {
+				body["failureReason"] = domain.ScrubClusterText(reason, inst.Namespace)
+			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -183,11 +187,11 @@ func (h *ProvisioningHandler) Pause(w http.ResponseWriter, r *http.Request) {
 	}
 	if prefersRespondAsync(r) {
 		started, err := h.pauseSvc.StartPause(r.Context(), projectID, body.Reason, nil)
-		h.writeLifecycleStarted(w, projectID, started, err)
+		h.writeLifecycleStarted(r.Context(), w, projectID, started, err)
 		return
 	}
 	if err := h.pauseSvc.Pause(r.Context(), projectID, body.Reason); err != nil {
-		h.writeLifecycleError(w, projectID, err)
+		h.writeLifecycleError(r.Context(), w, projectID, err)
 		return
 	}
 	if h.instances != nil {
@@ -216,11 +220,11 @@ func (h *ProvisioningHandler) Resume(w http.ResponseWriter, r *http.Request) {
 	}
 	if prefersRespondAsync(r) {
 		started, err := h.pauseSvc.StartResume(r.Context(), projectID, nil)
-		h.writeLifecycleStarted(w, projectID, started, err)
+		h.writeLifecycleStarted(r.Context(), w, projectID, started, err)
 		return
 	}
 	if err := h.pauseSvc.Resume(r.Context(), projectID); err != nil {
-		h.writeLifecycleError(w, projectID, err)
+		h.writeLifecycleError(r.Context(), w, projectID, err)
 		return
 	}
 	if h.instances != nil {
@@ -237,9 +241,9 @@ func (h *ProvisioningHandler) Resume(w http.ResponseWriter, r *http.Request) {
 // writeLifecycleStarted answers a pause or resume started without waiting
 // (RFC 7240 respond-async, EXC-473): 202 with the project PAUSING or RESUMING,
 // whose status then carries the outcome; 200 when there was nothing to do.
-func (h *ProvisioningHandler) writeLifecycleStarted(w http.ResponseWriter, projectID string, started bool, err error) {
+func (h *ProvisioningHandler) writeLifecycleStarted(ctx context.Context, w http.ResponseWriter, projectID string, started bool, err error) {
 	if err != nil {
-		h.writeLifecycleError(w, projectID, err)
+		h.writeLifecycleError(ctx, w, projectID, err)
 		return
 	}
 	body := map[string]interface{}{"projectId": projectID}
@@ -350,10 +354,10 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if async && resp.Status == domain.StatusProvisioning {
-		writeJSONStatus(w, http.StatusAccepted, shownOnce(resp, req.OwnerPassword))
+		writeJSONStatus(w, http.StatusAccepted, shownOnce(r.Context(), resp, req.OwnerPassword))
 		return
 	}
-	writeJSON(w, shownOnce(resp, req.OwnerPassword))
+	writeJSON(w, shownOnce(r.Context(), resp, req.OwnerPassword))
 }
 
 func prefersRespondAsync(r *http.Request) bool {

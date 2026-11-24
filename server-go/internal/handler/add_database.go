@@ -44,7 +44,7 @@ func (h *ProvisioningHandler) AddDatabase(w http.ResponseWriter, r *http.Request
 			writeAddDatabaseError(w, projectID, err)
 			return
 		}
-		writeJSONStatus(w, http.StatusAccepted, shownOnce(resp, req.OwnerPassword))
+		writeJSONStatus(w, http.StatusAccepted, shownOnce(r.Context(), resp, req.OwnerPassword))
 		return
 	}
 	resp, err := h.svc.AddDatabase(r.Context(), projectID, req)
@@ -52,7 +52,7 @@ func (h *ProvisioningHandler) AddDatabase(w http.ResponseWriter, r *http.Request
 		writeAddDatabaseError(w, projectID, err)
 		return
 	}
-	writeJSON(w, shownOnce(resp, req.OwnerPassword))
+	writeJSON(w, shownOnce(r.Context(), resp, req.OwnerPassword))
 }
 
 func writeAddDatabaseError(w http.ResponseWriter, projectID string, err error) {

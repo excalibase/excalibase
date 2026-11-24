@@ -102,6 +102,7 @@ type ProvisioningResponse struct {
 	Port          *int              `json:"port,omitempty"`
 	DatabaseName  string            `json:"databaseName,omitempty"`
 	FailureReason string            `json:"failureReason,omitempty"`
+	FailureKind   FailureKind       `json:"failureKind,omitempty"`
 	FailureStage  ProvisioningStage `json:"failureStage,omitempty"`
 	FailureStep   string            `json:"failureStep,omitempty"`
 	RollbackLog   string            `json:"rollbackLog,omitempty"`

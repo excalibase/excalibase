@@ -197,7 +197,7 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, resp)
+	writeJSON(w, customerProvisioning(r.Context(), resp))
 }
 
 // restoreLimitCode marks a copy refused for want of a project slot, which an
