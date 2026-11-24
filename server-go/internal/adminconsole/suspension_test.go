@@ -119,6 +119,7 @@ func (f *fakeSuspensions) ForgetSuspendedApp(_ context.Context, userID, projectI
 }
 
 type fakeControl struct {
+	mu              sync.Mutex
 	paused, resumed []string
 	failPause       map[string]error
 	failResume      map[string]error
@@ -128,6 +129,8 @@ func (c *fakeControl) PauseApp(_ context.Context, projectID, appID string) (*app
 	if err := c.failPause[appID]; err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.paused = append(c.paused, projectID+"/"+appID)
 	return &apphost.App{ID: appID}, nil
 }
@@ -136,13 +139,20 @@ func (c *fakeControl) ResumeApp(_ context.Context, projectID, appID, _ string) (
 	if err := c.failResume[appID]; err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.resumed = append(c.resumed, projectID+"/"+appID)
 	return &apphost.App{ID: appID}, nil
 }
 
-type captureAudit struct{ entries []*domain.AuditEntry }
+type captureAudit struct {
+	mu      sync.Mutex
+	entries []*domain.AuditEntry
+}
 
 func (a *captureAudit) LogAudit(_ context.Context, e *domain.AuditEntry) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.entries = append(a.entries, e)
 	return nil
 }
