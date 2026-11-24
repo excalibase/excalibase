@@ -302,6 +302,12 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if err := h.requireSandbox(ctx); err != nil {
 		return nil, err
 	}
+	// Serving, not only starting: a client cached before the suspension, and
+	// the shared runtime of a single host, would otherwise keep running a
+	// suspended owner's functions (EXC-845). The guard answers from a short cache.
+	if err := h.orgGuard.CheckServingUnlessAdmin(ctx, projectID); err != nil {
+		return nil, err
+	}
 	h.clientMu.Lock()
 	if c, ok := h.clients[projectID]; ok {
 		h.clientMu.Unlock()

@@ -159,6 +159,7 @@ func (d deactivatingStore) FindUser(_ context.Context, id string) (*adminconsole
 func (deactivatingStore) OwnedApps(context.Context, string) ([]adminconsole.OwnedApp, error) {
 	return nil, nil
 }
+func (deactivatingStore) OwnedProjects(context.Context, string) ([]string, error) { return nil, nil }
 func (d deactivatingStore) Suspend(_ context.Context, s adminconsole.Suspension, _ []adminconsole.SuspendedApp) error {
 	d.users.users[s.UserID].Active = false
 	return nil
@@ -183,7 +184,7 @@ func (deactivatingStore) ForgetSuspendedApp(context.Context, string, string, str
 
 type noApps struct{}
 
-func (noApps) PauseApp(context.Context, string, string) (*apphost.App, error) { return nil, nil }
+func (noApps) StopApp(context.Context, string, string) (*apphost.App, error) { return nil, nil }
 func (noApps) ResumeApp(context.Context, string, string, string) (*apphost.App, error) {
 	return nil, nil
 }

@@ -44,6 +44,8 @@ type ProvisioningHandler struct {
 	activity storage.ProjectActivityStore
 	// suspendedOrgs names the orgs whose owner is suspended (EXC-757); nil → no marker.
 	suspendedOrgs SuspendedOrgsLookup
+	// servingGuard refuses to serve a project whose owner is suspended (EXC-845); nil allows all.
+	servingGuard *orgguard.Guard
 	// corsStore backs /cors and the corsAllowedOrigins field on /info;
 	// nil → /cors returns 503 and /info reports no origins.
 	corsStore storage.ProjectCorsStore
@@ -768,6 +770,12 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 	// confirmed — reads the same as an unknown one.
 	if domain.IsNotServable(inst.Status) {
 		httpError(w, "project not found", http.StatusNotFound)
+		return
+	}
+	// A suspended owner's project reads as unknown too, so the auth service
+	// and the engine stop serving it instead of keeping their cached copy. A
+	// 404 is what they act on; a 403 would only be logged as a failed refresh.
+	if refused := h.refuseSuspendedProject(w, r, inst.ProjectID); refused {
 		return
 	}
 

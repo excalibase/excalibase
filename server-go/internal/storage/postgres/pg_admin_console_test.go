@@ -247,6 +247,21 @@ func TestOwnerSuspendedOrgsNamesOrgsOfSuspendedOwners(t *testing.T) {
 	}
 }
 
+func TestOwnedProjectsListsTheProjectsOfOrgsTheAccountOwns(t *testing.T) {
+	store, console := consoleFixture(t)
+	ctx := context.Background()
+	// A project the account made in someone else's org is the account's too.
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO database_instances (project_id, org_id, owner_id, status, project_name, namespace, storage_size, no_database, created_at)
+		 VALUES ('p-made', 'o-other', 'u-cust', 'ACTIVE', 'p-made', 'ns-made', '1Gi', FALSE, NOW())`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := console.OwnedProjects(ctx, "u-cust")
+	if err != nil || len(got) != 2 || got[0] != "p-cust" || got[1] != "p-made" {
+		t.Fatalf("projects = %v, %v; want the owned org's and the one it created", got, err)
+	}
+}
+
 func TestSuspendedUsersAndRecordSuspendedApps(t *testing.T) {
 	_, console := consoleFixture(t)
 	ctx := context.Background()

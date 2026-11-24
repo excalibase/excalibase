@@ -50,6 +50,29 @@ func (a *AdminConsole) OwnedApps(ctx context.Context, userID string) ([]admincon
 	return out, rows.Err()
 }
 
+// OwnedProjects lists the projects of the orgs the account owns and those it created.
+func (a *AdminConsole) OwnedProjects(ctx context.Context, userID string) ([]string, error) {
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT di.project_id
+		FROM database_instances di
+		JOIN orgs o ON o.id = di.org_id
+		WHERE o.owner_id = $1 OR di.owner_id = $1
+		ORDER BY di.project_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // Suspend blocks the account, writes the reason and records the apps it is
 // about to stop, all or nothing.
 func (a *AdminConsole) Suspend(ctx context.Context, suspension adminconsole.Suspension, apps []adminconsole.SuspendedApp) error {

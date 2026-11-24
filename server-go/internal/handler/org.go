@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -33,7 +34,12 @@ type OrgHandler struct {
 	// is refused while it is unset.
 	nodes NodePlacement
 	audit auditWriter
+	// orgGuard refuses invites into, and joins of, a suspended owner's org (EXC-845); nil allows all.
+	orgGuard *orgguard.Guard
 }
+
+// SetOrgGuard makes inviting and accepting refuse an org whose owner is suspended.
+func (h *OrgHandler) SetOrgGuard(guard *orgguard.Guard) { h.orgGuard = guard }
 
 // SetNodePlacement wires the check a plan change must pass.
 func (h *OrgHandler) SetNodePlacement(nodes NodePlacement) { h.nodes = nodes }

@@ -47,6 +47,7 @@ func wireMajorUpgrades(cfg config.AppConfig, sqlStore storage.PlatformStore, d m
 		Backups:   func(inst *domain.DatabaseInstance) bool { return backupStoreFor(d.backupSvc, inst) },
 		Observers: d.observers,
 	})
+	svc.SetOrgGuard(newOrgGuard(d.store, sqlStore))
 	deps.majorUpgradeHandler = handler.NewMajorUpgradeHandler(svc, sqlStore)
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {

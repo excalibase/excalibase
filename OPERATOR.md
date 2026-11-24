@@ -1427,3 +1427,20 @@ to reply to `SUPPORT_EMAIL`. A mail failure is logged and counted in
 `excalibase_suspension_mail_total{outcome="failed"}`; the suspension stands.
 Suspensions made before the flag was on are never mailed. A crash-loop stop is
 not a suspension and has its own mail.
+
+What a suspension stops (EXC-845). The apps are paused, including one still
+rolling out. For each project the account owns, or created, the suspension also
+takes its sites off their hostnames, stops the function runtime (so functions
+and cron stop), and closes the public database port and read address. Each step
+is best effort: a failure is logged and listed as `servingFailed` in the answer,
+and never undoes the suspension. The project then reads as unknown to the data
+plane: `GET /api/projects/{id}/info` and the vault credential read answer 404,
+public storage files answer 404, and every write on a project route answers 403
+for the org's other members (DELETE and `/pause` stay open). A platform admin
+keeps the override. The engine and the auth service keep their last copy until
+their caches expire (the engine's pool up to 30 minutes, the auth service up to
+1 hour, issued end-user JWTs up to 1 hour); there is no evict call yet.
+
+Unsuspend restores sites, the function runtime, the database port (for a running
+project; a paused one comes back with its resume) and the apps the suspension
+stopped. Serving resumes within 5 seconds, the guard's cache.

@@ -114,6 +114,9 @@ func (s *ProvisioningService) ClusterSettings(ctx context.Context, projectID str
 
 // ResizeStorage grows the project's disk to size, up to its plan's disk.
 func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, size string) error {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
 	if !wholeGibibytes.MatchString(size) {
 		return ErrInvalidStorageSize
 	}
@@ -201,6 +204,9 @@ func (s *ProvisioningService) growDisk(ctx context.Context, inst *domain.Databas
 // plan's instances (one per node), CPU, memory, disk and statement guard.
 // tier is the plan the caller expects the organization to be on.
 func (s *ProvisioningService) ApplyOrgTier(ctx context.Context, projectID string, tier domain.TierType) error {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
 	if err := s.applyOrgTier(ctx, projectID, tier); err != nil {
 		return err
 	}
@@ -410,6 +416,9 @@ func quantities(cpu, memory string) (int64, int64, error) {
 // params, each within the bounds its plan allows. An empty set restores the
 // defaults.
 func (s *ProvisioningService) TuneParameters(ctx context.Context, projectID string, params map[string]string) error {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
 	inst, release, err := s.holdProject(ctx, projectID, OperationTune, requireActive)
 	if err != nil {
 		return err

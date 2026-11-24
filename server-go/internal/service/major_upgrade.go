@@ -12,6 +12,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -128,6 +129,8 @@ type MajorUpgradeService struct {
 	checks recentChecks
 	// runSync drives the run inside Start; tests read the outcome directly.
 	runSync bool
+	// orgGuard refuses a suspended owner's organisation (EXC-845); nil allows all.
+	orgGuard *orgguard.Guard
 	// heartbeatEvery is how often an actor marks its run alive.
 	heartbeatEvery time.Duration
 	// heartbeatTimeout bounds one heartbeat.
@@ -149,6 +152,9 @@ func NewMajorUpgradeService(cfg MajorUpgradeConfig) *MajorUpgradeService {
 		heartbeatTimeout: majorUpgradeHeartbeatTimeout}
 }
 
+// SetOrgGuard makes Start refuse a suspended owner's organisation.
+func (s *MajorUpgradeService) SetOrgGuard(guard *orgguard.Guard) { s.orgGuard = guard }
+
 func newMajorUpgradeID() string {
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
@@ -158,6 +164,9 @@ func newMajorUpgradeID() string {
 // Start checks the request, takes the lease, records the run and drives it
 // in the background. The returned run is the record as started.
 func (s *MajorUpgradeService) Start(ctx context.Context, projectID string, req domain.MajorUpgradeRequest, actor string) (*domain.MajorUpgrade, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}

@@ -132,7 +132,8 @@ func (h *StudioOAuthHandler) joinExisting(ctx context.Context, user *domain.User
 		return
 	}
 	invite, err := orgs.FindPendingInviteByToken(ctx, inviteHash, time.Now())
-	if err != nil || user.EmailVerifiedAt == nil || !strings.EqualFold(invite.Email, user.Email) {
+	if err != nil || user.EmailVerifiedAt == nil || !strings.EqualFold(invite.Email, user.Email) ||
+		h.auth.orgGuard.CheckOrg(ctx, invite.OrgID) != nil {
 		outcome.Set("invite_error", "invite_invalid")
 		return
 	}
