@@ -56,5 +56,6 @@ func suspensionNotifier(cfg config.AppConfig, mail email.Sender) adminconsole.Su
 	}
 	return service.NewSuspensionMail(mail, service.SuspensionMailConfig{
 		From: cfg.EmailFromAddress, FromName: cfg.EmailFromName, SupportEmail: cfg.SupportEmail, PolicyURL: cfg.AcceptableUseURL,
+		BackupsKept: cfg.BackupBucket != "",
 	})
 }

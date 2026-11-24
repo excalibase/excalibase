@@ -187,21 +187,86 @@ func TestConcurrentSuspendsSendOneMail(t *testing.T) {
 	}
 }
 
-// A revoke closes the organisation: its notice is its own, and a client cannot ask for it.
-func TestSuspendForAnOrgRevokeCarriesTheClosureNotice(t *testing.T) {
+var closing = Reason{Code: ReasonOther, Text: "org revoked: x", OrgClosed: true}
+
+// A revoke suspends the owner but mails nothing then: the closure mail follows
+// once the projects are gone.
+func TestSuspendForAnOrgRevokeSendsNoSuspensionMail(t *testing.T) {
+	svc, store, _, notifier := noticeFixture(true)
+	if _, err := svc.Suspend(context.Background(), admin, "victim", closing); err != nil {
+		t.Fatal(err)
+	}
+	if notifier.count() != 0 {
+		t.Fatalf("notices = %d, the closure mail is sent after the teardown", notifier.count())
+	}
+	if !store.mailSent["victim"] {
+		t.Fatal("the suspension mail must be settled, or a later suspend would send it")
+	}
+}
+
+// The normal abuse flow: suspend first, revoke later. The closure mail is
+// still owed, the earlier suspension mail does not stand in for it.
+func TestClosureMailIsSentToAnOwnerAlreadySuspended(t *testing.T) {
 	svc, _, _, notifier := noticeFixture(true)
-	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Code: ReasonOther, Text: "org revoked: x", OrgClosed: true}); err != nil {
+	ctx := context.Background()
+	if _, err := svc.Suspend(ctx, admin, "victim", Reason{Code: ReasonCryptoMining, Text: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(notifier.notices) != 1 || !notifier.notices[0].OrgClosed {
-		t.Fatalf("notices = %+v, want one marked as an org closure", notifier.notices)
-	}
-	svc2, _, _, notifier2 := noticeFixture(true)
-	if _, err := svc2.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
+	if _, err := svc.Suspend(ctx, admin, "victim", closing); err != nil {
 		t.Fatal(err)
 	}
-	if notifier2.notices[0].OrgClosed {
-		t.Fatal("an ordinary suspension is not a closure")
+	svc.NotifyOrgClosed(ctx, "victim", "org-1")
+	if notifier.count() != 2 || !notifier.notices[1].OrgClosed || notifier.notices[0].OrgClosed {
+		t.Fatalf("notices = %+v, want the suspension mail then the closure mail", notifier.notices)
+	}
+}
+
+func TestClosureMailIsSentOncePerOrg(t *testing.T) {
+	svc, _, _, notifier := noticeFixture(true)
+	ctx := context.Background()
+	svc.NotifyOrgClosed(ctx, "victim", "org-1")
+	svc.NotifyOrgClosed(ctx, "victim", "org-2")
+	svc.NotifyOrgClosed(ctx, "victim", "org-1")
+	if notifier.count() != 2 {
+		t.Fatalf("notices = %d, want one per closed org (2)", notifier.count())
+	}
+}
+
+func TestConcurrentRevokesOfOneOrgSendOneClosureMail(t *testing.T) {
+	svc, _, _, notifier := noticeFixture(true)
+	notifier.hold = make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			svc.NotifyOrgClosed(context.Background(), "victim", "org-1")
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(notifier.hold)
+	wg.Wait()
+	if got := notifier.count(); got != 1 {
+		t.Fatalf("notices = %d, want exactly one", got)
+	}
+}
+
+func TestClosureMailIsOwedAgainAfterAFailedSend(t *testing.T) {
+	svc, _, _, notifier := noticeFixture(true)
+	notifier.err = errors.New("smtp down")
+	svc.NotifyOrgClosed(context.Background(), "victim", "org-1")
+	notifier.err = nil
+	svc.NotifyOrgClosed(context.Background(), "victim", "org-1")
+	if notifier.count() != 2 {
+		t.Fatalf("notices = %d, a failed send must be retried by the next revoke", notifier.count())
+	}
+}
+
+func TestClosureMailWithTheFlagOffSendsNothing(t *testing.T) {
+	svc, _, _, notifier := noticeFixture(false)
+	svc.NotifyOrgClosed(context.Background(), "victim", "org-1")
+	if notifier.count() != 0 {
+		t.Fatalf("notices = %d with the flag off", notifier.count())
 	}
 }
 

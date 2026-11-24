@@ -18,6 +18,9 @@ type SuspensionMailConfig struct {
 	SupportEmail string
 	// PolicyURL is the Acceptable Use Policy page; each rule is an anchor on it.
 	PolicyURL string
+	// BackupsKept is whether a backup target is configured: only then do a
+	// closed org's database backups exist to be kept (RetainedBackupPeriod).
+	BackupsKept bool
 }
 
 // SuspensionMail tells an account holder their account was suspended, which
@@ -89,20 +92,30 @@ func (m *SuspensionMail) send(ctx context.Context, notice adminconsole.Suspensio
 }
 
 // closureBody is the mail for an organisation closed for a policy breach. A
-// revoke deletes the projects at once, with no grace period, and keeps their
-// backups 14 days (service.RetainedBackupPeriod) before purging them.
+// revoke deletes the projects at once, with no grace period. Their backups are
+// kept RetainedBackupPeriod before being purged, if a backup target exists.
 func (m *SuspensionMail) closureBody() string {
+	days := int(RetainedBackupPeriod.Hours() / 24)
 	var b strings.Builder
 	b.WriteString("Hello,\n\nWe have closed your Excalibase organisation and deactivated your account, because use of it broke our Acceptable Use Policy.\n")
 	if m.cfg.PolicyURL != "" {
 		fmt.Fprintf(&b, "The policy is here: %s\n", m.cfg.PolicyURL)
 	}
-	b.WriteString("\nYour data\nThe organisation's projects, apps, databases and files are being deleted now. Backups of the databases are kept for 14 days after that, then permanently removed.\n")
+	b.WriteString("\nYour data\nThe organisation's projects, apps, databases and files are being deleted now. ")
+	if m.cfg.BackupsKept {
+		fmt.Fprintf(&b, "Backups of the databases are kept for %d days after that, then permanently removed.\n", days)
+	} else {
+		b.WriteString("No backups of the databases exist, so the data cannot be recovered.\n")
+	}
+	window := ""
+	if m.cfg.BackupsKept {
+		window = fmt.Sprintf(" within those %d days", days)
+	}
 	b.WriteString("\nIf you think this is a mistake\n")
 	if m.cfg.SupportEmail != "" {
-		fmt.Fprintf(&b, "Reply to this email or write to %s within those 14 days. Tell us what your apps did and we will review the decision.\n", m.cfg.SupportEmail)
+		fmt.Fprintf(&b, "Reply to this email or write to %s%s. Tell us what your apps did and we will review the decision.\n", m.cfg.SupportEmail, window)
 	} else {
-		b.WriteString("Reply to this email within those 14 days and tell us what your apps did. We will review the decision.\n")
+		fmt.Fprintf(&b, "Reply to this email%s and tell us what your apps did. We will review the decision.\n", window)
 	}
 	b.WriteString("\nThe Excalibase team\n")
 	return b.String()

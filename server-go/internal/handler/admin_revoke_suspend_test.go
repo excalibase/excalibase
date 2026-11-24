@@ -16,6 +16,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
 
@@ -24,6 +27,18 @@ type fakeOwnerSuspender struct {
 	closed         bool
 	err            error
 	calls          int
+	// closures records each closure mail asked for, as "user/org".
+	closures []string
+	// whenClosed is how many orgs were deleted when the closure mail was asked.
+	orgs             *adminOrgStore
+	deletedAtClosure []bool
+}
+
+func (f *fakeOwnerSuspender) NotifyOrgClosed(_ context.Context, userID, orgID string) {
+	f.closures = append(f.closures, userID+"/"+orgID)
+	if f.orgs != nil {
+		f.deletedAtClosure = append(f.deletedAtClosure, f.orgs.deleted)
+	}
 }
 
 func (f *fakeOwnerSuspender) Suspend(_ context.Context, _ adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error) {
@@ -148,7 +163,11 @@ func (d deactivatingStore) Suspend(_ context.Context, s adminconsole.Suspension,
 }
 func (deactivatingStore) ClaimMail(context.Context, string) (bool, error) { return false, nil }
 func (deactivatingStore) ReleaseMail(context.Context, string) error       { return nil }
-func (deactivatingStore) Unsuspend(context.Context, string) error         { return nil }
+func (deactivatingStore) ClaimClosureMail(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (deactivatingStore) ReleaseClosureMail(context.Context, string, string) error { return nil }
+func (deactivatingStore) Unsuspend(context.Context, string) error                  { return nil }
 func (deactivatingStore) SuspendedApps(context.Context, string) ([]adminconsole.SuspendedApp, error) {
 	return nil, nil
 }
@@ -284,4 +303,46 @@ func (a *syncAudit) count() int {
 
 func (deactivatingStore) RecordSuspendedApps(context.Context, string, []adminconsole.SuspendedApp) error {
 	return nil
+}
+
+// The closure mail goes out once the projects are really gone, and before the
+// org row is removed.
+func TestAdmin_RevokeOrg_MailsTheClosureAfterTheTeardown(t *testing.T) {
+	sus := &fakeOwnerSuspender{}
+	_, orgs, _, r := revokeRig(t, sus)
+	sus.orgs = orgs
+	if w := revoke(r, revokeReasonBody); w.Code != http.StatusOK {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	if len(sus.closures) != 1 || sus.closures[0] != "owner-1/org-9" {
+		t.Fatalf("closure mails = %v, want one for owner-1/org-9", sus.closures)
+	}
+}
+
+// A revoke that left projects behind keeps the org and tells the owner nothing
+// yet: the mail stays owed for the revoke that finishes the job.
+func TestAdmin_RevokeOrg_NoClosureMailWhenAProjectDropFails(t *testing.T) {
+	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj-stuck": {ProjectID: "proj-stuck", OrgID: "org-9", DBType: domain.PostgreSQL, Namespace: "org-9-stuck", Status: "ACTIVE"},
+	}}
+	mock := k8s.NewMockClient()
+	mock.Namespaces["org-9-stuck"] = true
+	mock.StuckNamespaces["org-9-stuck"] = true
+	pgProv := provisioner.NewPostgreSQLProvisioner(mock, "")
+	pgProv.SetDeletionPoller(provisioner.NewPoller(0, 0))
+	provSvc := service.NewProvisioningService(store, provisioner.NewFactory(pgProv), mock)
+	orgs := &adminOrgStore{org: &domain.Org{ID: "org-9", Slug: "acme", OwnerID: "owner-1"}}
+	sus := &fakeOwnerSuspender{}
+	h := NewAdminHandler(provSvc, store, orgs, &captureAudit{}, nil, "", nil)
+	h.SetOwnerSuspender(sus)
+	router := chi.NewRouter()
+	router.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
+
+	w := revoke(router, revokeReasonBody)
+	if w.Code != http.StatusMultiStatus {
+		t.Fatalf("got %d %s, want 207", w.Code, w.Body.String())
+	}
+	if len(sus.closures) != 0 || orgs.deleted {
+		t.Fatalf("closure mails = %v, org deleted = %v", sus.closures, orgs.deleted)
+	}
 }

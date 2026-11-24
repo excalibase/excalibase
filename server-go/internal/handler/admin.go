@@ -54,6 +54,9 @@ type ProjectFactsLookup func(ctx context.Context) (map[string]adminconsole.Proje
 // org goes through it so the owner's account is blocked the same way.
 type OwnerSuspender interface {
 	Suspend(ctx context.Context, actor adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error)
+	// NotifyOrgClosed mails the owner that the org was closed; called only
+	// once every project of the org is gone.
+	NotifyOrgClosed(ctx context.Context, userID, orgID string)
 }
 
 // SetOwnerSuspender wires the suspension a revoke applies to the org's owner.
@@ -302,6 +305,13 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 		log.Printf("action=revoke_org org=%s status=failed err=%v", orgID, err)
 		httpError(w, "projects could not be listed; nothing was deleted", http.StatusInternalServerError)
 		return
+	}
+
+	// The owner is told once the projects are really gone, and before the org
+	// row goes: if some drops failed, nothing is sent and the mail stays owed
+	// for the revoke that finishes the job.
+	if len(failed) == 0 && org.OwnerID != "" && h.suspender != nil {
+		h.suspender.NotifyOrgClosed(r.Context(), org.OwnerID, orgID)
 	}
 
 	// Delete org row last — only after all projects are gone, so org listing

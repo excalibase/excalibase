@@ -104,6 +104,24 @@ func (a *AdminConsole) ReleaseMail(ctx context.Context, userID string) error {
 	return err
 }
 
+// ClaimClosureMail records that the closure mail of this org is being sent; a
+// second caller finds the row and gets false. The row outlives an unsuspend:
+// an org is closed once.
+func (a *AdminConsole) ClaimClosureMail(ctx context.Context, userID, orgID string) (bool, error) {
+	result, err := a.db.ExecContext(ctx, `INSERT INTO abuse_org_closures (user_id, org_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, userID, orgID)
+	if err != nil {
+		return false, err
+	}
+	claimed, err := result.RowsAffected()
+	return claimed == 1, err
+}
+
+// ReleaseClosureMail makes the closure mail owed again after a send that failed.
+func (a *AdminConsole) ReleaseClosureMail(ctx context.Context, userID, orgID string) error {
+	_, err := a.db.ExecContext(ctx, `DELETE FROM abuse_org_closures WHERE user_id = $1 AND org_id = $2`, userID, orgID)
+	return err
+}
+
 // Unsuspend reactivates the account and removes the suspension. The app
 // records stay until each app is resumed.
 func (a *AdminConsole) Unsuspend(ctx context.Context, userID string) error {

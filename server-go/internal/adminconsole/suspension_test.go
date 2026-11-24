@@ -11,27 +11,29 @@ import (
 )
 
 type fakeSuspensions struct {
-	mu        sync.Mutex
-	users     map[string]*UserRef
-	owned     map[string][]OwnedApp
-	recorded  map[string][]SuspendedApp
-	reasons   map[string]string
-	codes     map[string]ReasonCode
-	mailSent  map[string]bool
-	suspended map[string]bool
+	mu          sync.Mutex
+	users       map[string]*UserRef
+	owned       map[string][]OwnedApp
+	recorded    map[string][]SuspendedApp
+	reasons     map[string]string
+	codes       map[string]ReasonCode
+	mailSent    map[string]bool
+	suspended   map[string]bool
+	closureSent map[string]bool
 	// calls is the order the store was used in.
 	calls []string
 }
 
 func newFakeSuspensions() *fakeSuspensions {
 	return &fakeSuspensions{
-		users:     map[string]*UserRef{},
-		owned:     map[string][]OwnedApp{},
-		recorded:  map[string][]SuspendedApp{},
-		reasons:   map[string]string{},
-		codes:     map[string]ReasonCode{},
-		mailSent:  map[string]bool{},
-		suspended: map[string]bool{},
+		users:       map[string]*UserRef{},
+		owned:       map[string][]OwnedApp{},
+		recorded:    map[string][]SuspendedApp{},
+		reasons:     map[string]string{},
+		codes:       map[string]ReasonCode{},
+		mailSent:    map[string]bool{},
+		suspended:   map[string]bool{},
+		closureSent: map[string]bool{},
 	}
 }
 
@@ -87,6 +89,24 @@ func (f *fakeSuspensions) ReleaseMail(_ context.Context, userID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.mailSent, userID)
+	return nil
+}
+
+func (f *fakeSuspensions) ClaimClosureMail(_ context.Context, userID, orgID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := userID + "/" + orgID
+	if f.closureSent[key] {
+		return false, nil
+	}
+	f.closureSent[key] = true
+	return true, nil
+}
+
+func (f *fakeSuspensions) ReleaseClosureMail(_ context.Context, userID, orgID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.closureSent, userID+"/"+orgID)
 	return nil
 }
 

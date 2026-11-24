@@ -216,3 +216,60 @@ func TestAdminSuspendRoute_ConcurrentSuspendsMailOnce(t *testing.T) {
 		t.Fatalf("mails = %d marked = %v, want exactly one", sent, mailMarked(t, store))
 	}
 }
+
+func closureRig(t *testing.T) (*adminconsole.SuspensionService, *pgstore.AdminConsole, *mailBox) {
+	t.Helper()
+	store, _, _ := suspendMailRig(t, true)
+	box := &mailBox{}
+	queries := pgstore.NewAdminConsole(store.DB())
+	svc := adminconsole.NewSuspensionService(queries, pausedApps{store}, store)
+	svc.SetNotifier(service.NewSuspensionMail(box, service.SuspensionMailConfig{From: "noreply@example.test"}),
+		func(context.Context) bool { return true })
+	return svc, queries, box
+}
+
+// An owner suspended earlier is still mailed when the org is revoked; a second
+// org is a second mail; the same org twice, one.
+func TestClosureMail_OnARealDatabaseIsClaimedPerOrg(t *testing.T) {
+	svc, _, box := closureRig(t)
+	ctx := context.Background()
+	if _, err := svc.Suspend(ctx, adminconsole.Actor{ID: platformAdminID}, testAliceID, adminconsole.Reason{Code: adminconsole.ReasonCryptoMining, Text: "xmrig"}); err != nil {
+		t.Fatal(err)
+	}
+	svc.NotifyOrgClosed(ctx, testAliceID, "org-a")
+	svc.NotifyOrgClosed(ctx, testAliceID, "org-a")
+	svc.NotifyOrgClosed(ctx, testAliceID, "org-b")
+	if len(box.sent) != 3 {
+		t.Fatalf("mails = %d, want the suspension mail and one closure mail per org (3)", len(box.sent))
+	}
+	if box.sent[1].Tags["kind"] != "org-closed" || box.sent[2].Tags["kind"] != "org-closed" {
+		t.Fatalf("kinds = %v %v", box.sent[1].Tags, box.sent[2].Tags)
+	}
+}
+
+func TestClosureMail_ConcurrentRevokesOfOneOrgMailOnce(t *testing.T) {
+	svc, _, box := closureRig(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			svc.NotifyOrgClosed(context.Background(), testAliceID, "org-a")
+		}()
+	}
+	wg.Wait()
+	if len(box.sent) != 1 {
+		t.Fatalf("mails = %d, want exactly one", len(box.sent))
+	}
+}
+
+func TestClosureMail_AFailedSendIsOwedAgain(t *testing.T) {
+	svc, _, box := closureRig(t)
+	box.fail = errors.New("smtp down")
+	svc.NotifyOrgClosed(context.Background(), testAliceID, "org-a")
+	box.fail = nil
+	svc.NotifyOrgClosed(context.Background(), testAliceID, "org-a")
+	if len(box.sent) != 1 {
+		t.Fatalf("mails = %d, want the retry to send it", len(box.sent))
+	}
+}

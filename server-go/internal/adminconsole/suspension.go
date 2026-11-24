@@ -95,6 +95,11 @@ type SuspensionStore interface {
 	// ReleaseMail gives the claim back after a send that failed, so a retry sends it.
 	ReleaseMail(ctx context.Context, userID string) error
 	ForgetSuspendedApp(ctx context.Context, userID, projectID, appID string) error
+	// ClaimClosureMail settles the closure mail of one org for one caller: true
+	// only for the one that found it unsent, so concurrent revokes send one mail.
+	ClaimClosureMail(ctx context.Context, userID, orgID string) (bool, error)
+	// ReleaseClosureMail gives the claim back after a send that failed.
+	ReleaseClosureMail(ctx context.Context, userID, orgID string) error
 }
 
 // AppControl stops and restarts an app through the app lifecycle, which scales

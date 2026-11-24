@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -109,6 +110,7 @@ func TestSuspensionMail_NeverGoesToBlank(t *testing.T) {
 // A revoke deletes the organisation, so its mail must not say data is kept.
 func TestSuspensionMail_AnOrgClosureSaysTheDataIsBeingDeleted(t *testing.T) {
 	mail, sender, notice := suspensionMailFixture(adminconsole.ReasonOther)
+	mail.cfg.BackupsKept = true
 	notice.OrgClosed = true
 	if err := mail.Suspended(context.Background(), notice); err != nil {
 		t.Fatal(err)
@@ -161,5 +163,55 @@ func TestSuspensionMail_NamesAreQuoted(t *testing.T) {
 	}
 	if want := `- Project "say \"hi\"": "a\"b"`; !strings.Contains(sender.messages[0].TextBody, want) {
 		t.Fatalf("want %s in:\n%s", want, sender.messages[0].TextBody)
+	}
+}
+
+func closureMessage(t *testing.T, cfg SuspensionMailConfig) string {
+	t.Helper()
+	sender := &sentMail{}
+	cfg.From = "noreply@example.test"
+	mail := NewSuspensionMail(sender, cfg)
+	if err := mail.Suspended(context.Background(), adminconsole.SuspensionNotice{Email: "user@example.test", OrgClosed: true}); err != nil {
+		t.Fatal(err)
+	}
+	return sender.messages[0].TextBody
+}
+
+// The retention comes from the same period the purge uses.
+func TestClosureMail_NamesTheBackupRetentionWhenBackupsAreKept(t *testing.T) {
+	body := closureMessage(t, SuspensionMailConfig{SupportEmail: "support@example.test", BackupsKept: true})
+	days := int(RetainedBackupPeriod.Hours() / 24)
+	for _, want := range []string{
+		fmt.Sprintf("Backups of the databases are kept for %d days after that, then permanently removed.", days),
+		fmt.Sprintf("write to support@example.test within those %d days", days),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("lacks %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestClosureMail_SaysNoBackupsExistWhenNoTargetIsConfigured(t *testing.T) {
+	body := closureMessage(t, SuspensionMailConfig{SupportEmail: "support@example.test"})
+	if strings.Contains(body, "14 days") || strings.Contains(body, "Backups of the databases are kept") {
+		t.Errorf("promises backups that do not exist:\n%s", body)
+	}
+	if !strings.Contains(body, "No backups of the databases exist") {
+		t.Errorf("must say plainly that no backups exist:\n%s", body)
+	}
+}
+
+// A name longer than the cap is cut at exactly the cap; one at the cap is whole.
+func TestSuspensionMail_NamesAreCappedAtOneHundredCharacters(t *testing.T) {
+	mail, sender, notice := suspensionMailFixture(adminconsole.ReasonOther)
+	atCap := strings.Repeat("a", 100)
+	overCap := strings.Repeat("b", 101)
+	notice.Projects = []adminconsole.NoticeProject{{Name: atCap, Apps: []string{overCap}}}
+	if err := mail.Suspended(context.Background(), notice); err != nil {
+		t.Fatal(err)
+	}
+	body := sender.messages[0].TextBody
+	if want := fmt.Sprintf("- Project %q: %q\n", atCap, strings.Repeat("b", 100)+"..."); !strings.Contains(body, want) {
+		t.Fatalf("want %s in:\n%s", want, body)
 	}
 }

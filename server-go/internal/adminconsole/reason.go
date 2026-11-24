@@ -81,6 +81,15 @@ func (s *SuspensionService) notify(ctx context.Context, user *UserRef, why Reaso
 	if s.mailEnabled == nil || user.MailSent {
 		return
 	}
+	if why.OrgClosed {
+		// A revoke's mail is the closure mail, sent once the projects are
+		// gone (NotifyOrgClosed). The suspension mail is settled unsent, or a
+		// later suspend would send a notice about this one.
+		if _, err := s.store.ClaimMail(ctx, user.ID); err != nil {
+			log.Printf("ERROR: settle suspension mail for user %s: %v", user.ID, err)
+		}
+		return
+	}
 	if !s.mailEnabled(ctx) {
 		if _, err := s.store.ClaimMail(ctx, user.ID); err != nil {
 			log.Printf("ERROR: settle suspension mail for user %s: %v", user.ID, err)
@@ -105,12 +114,48 @@ func (s *SuspensionService) notify(ctx context.Context, user *UserRef, why Reaso
 	if !claimed {
 		return
 	}
-	notice := SuspensionNotice{Email: user.Email, Code: code, OrgClosed: why.OrgClosed, Projects: noticeProjects(withoutFailed(recorded, failed))}
+	notice := SuspensionNotice{Email: user.Email, Code: code, Projects: noticeProjects(withoutFailed(recorded, failed))}
 	if err := s.notifier.Suspended(ctx, notice); err != nil {
 		log.Printf("ERROR: suspension mail for user %s: %v", user.ID, err)
 		metrics.SuspensionMail("failed")
 		if err := s.store.ReleaseMail(ctx, user.ID); err != nil {
 			log.Printf("ERROR: suspension mail for user %s not released for a retry: %v", user.ID, err)
+		}
+		return
+	}
+	metrics.SuspensionMail("sent")
+}
+
+// NotifyOrgClosed tells an org's owner the org was closed and its data is being
+// deleted, once per (owner, org): the claim is per org, so it does not depend on
+// whether the owner was suspended before, and revoking a second org mails again.
+// The caller sends it only after the teardown succeeded. A failed send gives the
+// claim back, so the next revoke of the org sends it. Failures are logged and
+// counted, never returned: the deletion is not undone for a mail.
+func (s *SuspensionService) NotifyOrgClosed(ctx context.Context, userID, orgID string) {
+	if s.mailEnabled == nil || s.notifier == nil || !s.mailEnabled(ctx) {
+		return
+	}
+	user, err := s.store.FindUser(ctx, userID)
+	if err != nil || user == nil {
+		log.Printf("ERROR: closure mail for user %s org %s: look up user: %v", userID, orgID, err)
+		metrics.SuspensionMail("failed")
+		return
+	}
+	claimed, err := s.store.ClaimClosureMail(ctx, userID, orgID)
+	if err != nil {
+		log.Printf("ERROR: closure mail for user %s org %s: claim: %v", userID, orgID, err)
+		metrics.SuspensionMail("failed")
+		return
+	}
+	if !claimed {
+		return
+	}
+	if err := s.notifier.Suspended(ctx, SuspensionNotice{Email: user.Email, Code: ReasonOther, OrgClosed: true}); err != nil {
+		log.Printf("ERROR: closure mail for user %s org %s: %v", userID, orgID, err)
+		metrics.SuspensionMail("failed")
+		if err := s.store.ReleaseClosureMail(ctx, userID, orgID); err != nil {
+			log.Printf("ERROR: closure mail for user %s org %s not released for a retry: %v", userID, orgID, err)
 		}
 		return
 	}
