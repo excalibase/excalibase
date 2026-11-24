@@ -141,18 +141,19 @@ func (h *ProvisioningHandler) writeLifecycleError(ctx context.Context, w http.Re
 		errors.Is(err, storage.ErrProjectStatusChanged) {
 		status = http.StatusConflict
 	}
-	body := map[string]interface{}{"error": safeError(err), "status": status}
+	if status == http.StatusInternalServerError {
+		log.Printf("ERROR: pause or resume of %s: %v", projectID, err)
+	}
+	body := map[string]interface{}{"error": lifecycleMessage(err), "status": status}
 	if h.instances != nil {
 		if inst, _ := h.instances.FindByProjectID(projectID); inst != nil {
-			body["error"] = safeErrorIn(err, inst.Namespace)
 			body["projectId"] = inst.ProjectID
 			body["status"] = inst.Status
 			body["currentStep"] = inst.CurrentStep
-			kind, reason, _ := failureForCaller(ctx, inst.FailureReason, "")
-			body["failureKind"] = kind
-			if reason != "" {
-				body["failureReason"] = domain.ScrubClusterText(reason, inst.Namespace)
-			}
+			failure := failureForCaller(ctx, inst.FailureReason, "")
+			setIfNotEmpty(body, "failureKind", string(failure.Kind))
+			setIfNotEmpty(body, "failureMessage", failure.Message)
+			setIfNotEmpty(body, "failureReason", domain.ScrubClusterText(failure.Reason, inst.Namespace))
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -866,4 +867,32 @@ func (h *ProvisioningHandler) resolveInfoOrg(w http.ResponseWriter, r *http.Requ
 		return nil, false
 	}
 	return org, true
+}
+
+func setIfNotEmpty(body map[string]interface{}, key, value string) {
+	if value != "" {
+		body[key] = value
+	}
+}
+
+// lifecycleUnexpected is what a pause or resume that failed in a way we have
+// no sentence for tells the caller; the cause is in the server log.
+const lifecycleUnexpected = "the operation could not be completed; try again, and if it keeps failing tell us"
+
+// lifecycleSentinels are the pause and resume outcomes whose own words are
+// meant for the caller.
+var lifecycleSentinels = []error{
+	service.ErrProjectOperationRunning, service.ErrPauseNotObserved, service.ErrPauseBackupNotCompleted, service.ErrResumeNotObserved,
+	storage.ErrProjectBusy, storage.ErrProjectStatusChanged,
+}
+
+// lifecycleMessage is the caller's sentence for a pause or resume error:
+// the sentinel's own words, never text wrapped around it.
+func lifecycleMessage(err error) string {
+	for _, sentinel := range lifecycleSentinels {
+		if errors.Is(err, sentinel) {
+			return sentinel.Error()
+		}
+	}
+	return lifecycleUnexpected
 }

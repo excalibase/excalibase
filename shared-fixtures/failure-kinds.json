@@ -1,0 +1,130 @@
+[
+ {
+  "text": "OOMKilled",
+  "kind": "out_of_memory"
+ },
+ {
+  "text": "container ran out of memory",
+  "kind": "out_of_memory"
+ },
+ {
+  "text": "Out Of Memory",
+  "kind": "out_of_memory"
+ },
+ {
+  "text": "persistentvolumeclaim \"data-1\" not found",
+  "kind": "storage"
+ },
+ {
+  "text": "PVC data-1 is pending",
+  "kind": "storage"
+ },
+ {
+  "text": "FailedAttachVolume for data-1",
+  "kind": "storage"
+ },
+ {
+  "text": "FailedMount for data-1",
+  "kind": "storage"
+ },
+ {
+  "text": "Multi-Attach error",
+  "kind": "storage"
+ },
+ {
+  "text": "ImagePullBackOff",
+  "kind": "image"
+ },
+ {
+  "text": "ErrImagePull",
+  "kind": "image"
+ },
+ {
+  "text": "InvalidImageName",
+  "kind": "image"
+ },
+ {
+  "text": "pod p1-postgres-1 in CrashLoopBackOff",
+  "kind": "crashing"
+ },
+ {
+  "text": "Unschedulable",
+  "kind": "no_capacity"
+ },
+ {
+  "text": "Insufficient cpu",
+  "kind": "no_capacity"
+ },
+ {
+  "text": "Insufficient memory",
+  "kind": "no_capacity"
+ },
+ {
+  "text": "0/3 nodes are available",
+  "kind": "no_capacity"
+ },
+ {
+  "text": "the database did not become ready",
+  "kind": "timeout"
+ },
+ {
+  "text": "timed out waiting for the database",
+  "kind": "timeout"
+ },
+ {
+  "text": "provisioning timed out",
+  "kind": "timeout"
+ },
+ {
+  "text": "provisioning timeout",
+  "kind": "timeout"
+ },
+ {
+  "text": "readiness deadline exceeded",
+  "kind": "timeout"
+ },
+ {
+  "text": "canceling statement due to lock timeout",
+  "kind": "unknown"
+ },
+ {
+  "text": "etcdserver: request timed out",
+  "kind": "unknown"
+ },
+ {
+  "text": "context deadline exceeded",
+  "kind": "unknown"
+ },
+ {
+  "text": "something nobody anticipated in ns org1-p1",
+  "kind": "unknown"
+ },
+ {
+  "text": "OOMKilled then CrashLoopBackOff",
+  "kind": "out_of_memory"
+ },
+ {
+  "text": "CrashLoopBackOff while the PVC was pending",
+  "kind": "storage"
+ },
+ {
+  "text": "ErrImagePull and CrashLoopBackOff",
+  "kind": "image"
+ },
+ {
+  "text": "CrashLoopBackOff on a node with Insufficient cpu",
+  "kind": "crashing"
+ },
+ {
+  "text": "Insufficient memory, so the database did not become ready",
+  "kind": "no_capacity"
+ },
+ {
+  "text": "PVC pending, out of memory",
+  "kind": "out_of_memory"
+ },
+ {
+  "text": "ImagePullBackOff, Unschedulable",
+  "kind": "image"
+ }
+]

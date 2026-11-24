@@ -114,13 +114,14 @@ func withActivity(inst *domain.DatabaseInstance, activity domain.ProjectActivity
 // reaches the database through its public endpoint (EXC-759).
 func visibleTo(ctx context.Context, inst *domain.DatabaseInstance) *domain.DatabaseInstance {
 	shown := *inst
-	shown.FailureKind, shown.FailureReason, shown.RollbackLog = failureForCaller(ctx, inst.FailureReason, inst.RollbackLog)
+	failure := failureForCaller(ctx, inst.FailureReason, inst.RollbackLog)
+	shown.FailureKind, shown.FailureMessage, shown.FailureReason, shown.RollbackLog = failure.Kind, failure.Message, failure.Reason, failure.RollbackLog
 	if user := auth.GetUser(ctx); user != nil && auth.HasPermission(user.Role, auth.PermManageUsers) {
 		return &shown
 	}
 	customer := shown
 	customer.FailureStep = domain.ScrubClusterText(inst.FailureStep, inst.Namespace)
-	customer.DeletionError = domain.ScrubClusterText(inst.DeletionError, inst.Namespace)
+	customer.DeletionError = deletionErrorForCaller(ctx, inst.DeletionError, inst.Namespace)
 	customer.Host, customer.ReadOnlyHost, customer.Namespace = "", "", ""
 	customer.PoolerHost, customer.MetricsEndpoint = "", ""
 	return &customer

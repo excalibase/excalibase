@@ -47,4 +47,33 @@ describe('DatabaseServiceCard, failed provisioning', () => {
     );
     expect(await screen.findByText(/storage could not be attached/i)).toBeInTheDocument();
   });
+
+  const renderCard = (data: Record<string, unknown>) => {
+    vi.mocked(api.get).mockImplementation((url: string) =>
+      url === '/provision/proj-1'
+        ? Promise.resolve({ data: { projectId: 'proj-1', orgId: 'o', tier: 'FREE', status: 'ACTIVE', ...data } } as never)
+        : Promise.resolve({ data: {} } as never),
+    );
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter><DatabaseServiceCard projectId="proj-1" /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+  };
+
+  test('a project without a database says a kind in plain words', async () => {
+    renderCard({ noDatabase: true, failureKind: 'image' });
+    expect(await screen.findByText(/image could not be downloaded/i)).toBeInTheDocument();
+  });
+
+  test('a project without a database shows the server sentence when it sends one', async () => {
+    renderCard({ noDatabase: true, failureKind: 'unknown', failureMessage: 'the database add was interrupted; its resources were removed' });
+    expect(await screen.findByText('the database add was interrupted; its resources were removed')).toBeInTheDocument();
+  });
+
+  test('a project without a database and without a failure shows no failure', async () => {
+    renderCard({ noDatabase: true });
+    await screen.findByTestId('service-database-empty');
+    expect(screen.queryByText(/Provisioning failed|tell us/)).not.toBeInTheDocument();
+  });
 });

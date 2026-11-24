@@ -27,7 +27,7 @@ function outcome(operation: ProjectOperation, project: DatabaseInstance): 'pendi
   if (project.status === DONE[operation]) return 'done';
   if (project.failureReason || project.failureKind) {
     // A customer's answer carries a kind and no text.
-    throw new ProjectOperationError(project.failureReason ?? `The ${operation} did not complete. Try again in a moment.`);
+    throw new ProjectOperationError(project.failureMessage ?? project.failureReason ?? `The ${operation} did not complete. Try again in a moment.`);
   }
   if (project.status === 'DELETING' && project.deletionError) throw new ProjectOperationError(project.deletionError);
   return 'pending';

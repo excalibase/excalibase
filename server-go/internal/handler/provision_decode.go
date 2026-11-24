@@ -140,7 +140,8 @@ func customerProvisioning(ctx context.Context, resp *domain.ProvisioningResponse
 		return nil
 	}
 	shown := *resp
-	shown.FailureKind, shown.FailureReason, shown.RollbackLog = failureForCaller(ctx, resp.FailureReason, resp.RollbackLog)
+	failure := failureForCaller(ctx, resp.FailureReason, resp.RollbackLog)
+	shown.FailureKind, shown.FailureMessage, shown.FailureReason, shown.RollbackLog = failure.Kind, failure.Message, failure.Reason, failure.RollbackLog
 	shown.FailureStep = domain.ScrubClusterText(resp.FailureStep, resp.Namespace)
 	return &shown
 }

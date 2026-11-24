@@ -108,10 +108,13 @@ type DatabaseInstance struct {
 	FailureReason string            `json:"failureReason,omitempty"`
 	// FailureKind is the plain class of FailureReason, set when an answer is
 	// written; it is never stored.
-	FailureKind  FailureKind       `json:"failureKind,omitempty"`
-	FailureStage ProvisioningStage `json:"failureStage,omitempty"`
-	FailureStep  string            `json:"failureStep,omitempty"`
-	RollbackLog  string            `json:"rollbackLog,omitempty"` // JSON array of cleanup results
+	FailureKind FailureKind `json:"failureKind,omitempty"`
+	// FailureMessage is FailureReason when it is one of our own customer-safe
+	// sentences; a customer reads it where the raw text is withheld.
+	FailureMessage string            `json:"failureMessage,omitempty"`
+	FailureStage   ProvisioningStage `json:"failureStage,omitempty"`
+	FailureStep    string            `json:"failureStep,omitempty"`
+	RollbackLog    string            `json:"rollbackLog,omitempty"` // JSON array of cleanup results
 
 	// Deletion progress. Both empty until a teardown fails: DeletionStep is
 	// the step that did not complete and DeletionError why, so a retry of

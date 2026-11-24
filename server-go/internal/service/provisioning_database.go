@@ -388,7 +388,7 @@ func (s *ProvisioningService) recoverInterruptedAdd(ctx context.Context, project
 	if err := s.deleteDatabaseCredentials(inst.ProjectID); err != nil {
 		return err
 	}
-	inst.FailureReason = "the database add was interrupted; its resources were removed"
+	inst.FailureReason = AddInterruptedReason
 	inst.FailureStage, inst.FailureStep = inst.CurrentStage, inst.CurrentStep
 	s.purgeFailedAddBackups(ctx, inst)
 	inst.Status = string(domain.StatusActive)
@@ -438,3 +438,7 @@ func (s *ProvisioningService) deleteDatabaseCredentials(projectID string) error 
 	}
 	return nil
 }
+
+// AddInterruptedReason is the stored reason of an add-database the platform
+// restarted under; it names nothing of the cluster, so a customer reads it.
+const AddInterruptedReason = "the database add was interrupted; its resources were removed"

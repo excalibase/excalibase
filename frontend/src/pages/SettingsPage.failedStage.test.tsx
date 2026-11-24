@@ -98,4 +98,16 @@ describe('SettingsPage — failed provisioning banner', () => {
     expect(block).toHaveTextContent(KUBE_TEXT);
     expect(block).toHaveTextContent('delete namespace p-1');
   });
+
+  test('a customer answer with only a kind says it in plain words', async () => {
+    serve({ currentStage: 'FAILED', failureStage: 'CRD_DEPLOYMENT', failureKind: 'storage' });
+    renderSettings();
+    expect(await screen.findByText(/storage could not be attached/i)).toBeInTheDocument();
+  });
+
+  test('the server sentence is shown as it is', async () => {
+    serve({ currentStage: 'FAILED', failureStage: 'CRD_DEPLOYMENT', failureKind: 'unknown', failureMessage: 'the restore did not complete; restore again from Backups' });
+    renderSettings();
+    expect(await screen.findByText('the restore did not complete; restore again from Backups')).toBeInTheDocument();
+  });
 });

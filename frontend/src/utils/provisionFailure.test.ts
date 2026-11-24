@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, test, expect } from 'vitest';
 import { GENERIC_PROVISION_FAILURE, PROVISION_FAILURE_MESSAGES, plainProvisionFailure } from './provisionFailure';
 
@@ -89,5 +91,25 @@ describe('plainProvisionFailure with the server kind', () => {
   test('the kind wins over the text, and the text is only the fallback', () => {
     expect(plainProvisionFailure('CrashLoopBackOff', 'storage')).toBe(STORAGE);
     expect(plainProvisionFailure('CrashLoopBackOff')).toBe(CRASH);
+  });
+});
+
+// The server classifier reads the same file, so the two cannot drift apart.
+describe('the shared failure-kind fixture', () => {
+  const cases: Array<{ text: string; kind: string }> = JSON.parse(
+    readFileSync(resolve(process.cwd(), '../shared-fixtures/failure-kinds.json'), 'utf8'),
+  );
+  const [OOM, STORAGE, IMAGE, CRASH, ROOM, SLOW] = PROVISION_FAILURE_MESSAGES;
+  const byKind: Record<string, string> = {
+    out_of_memory: OOM, storage: STORAGE, image: IMAGE, crashing: CRASH, no_capacity: ROOM, timeout: SLOW,
+    unknown: GENERIC_PROVISION_FAILURE,
+  };
+
+  test('the text mapping and the kind mapping agree on every case', () => {
+    expect(cases.length).toBeGreaterThan(20);
+    for (const { text, kind } of cases) {
+      expect(plainProvisionFailure(text), text).toBe(byKind[kind]);
+      expect(plainProvisionFailure(undefined, kind), kind).toBe(byKind[kind]);
+    }
   });
 });

@@ -58,7 +58,7 @@ function NoDatabase({ project }: { readonly project: DatabaseInstance }) {
         {!project.canAddDatabase && ' Only an org admin or owner can add one.'}
       </p>
       {(project.failureReason || project.failureKind) && (
-        <ProvisionFailure reason={project.failureReason} kind={project.failureKind} className="text-xs text-red-400 break-words" />
+        <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} className="text-xs text-red-400 break-words" />
       )}
       {project.canAddDatabase && (
         <div>
@@ -143,7 +143,7 @@ export function DatabaseServiceCard({ projectId }: { readonly projectId: string 
             </div>
           </dl>
           {(project.failureReason || project.failureKind) && project.currentStage === 'FAILED' && (
-            <ProvisionFailure reason={project.failureReason} kind={project.failureKind} className="text-xs text-red-400 break-words" />
+            <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} className="text-xs text-red-400 break-words" />
           )}
           {isMySQLProject(project) ? (
             <MySQLEndpoint project={project} />
