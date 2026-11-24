@@ -96,8 +96,8 @@ export function MetricsPage() {
                 Provision your database with{' '}
                 <code className="text-purple-400">metricsEnabled: true</code>
               </li>
-              <li>Ensure the CloudNativePG Prometheus exporter is running on port 9187</li>
-              <li>Make sure your Kubernetes cluster is reachable</li>
+              <li>Ensure the metrics exporter is running on port 9187</li>
+              <li>Make sure the database is reachable</li>
             </ol>
           </div>
         </div>
@@ -116,7 +116,7 @@ export function MetricsPage() {
               subtitle={
                 current.cpuLimitCores == null
                   ? undefined
-                  : `/ ${current.cpuLimitCores} limit (${current.instanceCount} pods)`
+                  : `/ ${current.cpuLimitCores} limit (${current.instanceCount} ${current.instanceCount === 1 ? 'instance' : 'instances'})`
               }
               color="text-blue-400"
             />
@@ -174,13 +174,13 @@ export function MetricsPage() {
           {current.pods && current.pods.length > 0 && (
             <div className="bg-surface-card border border-border-primary rounded-xl overflow-hidden">
               <div className="px-6 py-4 border-b border-border-primary">
-                <h3 className="text-sm font-semibold text-text-primary">Pod Resources</h3>
+                <h3 className="text-sm font-semibold text-text-primary">Resources</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-text-tertiary border-b border-border-primary text-left">
-                      <th className="px-6 py-3 font-medium">Pod</th>
+                      <th className="px-6 py-3 font-medium">Instance</th>
                       <th className="px-6 py-3 font-medium">Role</th>
                       <th className="px-6 py-3 font-medium">CPU</th>
                       <th className="px-6 py-3 font-medium">Memory</th>
