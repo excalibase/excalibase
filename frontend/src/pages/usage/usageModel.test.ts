@@ -54,6 +54,18 @@ describe('orgUsage', () => {
     expect(usage.limitsKnown).toBe(true);
   });
 
+  test('self-hosted with no plan list still reads as no limit', () => {
+    const usage = orgUsage([proj('a')], undefined, new Map(), { selfHosted: true });
+    expect(usage.projects).toEqual({ used: 1, limit: null });
+    expect(usage.limitsKnown).toBe(true);
+  });
+
+  test('before the config answers no plan is read and no limit is known', () => {
+    const usage = orgUsage([proj('a')], tier({ maxProjects: 1 }), new Map(), { ready: false });
+    expect(usage.projects.limit).toBeNull();
+    expect(usage.limitsKnown).toBe(false);
+  });
+
   test('a project without a database reports no disk, whatever size the row still holds', () => {
     const usage = orgUsage([proj('a', { noDatabase: true, storageSize: '5Gi' })], tier(), new Map());
     expect(usage.perProject[0].storageGiB).toBeNull();

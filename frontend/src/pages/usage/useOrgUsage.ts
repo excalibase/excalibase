@@ -18,7 +18,8 @@ export interface OrgUsageState {
 export function useUsageOptions(): UsageOptions & { ready: boolean } {
   const mode = useDeploymentMode();
   const apps = useAppHostingEnabled();
-  return { selfHosted: isSelfHosted(mode), appsOn: apps.enabled, ready: !apps.isLoading };
+  const ready = !apps.isLoading;
+  return { selfHosted: ready && isSelfHosted(mode), appsOn: apps.enabled, ready };
 }
 
 // The current org's plan and use, from the lists the Studio already reads. Nothing here is metered live.
@@ -26,7 +27,7 @@ export function useOrgUsage(): OrgUsageState {
   const { org, isLoading: orgLoading, error: orgError } = useCurrentOrg();
   const mine = useMyProjects();
   const tiers = useTiers();
-  const { ready, ...options } = useUsageOptions();
+  const options = useUsageOptions();
   const projects = org ? mine.data.filter((p) => p.orgId === org.id) : [];
   const { byProject } = useProjectServices(projects);
   const tier = tiers.data?.find((t) => t.tier === org?.tier);
@@ -35,7 +36,7 @@ export function useOrgUsage(): OrgUsageState {
     orgName: org?.name,
     tierName: org?.tier,
     tier,
-    usage: org && !failed ? orgUsage(projects, ready ? tier : undefined, byProject, options) : undefined,
+    usage: org && !failed ? orgUsage(projects, tier, byProject, options) : undefined,
     isLoading: orgLoading || mine.isLoading,
     failed,
   };

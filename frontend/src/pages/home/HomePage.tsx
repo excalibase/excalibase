@@ -72,8 +72,8 @@ export function HomePage() {
   const { data, isLoading, error } = useMyProjects();
   const projects = org ? data.filter((p) => p.orgId === org.id) : data;
   const tiers = useTiers();
-  const { ready, ...usageOptions } = useUsageOptions();
-  const plan = org ? orgUsage(projects, ready ? tiers.data?.find((t) => t.tier === org.tier) : undefined, new Map(), usageOptions) : undefined;
+  const usageOptions = useUsageOptions();
+  const plan = org ? orgUsage(projects, tiers.data?.find((t) => t.tier === org.tier), new Map(), usageOptions) : undefined;
   const tokens = useAccessTokens();
   const { byProject } = useProjectServices(projects);
   const openDatabases = useOpenDatabases(projects);

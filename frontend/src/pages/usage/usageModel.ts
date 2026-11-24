@@ -29,10 +29,13 @@ export interface UsageOptions {
   // Self-hosted installs are not metered: the server applies no project cap.
   selfHosted?: boolean;
   appsOn?: boolean;
+  // False while the install config is unanswered: no plan is read, so no limit is claimed.
+  ready?: boolean;
 }
 
 export function orgUsage(projects: readonly DatabaseInstance[], tier: TierConfig | undefined, services: ReadonlyMap<string, LoadedServices>, options: UsageOptions = {}): OrgUsage {
-  const { selfHosted = false, appsOn = true } = options;
+  const { selfHosted = false, appsOn = true, ready = true } = options;
+  const plan = ready ? tier : undefined;
   const live = projects.filter((p) => !GONE.has(p.status));
   const perProject = live.map((p) => ({
     projectId: p.projectId,
@@ -42,11 +45,11 @@ export function orgUsage(projects: readonly DatabaseInstance[], tier: TierConfig
   }));
   const sizes = perProject.map((p) => p.storageGiB).filter((v): v is number => v !== null);
   return {
-    projects: { used: live.length, limit: !selfHosted && tier && tier.maxProjects > 0 ? tier.maxProjects : null },
+    projects: { used: live.length, limit: !selfHosted && plan && plan.maxProjects > 0 ? plan.maxProjects : null },
     databases: live.filter((p) => p.noDatabase !== true).length,
     storageGiB: sizes.length > 0 ? sizes.reduce((a, b) => a + b, 0) : null,
     storagePartial: live.some((p) => p.noDatabase !== true && parseGiB(p.storageSize) === null),
     perProject,
-    limitsKnown: selfHosted || tier !== undefined,
+    limitsKnown: selfHosted || plan !== undefined,
   };
 }
