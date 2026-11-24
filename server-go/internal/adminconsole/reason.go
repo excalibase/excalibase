@@ -67,19 +67,45 @@ func (s *SuspensionService) SetNotifier(notifier SuspensionNotifier, enabled fun
 	s.notifier, s.mailEnabled = notifier, enabled
 }
 
-// notify sends the one mail. A failure is logged and counted, never a reason
-// to undo a suspension that is already in force.
-func (s *SuspensionService) notify(ctx context.Context, user *UserRef, code ReasonCode, stopped []SuspendedApp) {
-	if s.notifier == nil || s.mailEnabled == nil || !s.mailEnabled(ctx) || user.Suspended {
+// notify sends the one mail while the flag is on and none has gone yet, and
+// marks it sent only after the send worked, so suspending again retries a mail
+// that failed and never repeats one that went. A failure is logged and
+// counted, never a reason to undo a suspension that is already in force.
+func (s *SuspensionService) notify(ctx context.Context, user *UserRef, code ReasonCode, failed []AppFailure) {
+	if s.notifier == nil || s.mailEnabled == nil || !s.mailEnabled(ctx) || user.MailSent {
 		return
 	}
-	notice := SuspensionNotice{Email: user.Email, Code: code, Projects: noticeProjects(stopped)}
+	recorded, err := s.store.SuspendedApps(ctx, user.ID)
+	if err != nil {
+		log.Printf("ERROR: suspension mail for user %s: list stopped apps: %v", user.ID, err)
+		metrics.SuspensionMail("failed")
+		return
+	}
+	notice := SuspensionNotice{Email: user.Email, Code: code, Projects: noticeProjects(withoutFailed(recorded, failed))}
 	if err := s.notifier.Suspended(ctx, notice); err != nil {
 		log.Printf("ERROR: suspension mail for user %s: %v", user.ID, err)
 		metrics.SuspensionMail("failed")
 		return
 	}
 	metrics.SuspensionMail("sent")
+	if err := s.store.MarkMailSent(ctx, user.ID); err != nil {
+		log.Printf("ERROR: suspension mail for user %s sent but not recorded: %v", user.ID, err)
+	}
+}
+
+// withoutFailed drops the apps this run could not stop; the mail names only what stopped.
+func withoutFailed(apps []SuspendedApp, failed []AppFailure) []SuspendedApp {
+	out := []SuspendedApp{}
+	for _, app := range apps {
+		stuck := false
+		for _, f := range failed {
+			stuck = stuck || (f.ProjectID == app.ProjectID && f.AppID == app.AppID)
+		}
+		if !stuck {
+			out = append(out, app)
+		}
+	}
+	return out
 }
 
 // noticeProjects groups the stopped apps under their project, in the order they were stopped.

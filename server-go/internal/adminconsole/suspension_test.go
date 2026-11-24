@@ -17,6 +17,7 @@ type fakeSuspensions struct {
 	recorded  map[string][]SuspendedApp
 	reasons   map[string]string
 	codes     map[string]ReasonCode
+	mailSent  map[string]bool
 	suspended map[string]bool
 	// calls is the order the store was used in.
 	calls []string
@@ -29,6 +30,7 @@ func newFakeSuspensions() *fakeSuspensions {
 		recorded:  map[string][]SuspendedApp{},
 		reasons:   map[string]string{},
 		codes:     map[string]ReasonCode{},
+		mailSent:  map[string]bool{},
 		suspended: map[string]bool{},
 	}
 }
@@ -42,6 +44,7 @@ func (f *fakeSuspensions) FindUser(_ context.Context, id string) (*UserRef, erro
 	}
 	copied := *u
 	copied.Suspended = f.suspended[id]
+	copied.MailSent = f.mailSent[id]
 	return &copied, nil
 }
 
@@ -70,11 +73,19 @@ func (f *fakeSuspensions) Suspend(_ context.Context, s Suspension, apps []Suspen
 	return nil
 }
 
+func (f *fakeSuspensions) MarkMailSent(_ context.Context, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mailSent[userID] = true
+	return nil
+}
+
 func (f *fakeSuspensions) Unsuspend(_ context.Context, userID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.users[userID].Active = true
 	f.suspended[userID] = false
+	delete(f.mailSent, userID)
 	return nil
 }
 

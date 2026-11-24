@@ -4,6 +4,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,9 +26,15 @@ import (
 // EXC-841: suspending through the admin route, on a real database, writes the
 // row with its rule, stops the app and mails the account holder once.
 
-type mailBox struct{ sent []email.Message }
+type mailBox struct {
+	sent []email.Message
+	fail error
+}
 
 func (m *mailBox) Send(_ context.Context, msg email.Message) (string, error) {
+	if m.fail != nil {
+		return "", m.fail
+	}
 	m.sent = append(m.sent, msg)
 	return "id", nil
 }
@@ -145,4 +152,39 @@ func TestAdminSuspendRoute_AnUnknownCodeChangesNothing(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT count(*) FROM abuse_suspensions`).Scan(&n); err != nil || n != 0 || len(box.sent) != 0 {
 		t.Fatalf("rows = %d mails = %d, %v", n, len(box.sent), err)
 	}
+}
+
+func TestAdminSuspendRoute_ARetryMailsOnceAfterAFailedSend(t *testing.T) {
+	store, r, box := suspendMailRig(t, true)
+	box.fail = errors.New("smtp down")
+	body := `{"reason":"xmrig in the image","reasonCode":"crypto_mining"}`
+
+	if w := suspendAlice(r, body); w.Code != http.StatusOK {
+		t.Fatalf("first suspend: %d %s", w.Code, w.Body.String())
+	}
+	if mailMarked(t, store) {
+		t.Fatal("a failed send must leave the mail owed")
+	}
+
+	box.fail = nil
+	for i := 0; i < 3; i++ {
+		if w := suspendAlice(r, body); w.Code != http.StatusOK {
+			t.Fatalf("retry %d: %d %s", i, w.Code, w.Body.String())
+		}
+	}
+	if len(box.sent) != 1 || !mailMarked(t, store) {
+		t.Fatalf("mails = %d marked = %v, want one mail then nothing", len(box.sent), mailMarked(t, store))
+	}
+	if !strings.Contains(box.sent[0].TextBody, `Project "Shop": "miner"`) {
+		t.Fatalf("the retry must still name the stopped app: %s", box.sent[0].TextBody)
+	}
+}
+
+func mailMarked(t *testing.T, store *pgstore.Store) bool {
+	t.Helper()
+	var marked bool
+	if err := store.DB().QueryRow(`SELECT mail_sent_at IS NOT NULL FROM abuse_suspensions WHERE user_id = $1`, testAliceID).Scan(&marked); err != nil {
+		t.Fatal(err)
+	}
+	return marked
 }

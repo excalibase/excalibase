@@ -89,6 +89,47 @@ func TestSuspendHoldsWhenTheMailFails(t *testing.T) {
 	}
 }
 
+// A mail that never went is retried by suspending again, once; after it went, nothing more.
+func TestSuspendRetrySendsAFailedMailExactlyOnce(t *testing.T) {
+	svc, store, _, notifier := noticeFixture(true)
+	notifier.err = errors.New("smtp down")
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Code: ReasonCryptoMining, Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if store.mailSent["victim"] {
+		t.Fatal("a failed send must not be marked as sent")
+	}
+
+	notifier.err = nil
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Code: ReasonCryptoMining, Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.notices) != 2 || !store.mailSent["victim"] {
+		t.Fatalf("notices = %d sent=%v, want the failed try and one retry", len(notifier.notices), store.mailSent["victim"])
+	}
+	retry := notifier.notices[1]
+	if len(retry.Projects) != 2 || retry.Projects[0].Name != "Proxies" {
+		t.Fatalf("the retry must still name what was stopped: %+v", retry.Projects)
+	}
+
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Code: ReasonCryptoMining, Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.notices) != 2 {
+		t.Fatalf("notices = %d, a second retry sends nothing", len(notifier.notices))
+	}
+}
+
+func TestSuspendWithTheFlagOffLeavesTheMailOwed(t *testing.T) {
+	svc, store, _, _ := noticeFixture(false)
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if store.mailSent["victim"] {
+		t.Fatal("nothing was sent, so nothing is marked sent")
+	}
+}
+
 func TestSuspendAgainDoesNotMailAgain(t *testing.T) {
 	svc, _, _, notifier := noticeFixture(true)
 	for i := 0; i < 2; i++ {

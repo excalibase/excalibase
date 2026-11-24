@@ -142,7 +142,8 @@ func (d deactivatingStore) Suspend(_ context.Context, s adminconsole.Suspension,
 	d.users.users[s.UserID].Active = false
 	return nil
 }
-func (deactivatingStore) Unsuspend(context.Context, string) error { return nil }
+func (deactivatingStore) MarkMailSent(context.Context, string) error { return nil }
+func (deactivatingStore) Unsuspend(context.Context, string) error    { return nil }
 func (deactivatingStore) SuspendedApps(context.Context, string) ([]adminconsole.SuspendedApp, error) {
 	return nil, nil
 }

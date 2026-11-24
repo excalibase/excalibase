@@ -44,6 +44,8 @@ type UserRef struct {
 	Role      string
 	Active    bool
 	Suspended bool
+	// MailSent is set once the account holder has been told of the suspension.
+	MailSent bool
 }
 
 // OwnedApp is an app in a project the account owns.
@@ -87,6 +89,8 @@ type SuspensionStore interface {
 	RecordSuspendedApps(ctx context.Context, userID string, apps []SuspendedApp) error
 	Unsuspend(ctx context.Context, userID string) error
 	SuspendedApps(ctx context.Context, userID string) ([]SuspendedApp, error)
+	// MarkMailSent records that the suspension mail went, so a retry does not repeat it.
+	MarkMailSent(ctx context.Context, userID string) error
 	ForgetSuspendedApp(ctx context.Context, userID, projectID, appID string) error
 }
 
@@ -181,7 +185,7 @@ func (s *SuspensionService) Suspend(ctx context.Context, actor Actor, userID str
 		}
 		result.AppsStopped = append(result.AppsStopped, app)
 	}
-	s.notify(ctx, user, code, result.AppsStopped)
+	s.notify(ctx, user, code, result.AppsFailed)
 	return result, nil
 }
 
