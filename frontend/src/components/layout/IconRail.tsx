@@ -15,9 +15,11 @@ const STORAGE_KEY = 'sidebar-behavior';
 interface IconRailProps {
   readonly activeSection: string | null;
   readonly onSectionClick: (key: string) => void;
+  // Inside the phone drawer: always full width and labelled, without the hover control.
+  readonly drawer?: boolean;
 }
 
-export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
+export function IconRail({ activeSection, onSectionClick, drawer = false }: IconRailProps) {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -40,7 +42,7 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
     localStorage.setItem(STORAGE_KEY, mode);
   }, [mode]);
 
-  const isExpanded = mode === 'expanded' || (mode === 'expandable' && hovered);
+  const isExpanded = drawer || mode === 'expanded' || (mode === 'expandable' && hovered);
 
   const handleClick = (section: NavSection) => {
     if (section.children) {
@@ -72,7 +74,7 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
       aria-label="Project navigation rail"
       className={cn(
         'flex-shrink-0 flex flex-col bg-surface-card border-r border-border-primary transition-all duration-200',
-        isExpanded ? 'w-48' : 'w-12'
+        drawer ? 'w-full flex-none' : isExpanded ? 'w-48' : 'w-12'
       )}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setShowModeMenu(false); }}
@@ -120,7 +122,7 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
       </nav>
 
       {/* Bottom: sidebar mode control */}
-      <div className="relative px-1.5 py-2 border-t border-border-primary">
+      {!drawer && <div className="relative px-1.5 py-2 border-t border-border-primary">
         <button
           onClick={() => setShowModeMenu(!showModeMenu)}
           title={isExpanded ? undefined : 'Sidebar settings'}
@@ -156,7 +158,7 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
             ))}
           </div>
         )}
-      </div>
+      </div>}
     </aside>
   );
 }

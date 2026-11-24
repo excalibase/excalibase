@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -33,6 +33,7 @@ function renderShell(path: string) {
           <Route path="/project/:projectId" element={<ProjectShell />}>
             <Route index element={<p>services page</p>} />
             <Route path="settings" element={<p>settings page</p>} />
+            <Route path="sql" element={<p>sql page</p>} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -74,5 +75,88 @@ describe('ProjectShell', () => {
     expect(activeTab('/project/p1', 'p1')).toBe('');
     expect(activeTab('/project/p1/monitoring/metrics', 'p1')).toBe('monitoring/metrics');
     expect(activeTab('/project/p1/sql', 'p1')).toBeUndefined();
+  });
+});
+
+function setPhone(matches: boolean) {
+  Object.defineProperty(globalThis.window, 'matchMedia', {
+    writable: true,
+    configurable: true,
+    value: (query: string) => ({
+      matches: matches && query === '(max-width: 768px)', media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    }),
+  });
+}
+
+describe('ProjectShell on a phone', () => {
+  beforeEach(() => { vi.clearAllMocks(); setPhone(true); });
+  afterEach(() => setPhone(false));
+
+  test('swaps the rail and sub-navigation for a menu button that starts closed', async () => {
+    renderShell('/project/p1');
+    const menu = await screen.findByRole('button', { name: 'Menu' });
+    expect(menu).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('icon-rail')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sub-nav')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByText('services page')).toBeInTheDocument();
+  });
+
+  test('the button opens a drawer with the rail and moves focus into it', async () => {
+    renderShell('/project/p1');
+    const menu = await screen.findByRole('button', { name: 'Menu' });
+    await userEvent.click(menu);
+    const drawer = screen.getByRole('dialog', { name: 'Project navigation' });
+    expect(menu).toHaveAttribute('aria-expanded', 'true');
+    expect(within(drawer).getByTestId('icon-rail')).toBeInTheDocument();
+    expect(drawer).toContainElement(document.activeElement as HTMLElement);
+  });
+
+  test('Escape closes the drawer and returns focus to the button', async () => {
+    renderShell('/project/p1');
+    const menu = await screen.findByRole('button', { name: 'Menu' });
+    await userEvent.click(menu);
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(menu).toHaveAttribute('aria-expanded', 'false');
+    expect(menu).toHaveFocus();
+  });
+
+  test('the backdrop closes the drawer', async () => {
+    renderShell('/project/p1');
+    await userEvent.click(await screen.findByRole('button', { name: 'Menu' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Close menu' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  test('navigating from the drawer closes it', async () => {
+    renderShell('/project/p1');
+    await userEvent.click(await screen.findByRole('button', { name: 'Menu' }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByTestId('nav-sql'));
+    expect(await screen.findByText('sql page')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  test('Tab wraps inside the drawer in both directions', async () => {
+    renderShell('/project/p1');
+    await userEvent.click(await screen.findByRole('button', { name: 'Menu' }));
+    const drawer = screen.getByRole('dialog');
+    const focusable = [...drawer.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')];
+    const last = focusable.at(-1) as HTMLElement;
+    last.focus();
+    await userEvent.tab();
+    expect(focusable[0]).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(last).toHaveFocus();
+  });
+});
+
+describe('ProjectShell on a desktop', () => {
+  beforeEach(() => { vi.clearAllMocks(); setPhone(false); });
+
+  test('keeps the rail and has no menu button', async () => {
+    renderShell('/project/p1');
+    expect(await screen.findByTestId('icon-rail')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Menu' })).not.toBeInTheDocument();
   });
 });
