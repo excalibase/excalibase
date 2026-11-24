@@ -28,6 +28,10 @@ func (s *AppDeployService) PauseAppInBackground(ctx context.Context, projectID, 
 
 // ResumeAppInBackground starts ResumeApp and answers without waiting for it.
 func (s *AppDeployService) ResumeAppInBackground(ctx context.Context, projectID, appID, actor string) (*apphost.App, error) {
+	// Refused here, not in the detached run, so the caller is told at once.
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	return s.lifecycleInBackground(ctx, projectID, appID, nil, func(ctx context.Context) {
 		_, _ = s.ResumeApp(ctx, projectID, appID, actor)
 	})

@@ -48,6 +48,9 @@ func (s *Service) claimPreview(ctx context.Context, store PreviewStore, preview 
 // at the preview's hostname. The site's live deploy, custom domains and CORS list stay untouched
 // unless APIAccess asks for the preview's origin.
 func (s *Service) DeployPreview(ctx context.Context, request PreviewDeployRequest) (*Preview, error) {
+	if err := s.options.OrgGuard.CheckProject(ctx, request.ProjectID); err != nil {
+		return nil, err
+	}
 	store, err := s.previewStore()
 	if err != nil {
 		return nil, err

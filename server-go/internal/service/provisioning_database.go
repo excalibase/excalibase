@@ -168,6 +168,9 @@ func projectResponse(inst *domain.DatabaseInstance) *domain.ProvisioningResponse
 // project's namespace, and the project stays ACTIVE without a database, with
 // the failure recorded, so its apps keep running and the add can be retried.
 func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	// The caller waits for the answer but does not own the build or its lease.
 	ctx = context.WithoutCancel(ctx)
 	add, release, err := s.admitDatabaseAdd(ctx, projectID, req)
@@ -184,6 +187,9 @@ func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string,
 // ends. Its outcome is on the project: its database, or none and the failure
 // named. A process that dies mid-build is recovered at the next start.
 func (s *ProvisioningService) AddDatabaseInBackground(ctx context.Context, projectID string, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	// The lease outlives this request, so it is not tied to the caller.
 	ctx = context.WithoutCancel(ctx)
 	add, release, err := s.admitDatabaseAdd(ctx, projectID, req)
