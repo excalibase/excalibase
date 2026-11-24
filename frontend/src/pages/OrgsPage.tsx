@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Building2, Plus, Crown, ChevronRight } from 'lucide-react';
 import { listMyOrgs, createOrg, type Org } from '../api/orgs';
 import { Button } from '../components/Button';
@@ -18,6 +19,7 @@ const ORG_NAME_MAX = 64;
 export function OrgsPage() {
   useDocumentTitle('Organizations');
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   // ?new=1 (linked from the create-project form) opens the create form.
   const [searchParams] = useSearchParams();
   const [orgs, setOrgs] = useState<Org[]>([]);
@@ -51,6 +53,8 @@ export function OrgsPage() {
     try {
       const org = await createOrg(newName.trim(), newSlug.trim());
       setOrgs((prev) => [...prev, org]);
+      // The shell's org switcher and the no-organization page read this cache.
+      await queryClient.invalidateQueries({ queryKey: ['orgs'] });
       setShowCreate(false);
       setNewName('');
       setNewSlug('');

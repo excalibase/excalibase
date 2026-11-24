@@ -32,6 +32,15 @@ describe('inviteToken', () => {
     expect(inviteToken('https://app.example.test/register?x=1&invite=a%2Bb')).toBe('a+b');
     expect(inviteToken('   ')).toBe('');
   });
+
+  test('a link with no invite gives no code', () => {
+    expect(inviteToken('https://app.example.test/login')).toBe('');
+  });
+
+  test('takes the code from the relative link the server sends', () => {
+    expect(inviteToken('/register?invite=rel-1')).toBe('rel-1');
+    expect(inviteToken('/login?invite=a%2Bb&x=1')).toBe('a+b');
+  });
 });
 
 describe('NoOrganization', () => {

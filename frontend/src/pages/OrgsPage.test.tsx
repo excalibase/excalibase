@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Link, MemoryRouter } from 'react-router-dom';
 import { OrgsPage } from './OrgsPage';
 import { listMyOrgs, createOrg } from '../api/orgs';
@@ -16,9 +17,11 @@ vi.mock('react-router-dom', async () => {
 function renderAt(path: string) {
   vi.mocked(listMyOrgs).mockResolvedValue([]);
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <OrgsPage />
-    </MemoryRouter>,
+    <QueryClientProvider client={new QueryClient()}>
+      <MemoryRouter initialEntries={[path]}>
+        <OrgsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -35,10 +38,12 @@ describe('OrgsPage — create', () => {
   test('following a ?new=1 link from the open list opens the create form', async () => {
     vi.mocked(listMyOrgs).mockResolvedValue([]);
     render(
-      <MemoryRouter initialEntries={['/orgs']}>
-        <Link to="/orgs?new=1">create elsewhere</Link>
-        <OrgsPage />
-      </MemoryRouter>,
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={['/orgs']}>
+          <Link to="/orgs?new=1">create elsewhere</Link>
+          <OrgsPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
     await screen.findByText('No organizations yet.');
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
