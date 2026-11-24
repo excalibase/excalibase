@@ -18,7 +18,7 @@ interface Props {
 export function SuspendReasonCode({ value, onChange }: Props) {
   return (
     <label className="block text-sm text-text-secondary">
-      Rule broken
+      <span>Rule broken</span>
       <select
         className="mt-1 w-full rounded-lg bg-bg-secondary border border-border-primary p-2 text-text-primary"
         value={value}
