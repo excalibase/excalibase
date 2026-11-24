@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -19,11 +20,24 @@ var customerSafeFailures = []string{
 	service.AddInterruptedReason,
 }
 
-// customerSafeFailurePrefixes cover reasons with a fixed opening and a backup
-// id after it: an in-place restore that stopped names the backup that holds
-// the customer's data (service/restore_in_place.go).
-var customerSafeFailurePrefixes = []string{
-	"the restore did not complete",
+// backupIDPattern is what a backup id looks like inside an in-place restore
+// sentence; anything else after the sentence's words makes it not ours.
+const backupIDPattern = `[A-Za-z0-9._:-]+`
+
+// customerSafeFailurePatterns match the in-place restore's own sentences
+// exactly, with only a backup id free. A sentence with anything appended, such
+// as the cause InPlaceRestoreError.Error() adds, matches none of them.
+var customerSafeFailurePatterns = []*regexp.Regexp{
+	exactSentence(service.RestoreStoppedReason),
+	exactSentence(service.RestoreFirewallDownFormat),
+	exactSentence(service.RestoreNotPutBackFormat),
+	exactSentence(service.RestorePutBackFormat),
+}
+
+// exactSentence anchors format, with its %s as a backup id.
+func exactSentence(format string) *regexp.Regexp {
+	quoted := regexp.QuoteMeta(format)
+	return regexp.MustCompile(`^` + strings.Replace(quoted, "%s", backupIDPattern, 1) + `$`)
 }
 
 // publicFailureMessage is text when it is one of our own sentences, else "".
@@ -33,8 +47,8 @@ func publicFailureMessage(text string) string {
 			return text
 		}
 	}
-	for _, prefix := range customerSafeFailurePrefixes {
-		if strings.HasPrefix(text, prefix) {
+	for _, pattern := range customerSafeFailurePatterns {
+		if pattern.MatchString(text) {
 			return text
 		}
 	}

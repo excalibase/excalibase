@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -28,7 +29,10 @@ func asRole(role string) func(http.Handler) http.Handler {
 
 // failingBuild serves create and add-database against a cluster that fails
 // the build with crashText, answering synchronously.
-func failingBuild(t *testing.T, role string) chi.Router {
+func failingBuild(t *testing.T, role string) chi.Router { return failingBuildWith(t, role, false) }
+
+// failingBuildWith can also hand the build to a runner that never runs it, as an async answer is.
+func failingBuildWith(t *testing.T, role string, heldBuild bool) chi.Router {
 	t.Helper()
 	mock := k8s.NewMockClient()
 	mock.CRDError = errors.New(crashText)
@@ -53,6 +57,10 @@ func failingBuild(t *testing.T, role string) chi.Router {
 	svc.SetOrgStore(orgs)
 	svc.SetCredentialVerifier(acceptingVerifier{})
 	withBackupTarget(t, svc)
+	if heldBuild {
+		svc.SetFeatures(features.NewStatic(features.OneTimeCredentials))
+		svc.SetBackgroundRunner(func(func()) {})
+	}
 	h := NewProvisioningHandler(svc, memberOfOrg1{orgs})
 	h.SetInstanceStore(store)
 	r := chi.NewRouter()
@@ -126,4 +134,25 @@ func TestARestoreAnswerHasTheKindForACustomerAndTheTextForStaff(t *testing.T) {
 	assertCustomerView(t, "restore", decodeFailure(t, customer.Body.String()), customer.Body.String())
 	staff := restoreWithoutOrchestrator(t, "platform_operator")
 	assertStaffView(t, "restore (staff)", decodeFailure(t, staff.Body.String()))
+}
+
+// An add answered before its build runs is 202 with the project PROVISIONING
+// and the owner password shown once; it carries no failure, and goes through
+// the same answer as the synchronous one.
+func TestAnAsyncAddDatabaseAnswersAcceptedWithThePasswordAndNoFailure(t *testing.T) {
+	r := failingBuildWith(t, "user", true)
+	req := httptest.NewRequest(http.MethodPost, "/api/provision/apps-only/database", strings.NewReader(failAddBody))
+	req.Header.Set("Prefer", "respond-async")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("got %d %s, want 202", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"password"`) || !strings.Contains(body, "PROVISIONING") {
+		t.Errorf("an accepted add shows the project and its password once: %s", body)
+	}
+	if got := decodeFailure(t, body); got.FailureReason != "" || got.RollbackLog != "" || strings.Contains(body, "CrashLoopBackOff") {
+		t.Errorf("an accepted add carries no failure text: %s", body)
+	}
 }

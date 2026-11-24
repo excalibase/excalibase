@@ -198,7 +198,10 @@ func TestOnlyOurOwnSentencesReachACustomerAsFailureMessage(t *testing.T) {
 	safe := []string{
 		service.ErrPauseBackupNotCompleted.Error(), service.ErrPauseNotObserved.Error(), service.ErrResumeNotObserved.Error(),
 		service.AddInterruptedReason,
-		"the restore did not complete and the database could not be put back automatically; its data from just before the restore is in backup b-1 — restore that backup into this project",
+		service.RestoreStoppedReason,
+		fmt.Sprintf(service.RestoreFirewallDownFormat, "b-1"),
+		fmt.Sprintf(service.RestoreNotPutBackFormat, "backup_2024.11:25-x"),
+		fmt.Sprintf(service.RestorePutBackFormat, "b-1"),
 	}
 	for _, text := range safe {
 		customer := visibleTo(userContext("user"), &domain.DatabaseInstance{ProjectID: "p1", FailureReason: text})
@@ -206,7 +209,16 @@ func TestOnlyOurOwnSentencesReachACustomerAsFailureMessage(t *testing.T) {
 			t.Errorf("%q: message %q reason %q", text, customer.FailureMessage, customer.FailureReason)
 		}
 	}
-	for _, text := range []string{crashText, "the restore failed: s3 AccessDenied bucket x", "pause cancelled: raw cluster text"} {
+	unsafe := []string{
+		crashText, "the restore failed: s3 AccessDenied bucket x", "pause cancelled: raw cluster text",
+		// the sentence with anything after it, or a backup id with anything else in it
+		service.RestoreStoppedReason + ": pods \"p1-postgres-1\" in namespace org1-p1 OOMKilled",
+		fmt.Sprintf(service.RestorePutBackFormat, "b-1 pod p1-postgres-1"),
+		fmt.Sprintf(service.RestorePutBackFormat, "b-1") + " org1-p1",
+		"the restore did not complete",
+		"prefix: " + service.RestoreStoppedReason,
+	}
+	for _, text := range unsafe {
 		customer := visibleTo(userContext("user"), &domain.DatabaseInstance{ProjectID: "p1", FailureReason: text})
 		if customer.FailureMessage != "" {
 			t.Errorf("%q must not reach a customer as a message, got %q", text, customer.FailureMessage)
@@ -244,5 +256,20 @@ func TestAFailureWithNoTextHasNoKind(t *testing.T) {
 	customer := visibleTo(context.Background(), &domain.DatabaseInstance{ProjectID: "p1"})
 	if customer.FailureKind != "" {
 		t.Errorf("a healthy project has failureKind %q", customer.FailureKind)
+	}
+}
+
+// InPlaceRestoreError.Error() is the sentence plus its cause; a stored reason
+// written from it would carry the cause, so it must not read as our sentence.
+func TestAnInPlaceRestoreErrorWithItsCauseIsNotACustomerMessage(t *testing.T) {
+	cause := errors.New(`pods "p1-postgres-1" in namespace org1-p1 OOMKilled`)
+	for _, public := range []string{service.RestoreStoppedReason, fmt.Sprintf(service.RestorePutBackFormat, "b-1")} {
+		text := (&service.InPlaceRestoreError{Public: public, Cause: cause}).Error()
+		if got := publicFailureMessage(text); got != "" {
+			t.Errorf("%q reads as a customer message: %q", text, got)
+		}
+		if got := publicFailureMessage((&service.InPlaceRestoreError{Public: public}).Error()); got != public {
+			t.Errorf("the sentence alone should read as ours, got %q", got)
+		}
 	}
 }

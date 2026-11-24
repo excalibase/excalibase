@@ -126,5 +126,13 @@
  {
   "text": "ImagePullBackOff, Unschedulable",
   "kind": "image"
+ },
+ {
+  "text": "ErrImagePull while the PVC was pending",
+  "kind": "storage"
+ },
+ {
+  "text": "FailedMount, then ImagePullBackOff",
+  "kind": "storage"
  }
 ]

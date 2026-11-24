@@ -76,4 +76,9 @@ describe('DatabaseServiceCard, failed provisioning', () => {
     await screen.findByTestId('service-database-empty');
     expect(screen.queryByText(/Provisioning failed|tell us/)).not.toBeInTheDocument();
   });
+
+  test('a failed database shows the server sentence as it is', async () => {
+    renderCard({ databaseType: 'POSTGRESQL', postgresVersion: '17', status: 'FAILED', currentStage: 'FAILED', failureKind: 'unknown', failureMessage: 'the restore did not complete; restore again from Backups' });
+    expect(await screen.findByText('the restore did not complete; restore again from Backups')).toBeInTheDocument();
+  });
 });
