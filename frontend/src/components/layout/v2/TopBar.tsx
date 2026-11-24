@@ -32,7 +32,7 @@ export function TopBar({ left, onSearch }: { readonly left: ReactNode; readonly 
       </Link>
       {left}
       <button type="button" onClick={onSearch} aria-label="Search"
-        className="flex flex-1 basis-64 max-w-xl items-center gap-2 rounded-lg border border-border-primary bg-bg-secondary px-3 min-h-9 text-left text-sm text-text-tertiary hover:bg-surface-hover">
+        className="flex min-w-0 flex-1 basis-64 max-w-xl items-center gap-2 rounded-lg border border-border-primary bg-bg-secondary px-3 min-h-9 text-left text-sm text-text-tertiary hover:bg-surface-hover">
         <Search className="w-4 h-4" aria-hidden="true" />
         <span className="flex-1 truncate">Search projects, services, settings and docs</span>
         <kbd className="rounded border border-border-primary px-1.5 text-[11px]">⌘K</kbd>
