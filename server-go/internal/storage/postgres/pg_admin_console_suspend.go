@@ -29,7 +29,7 @@ func (a *AdminConsole) FindUser(ctx context.Context, id string) (*adminconsole.U
 // projects it created itself.
 func (a *AdminConsole) OwnedApps(ctx context.Context, userID string) ([]adminconsole.OwnedApp, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT ap.project_id, ap.id, ap.name, ap.status, COALESCE((ap.doc->>'replicas')::int, 0)
+		SELECT ap.project_id, ap.id, ap.name, ap.status, COALESCE((ap.doc->>'replicas')::int, 0), COALESCE(di.project_name, '')
 		FROM apps ap
 		JOIN database_instances di ON di.project_id = ap.project_id
 		JOIN orgs o ON o.id = di.org_id
@@ -42,7 +42,7 @@ func (a *AdminConsole) OwnedApps(ctx context.Context, userID string) ([]admincon
 	out := []adminconsole.OwnedApp{}
 	for rows.Next() {
 		var app adminconsole.OwnedApp
-		if err := rows.Scan(&app.ProjectID, &app.AppID, &app.Name, &app.Status, &app.Replicas); err != nil {
+		if err := rows.Scan(&app.ProjectID, &app.AppID, &app.Name, &app.Status, &app.Replicas, &app.ProjectName); err != nil {
 			return nil, err
 		}
 		out = append(out, app)
@@ -58,9 +58,9 @@ func (a *AdminConsole) Suspend(ctx context.Context, suspension adminconsole.Susp
 			return fmt.Errorf("deactivate: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO abuse_suspensions (user_id, email, reason, suspended_at) VALUES ($1, $2, $3, $4)
-			ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email, reason = EXCLUDED.reason, suspended_at = EXCLUDED.suspended_at`,
-			suspension.UserID, suspension.Email, suspension.Reason, suspension.At); err != nil {
+			INSERT INTO abuse_suspensions (user_id, email, reason, reason_code, suspended_at) VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email, reason = EXCLUDED.reason, reason_code = EXCLUDED.reason_code, suspended_at = EXCLUDED.suspended_at`,
+			suspension.UserID, suspension.Email, suspension.Reason, string(suspension.Code), suspension.At); err != nil {
 			return fmt.Errorf("record suspension: %w", err)
 		}
 		return recordSuspendedApps(ctx, tx, suspension.UserID, apps)

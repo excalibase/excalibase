@@ -1977,7 +1977,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		apps: appBuildArgs{internal: internalRegistry, registry: appRegistry, deploys: appDeploySvc,
 			apps: apphost.NewPostgresAppStore(sqlStore.DB()), limits: service.NewAppBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
 			platformDB: sqlStore.DB()}})
-	adminConsole, suspensions := buildAdminConsole(sqlStore, appRuntime, appDeploySvc)
+	adminConsole, suspensions := buildAdminConsole(cfg, sqlStore, appRuntime, appDeploySvc, emailSender)
 	// Revoking an org suspends its owner through the same operation the console uses.
 	adminHandler.SetOwnerSuspender(suspensions)
 	return &handlerDeps{

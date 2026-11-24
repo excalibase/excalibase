@@ -53,7 +53,7 @@ type ProjectFactsLookup func(ctx context.Context) (map[string]adminconsole.Proje
 // OwnerSuspender is the one suspend operation the console uses; revoking an
 // org goes through it so the owner's account is blocked the same way.
 type OwnerSuspender interface {
-	Suspend(ctx context.Context, actor adminconsole.Actor, userID, reason string) (*adminconsole.Result, error)
+	Suspend(ctx context.Context, actor adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error)
 }
 
 // SetOwnerSuspender wires the suspension a revoke applies to the org's owner.
@@ -344,7 +344,7 @@ func (h *AdminHandler) suspendOwner(w http.ResponseWriter, r *http.Request, org 
 		return false
 	}
 	actor := adminconsole.Actor{ID: extractUserID(r), IP: clientIP(r)}
-	if _, err := h.suspender.Suspend(r.Context(), actor, org.OwnerID, "org revoked: "+reason); err != nil {
+	if _, err := h.suspender.Suspend(r.Context(), actor, org.OwnerID, adminconsole.Reason{Code: adminconsole.ReasonOther, Text: "org revoked: " + reason}); err != nil {
 		switch {
 		case errors.Is(err, adminconsole.ErrProtectedAccount):
 			httpError(w, "the org's owner is a platform account and cannot be suspended; nothing was deleted", http.StatusConflict)

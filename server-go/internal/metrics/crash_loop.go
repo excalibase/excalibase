@@ -17,3 +17,16 @@ var crashLoopTrips = promauto.NewCounterVec(
 
 // CrashLoopTripped records one workload over the threshold.
 func CrashLoopTripped(kind string) { crashLoopTrips.WithLabelValues(kind).Inc() }
+
+// suspensionMails counts the mails an account suspension sends to the account
+// holder, so a mail that keeps failing is seen (EXC-841).
+var suspensionMails = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "excalibase_suspension_mail_total",
+		Help: "Suspension mails to account holders, by outcome: sent or failed.",
+	},
+	[]string{"outcome"},
+)
+
+// SuspensionMail records one suspension mail's outcome.
+func SuspensionMail(outcome string) { suspensionMails.WithLabelValues(outcome).Inc() }

@@ -53,6 +53,8 @@ type OwnedApp struct {
 	Name      string
 	Status    string
 	Replicas  int
+	// ProjectName is what the owner sees the project called.
+	ProjectName string
 }
 
 // Suspension is the abuse_suspensions row.
@@ -60,6 +62,7 @@ type Suspension struct {
 	UserID string
 	Email  string
 	Reason string
+	Code   ReasonCode
 	At     time.Time
 }
 
@@ -70,6 +73,8 @@ type SuspendedApp struct {
 	AppID            string `json:"appId"`
 	AppName          string `json:"appName"`
 	PreviousReplicas int    `json:"previousReplicas"`
+	// ProjectName only feeds the account holder's mail; it is not stored.
+	ProjectName string `json:"-"`
 }
 
 // SuspensionStore persists a suspension. Suspend and Unsuspend each change the
@@ -120,17 +125,24 @@ type SuspensionService struct {
 	apps  AppControl
 	audit AuditWriter
 	now   func() time.Time
+
+	notifier    SuspensionNotifier
+	mailEnabled func(context.Context) bool
 }
 
 func NewSuspensionService(store SuspensionStore, apps AppControl, audit AuditWriter) *SuspensionService {
 	return &SuspensionService{store: store, apps: apps, audit: audit, now: time.Now}
 }
 
-// Suspend blocks the account, writes the suspension and stops the apps it
-// runs. The block comes first and stands whatever happens to the apps: an app
+// Suspend blocks the account, writes the suspension, stops the apps it runs
+// and, while the mail flag is on, tells the account holder which rule it broke. The block comes first and stands whatever happens to the apps: an app
 // that will not stop is reported, never a reason to leave the account usable.
-func (s *SuspensionService) Suspend(ctx context.Context, actor Actor, userID, reason string) (*Result, error) {
-	reason, err := cleanReason(reason)
+func (s *SuspensionService) Suspend(ctx context.Context, actor Actor, userID string, why Reason) (*Result, error) {
+	reason, err := cleanReason(why.Text)
+	if err != nil {
+		return nil, err
+	}
+	code, err := ParseReasonCode(string(why.Code))
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +159,7 @@ func (s *SuspensionService) Suspend(ctx context.Context, actor Actor, userID, re
 	// The suspension is written first: it is what refuses the org's other
 	// members, so an app created while the list is read is refused too. A
 	// failure after it leaves the account suspended; suspending again retries.
-	suspension := Suspension{UserID: userID, Email: user.Email, Reason: reason, At: s.now().UTC()}
+	suspension := Suspension{UserID: userID, Email: user.Email, Reason: reason, Code: code, At: s.now().UTC()}
 	if err := s.store.Suspend(ctx, suspension, nil); err != nil {
 		return nil, fmt.Errorf("suspend account: %w", err)
 	}
@@ -169,6 +181,7 @@ func (s *SuspensionService) Suspend(ctx context.Context, actor Actor, userID, re
 		}
 		result.AppsStopped = append(result.AppsStopped, app)
 	}
+	s.notify(ctx, user, code, result.AppsStopped)
 	return result, nil
 }
 
@@ -228,7 +241,7 @@ func appsThatMayRun(owned []OwnedApp) []SuspendedApp {
 	out := []SuspendedApp{}
 	for _, app := range owned {
 		if app.Status == apphost.StatusRunning || app.Status == apphost.StatusFailed || app.Status == apphost.StatusPausing {
-			out = append(out, SuspendedApp{ProjectID: app.ProjectID, AppID: app.AppID, AppName: app.Name, PreviousReplicas: app.Replicas})
+			out = append(out, SuspendedApp{ProjectID: app.ProjectID, AppID: app.AppID, AppName: app.Name, PreviousReplicas: app.Replicas, ProjectName: app.ProjectName})
 		}
 	}
 	return out

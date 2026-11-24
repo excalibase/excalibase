@@ -152,8 +152,8 @@ export const listConsoleOrgs = async (query: ListQuery) =>
 export const getProjectDetail = async (projectId: string, reason: string) =>
   (await api.get<ProjectDetail>(`/admin/console/projects/${projectId}`, { params: { reason } })).data;
 
-export const suspendUser = async (userId: string, reason: string) =>
-  (await api.post<SuspendResult>(`/admin/console/users/${userId}/suspend`, { reason })).data;
+export const suspendUser = async (userId: string, reason: string, reasonCode?: string) =>
+  (await api.post<SuspendResult>(`/admin/console/users/${userId}/suspend`, reasonCode ? { reason, reasonCode } : { reason })).data;
 
 export const unsuspendUser = async (userId: string, reason: string) =>
   (await api.post<SuspendResult>(`/admin/console/users/${userId}/unsuspend`, { reason })).data;

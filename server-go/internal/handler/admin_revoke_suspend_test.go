@@ -25,9 +25,9 @@ type fakeOwnerSuspender struct {
 	calls          int
 }
 
-func (f *fakeOwnerSuspender) Suspend(_ context.Context, _ adminconsole.Actor, userID, reason string) (*adminconsole.Result, error) {
+func (f *fakeOwnerSuspender) Suspend(_ context.Context, _ adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error) {
 	f.calls++
-	f.userID, f.reason = userID, reason
+	f.userID, f.reason = userID, reason.Text
 	return &adminconsole.Result{}, f.err
 }
 
