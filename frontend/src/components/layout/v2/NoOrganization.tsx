@@ -8,7 +8,7 @@ import { Button } from '../../Button';
 // An invite arrives as a link with ?invite=<code>; a bare code works too.
 export function inviteToken(input: string): string {
   const text = input.trim();
-  if (!/^(https?:\/\/|\/)/.test(text)) return text;
+  if (!/^(https?:\/\/|\/)/i.test(text)) return text;
   try {
     // A relative link is the server's own form; it is read against this site.
     return new URL(text, globalThis.location.origin).searchParams.get('invite') ?? '';

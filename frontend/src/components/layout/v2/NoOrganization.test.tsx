@@ -33,6 +33,10 @@ describe('inviteToken', () => {
     expect(inviteToken('   ')).toBe('');
   });
 
+  test('reads the scheme in any case', () => {
+    expect(inviteToken('HTTPS://app.example.test/login?invite=up-1')).toBe('up-1');
+  });
+
   test('a link with no invite gives no code', () => {
     expect(inviteToken('https://app.example.test/login')).toBe('');
   });
