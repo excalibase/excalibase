@@ -41,13 +41,13 @@ func (f *fakeConsole) Project(_ context.Context, actor adminconsole.Actor, proje
 
 type fakeSuspender struct {
 	suspended   []string
-	reason      string
+	reason      adminconsole.Reason
 	actor       adminconsole.Actor
 	unsuspended []string
 	err         error
 }
 
-func (f *fakeSuspender) Suspend(_ context.Context, actor adminconsole.Actor, userID, reason string) (*adminconsole.Result, error) {
+func (f *fakeSuspender) Suspend(_ context.Context, actor adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error) {
 	f.suspended, f.reason, f.actor = append(f.suspended, userID), reason, actor
 	return &adminconsole.Result{UserID: userID, Status: adminconsole.StatusSuspended}, f.err
 }
@@ -129,7 +129,7 @@ func TestAdminConsole_SuspendPassesTheReasonAndTheActor(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d: %s", w.Code, w.Body.String())
 	}
-	if len(suspender.suspended) != 1 || suspender.suspended[0] != "u7" || suspender.reason != "proxy abuse" || suspender.actor.ID != "boss" {
+	if len(suspender.suspended) != 1 || suspender.suspended[0] != "u7" || suspender.reason.Text != "proxy abuse" || suspender.actor.ID != "boss" {
 		t.Fatalf("suspender = %+v", suspender)
 	}
 	var body adminconsole.Result
@@ -230,5 +230,34 @@ func TestAdminConsole_OnlyASessionMayCall(t *testing.T) {
 		if w := consoleCall(r, http.MethodGet, "/api/admin/console/users", ""); w.Code != http.StatusForbidden {
 			t.Errorf("%s: code = %d, want 403", name, w.Code)
 		}
+	}
+}
+
+func TestAdminConsole_SuspendPassesTheReasonCode(t *testing.T) {
+	suspender := &fakeSuspender{}
+	router := consoleRouter("platform_admin", &fakeConsole{}, suspender)
+
+	w := consoleCall(router, http.MethodPost, "/api/admin/console/users/u7/suspend", `{"reason":"xmrig in the image","reasonCode":"crypto_mining"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", w.Code, w.Body.String())
+	}
+	if suspender.reason.OrgClosed || suspender.reason.Code != adminconsole.ReasonCryptoMining || suspender.reason.Text != "xmrig in the image" {
+		t.Fatalf("reason = %+v", suspender.reason)
+	}
+}
+
+func TestAdminConsole_SuspendWithoutACodeLeavesItToTheService(t *testing.T) {
+	suspender := &fakeSuspender{}
+	consoleCall(consoleRouter("platform_admin", &fakeConsole{}, suspender), http.MethodPost, "/api/admin/console/users/u7/suspend", `{"reason":"proxy abuse"}`)
+	if suspender.reason.Code != "" {
+		t.Fatalf("code = %q, the service defaults it", suspender.reason.Code)
+	}
+}
+
+func TestAdminConsole_SuspendRefusesAnUnknownCode(t *testing.T) {
+	suspender := &fakeSuspender{err: adminconsole.ErrReasonCodeUnknown}
+	w := consoleCall(consoleRouter("platform_admin", &fakeConsole{}, suspender), http.MethodPost, "/api/admin/console/users/u7/suspend", `{"reason":"proxy abuse","reasonCode":"because"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d: %s", w.Code, w.Body.String())
 	}
 }

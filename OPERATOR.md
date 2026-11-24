@@ -1413,3 +1413,17 @@ search-replace will quietly drop it.
 | `GET /api/capacity` | platform_admin | Cluster CPU/mem allocatable, requested, free, per-tier project headroom |
 | `GET /api/admin/projects` | platform_admin | Every project across orgs with live CPU/mem |
 | Grafana → Excalibase folder | grafana admin | Per-service dashboards (Auth, GraphQL, Provisioning, CNPG) with per-tenant filtering |
+
+## Suspending an account
+
+Suspend from the admin console (or by revoking an org); both use one operation
+that deactivates the account, records the row in `abuse_suspensions`, stops its
+apps and, with `FEATURE_SUSPENSIONEMAILS=true`, emails the account holder.
+`POST /api/admin/console/users/{id}/suspend` takes `reason` (required, audited)
+and `reasonCode`: `proxy_vpn`, `crypto_mining`, `spam_or_phishing`,
+`disposable_email` or `other` (the default). The mail names the stopped
+projects and apps, links `ACCEPTABLE_USE_URL#<reasonCode>` and tells the holder
+to reply to `SUPPORT_EMAIL`. A mail failure is logged and counted in
+`excalibase_suspension_mail_total{outcome="failed"}`; the suspension stands.
+Suspensions made before the flag was on are never mailed. A crash-loop stop is
+not a suspension and has its own mail.

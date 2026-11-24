@@ -23,7 +23,7 @@ type ConsoleReads interface {
 
 // ConsoleActions is the one write the console makes.
 type ConsoleActions interface {
-	Suspend(ctx context.Context, actor adminconsole.Actor, userID, reason string) (*adminconsole.Result, error)
+	Suspend(ctx context.Context, actor adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error)
 	Unsuspend(ctx context.Context, actor adminconsole.Actor, userID, reason string) (*adminconsole.Result, error)
 }
 
@@ -162,10 +162,15 @@ func (h *AdminConsoleHandler) Project(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminConsoleHandler) Suspend(w http.ResponseWriter, r *http.Request) {
-	reason, ok := decodeReason(w, r)
-	if !ok {
+	var body struct {
+		Reason     string `json:"reason"`
+		ReasonCode string `json:"reasonCode"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+	reason := adminconsole.Reason{Code: adminconsole.ReasonCode(body.ReasonCode), Text: body.Reason}
 	result, err := h.actions.Suspend(r.Context(), consoleActor(r), chi.URLParam(r, "userId"), reason)
 	if err != nil {
 		consoleFailure(w, "suspend", err)
@@ -224,7 +229,7 @@ func consoleFailure(w http.ResponseWriter, what string, err error) {
 	switch {
 	case errors.Is(err, adminconsole.ErrUserNotFound), errors.Is(err, adminconsole.ErrProjectNotFound):
 		httpError(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, adminconsole.ErrReasonRequired), errors.Is(err, adminconsole.ErrReasonTooLong), errors.Is(err, adminconsole.ErrInvalidQuery):
+	case errors.Is(err, adminconsole.ErrReasonRequired), errors.Is(err, adminconsole.ErrReasonTooLong), errors.Is(err, adminconsole.ErrReasonCodeUnknown), errors.Is(err, adminconsole.ErrInvalidQuery):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, adminconsole.ErrProtectedAccount):
 		httpError(w, err.Error(), http.StatusConflict)

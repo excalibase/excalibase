@@ -114,6 +114,10 @@ type AppConfig struct {
 	// so per-deployment overrides don't require touching the secret.
 	EmailFromAddress string
 	EmailFromName    string
+	// SupportEmail is where a suspended account holder appeals; AcceptableUseURL
+	// is the policy page their mail links to, one anchor per rule (EXC-841).
+	SupportEmail     string
+	AcceptableUseURL string
 	EmailProductName string
 	EmailReplyTo     string
 	StoragePublicURL string
@@ -550,6 +554,8 @@ func load() AppConfig {
 		PodNamespace:                   os.Getenv("POD_NAMESPACE"),
 		EmailFromAddress:               envOr("EMAIL_FROM", "noreply@excalibase.io"),
 		EmailFromName:                  envOr("EMAIL_FROM_NAME", "Excalibase"),
+		SupportEmail:                   envOr("SUPPORT_EMAIL", "hello@excalibase.io"),
+		AcceptableUseURL:               envOr("ACCEPTABLE_USE_URL", "https://excalibase.io/acceptable-use"),
 		EmailProductName:               envOr("EMAIL_PRODUCT_NAME", "Excalibase"),
 		EmailReplyTo:                   envOr("EMAIL_REPLY_TO", ""),
 		StoragePublicURL:               envOr("STORAGE_PUBLIC_URL", ""),

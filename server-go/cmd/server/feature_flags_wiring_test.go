@@ -192,6 +192,8 @@ var darkWork = map[features.Feature]string{
 	features.AppImagePin: "TestDeployApp_FlagOffLeavesTheDeployUnchanged",
 	// Off, no guard is started (cmd/server).
 	features.CrashLoopGuard: "TestCrashGuard_WantedOnlyWithHostingAndTheFlag",
+	// Off, a suspension sends no mail (internal/adminconsole).
+	features.SuspensionEmails: "TestSuspendSendsNothingWhileTheFlagIsOff",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }

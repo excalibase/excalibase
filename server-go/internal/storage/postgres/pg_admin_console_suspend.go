@@ -13,9 +13,9 @@ import (
 func (a *AdminConsole) FindUser(ctx context.Context, id string) (*adminconsole.UserRef, error) {
 	var user adminconsole.UserRef
 	err := a.db.QueryRowContext(ctx, `
-		SELECT u.id, u.email, u.role, u.active, s.user_id IS NOT NULL
+		SELECT u.id, u.email, u.role, u.active, s.user_id IS NOT NULL, s.mail_sent_at IS NOT NULL
 		FROM users u LEFT JOIN abuse_suspensions s ON s.user_id = u.id
-		WHERE u.id = $1 AND u.kind = 'human'`, id).Scan(&user.ID, &user.Email, &user.Role, &user.Active, &user.Suspended)
+		WHERE u.id = $1 AND u.kind = 'human'`, id).Scan(&user.ID, &user.Email, &user.Role, &user.Active, &user.Suspended, &user.MailSent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -29,7 +29,7 @@ func (a *AdminConsole) FindUser(ctx context.Context, id string) (*adminconsole.U
 // projects it created itself.
 func (a *AdminConsole) OwnedApps(ctx context.Context, userID string) ([]adminconsole.OwnedApp, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT ap.project_id, ap.id, ap.name, ap.status, COALESCE((ap.doc->>'replicas')::int, 0)
+		SELECT ap.project_id, ap.id, ap.name, ap.status, COALESCE((ap.doc->>'replicas')::int, 0), COALESCE(di.project_name, '')
 		FROM apps ap
 		JOIN database_instances di ON di.project_id = ap.project_id
 		JOIN orgs o ON o.id = di.org_id
@@ -42,7 +42,7 @@ func (a *AdminConsole) OwnedApps(ctx context.Context, userID string) ([]admincon
 	out := []adminconsole.OwnedApp{}
 	for rows.Next() {
 		var app adminconsole.OwnedApp
-		if err := rows.Scan(&app.ProjectID, &app.AppID, &app.Name, &app.Status, &app.Replicas); err != nil {
+		if err := rows.Scan(&app.ProjectID, &app.AppID, &app.Name, &app.Status, &app.Replicas, &app.ProjectName); err != nil {
 			return nil, err
 		}
 		out = append(out, app)
@@ -58,9 +58,9 @@ func (a *AdminConsole) Suspend(ctx context.Context, suspension adminconsole.Susp
 			return fmt.Errorf("deactivate: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO abuse_suspensions (user_id, email, reason, suspended_at) VALUES ($1, $2, $3, $4)
-			ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email, reason = EXCLUDED.reason, suspended_at = EXCLUDED.suspended_at`,
-			suspension.UserID, suspension.Email, suspension.Reason, suspension.At); err != nil {
+			INSERT INTO abuse_suspensions (user_id, email, reason, reason_code, suspended_at) VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email, reason = EXCLUDED.reason, reason_code = EXCLUDED.reason_code, suspended_at = EXCLUDED.suspended_at`,
+			suspension.UserID, suspension.Email, suspension.Reason, string(suspension.Code), suspension.At); err != nil {
 			return fmt.Errorf("record suspension: %w", err)
 		}
 		return recordSuspendedApps(ctx, tx, suspension.UserID, apps)
@@ -87,6 +87,61 @@ func recordSuspendedApps(ctx context.Context, tx *sql.Tx, userID string, apps []
 	return nil
 }
 
+// ClaimMail settles the suspension mail for the one caller that finds it
+// unsettled; a concurrent caller gets false.
+func (a *AdminConsole) ClaimMail(ctx context.Context, userID string) (bool, error) {
+	result, err := a.db.ExecContext(ctx, `UPDATE abuse_suspensions SET mail_sent_at = NOW() WHERE user_id = $1 AND mail_sent_at IS NULL`, userID)
+	if err != nil {
+		return false, err
+	}
+	claimed, err := result.RowsAffected()
+	return claimed == 1, err
+}
+
+// ReleaseMail makes the mail owed again after a send that failed.
+func (a *AdminConsole) ReleaseMail(ctx context.Context, userID string) error {
+	_, err := a.db.ExecContext(ctx, `UPDATE abuse_suspensions SET mail_sent_at = NULL WHERE user_id = $1`, userID)
+	return err
+}
+
+// ClaimClosureMail records that the closure mail of this org is being sent; a
+// second caller gets false. A claim that was never finished (a crash mid-send)
+// is taken over after five minutes. The row outlives an unsuspend: an org is
+// closed once.
+func (a *AdminConsole) ClaimClosureMail(ctx context.Context, userID, orgID string) (bool, error) {
+	result, err := a.db.ExecContext(ctx, `
+		INSERT INTO abuse_org_closures (user_id, org_id) VALUES ($1, $2)
+		ON CONFLICT (user_id, org_id) DO UPDATE SET claimed_at = NOW()
+		WHERE abuse_org_closures.sent_at IS NULL AND abuse_org_closures.claimed_at < NOW() - INTERVAL '5 minutes'`, userID, orgID)
+	if err != nil {
+		return false, err
+	}
+	claimed, err := result.RowsAffected()
+	return claimed == 1, err
+}
+
+// MarkClosureMailSent records that the claimed mail went out.
+func (a *AdminConsole) MarkClosureMailSent(ctx context.Context, userID, orgID string) error {
+	_, err := a.db.ExecContext(ctx, `UPDATE abuse_org_closures SET sent_at = NOW() WHERE user_id = $1 AND org_id = $2`, userID, orgID)
+	return err
+}
+
+// ClosureMailSent says whether the claimed mail went out.
+func (a *AdminConsole) ClosureMailSent(ctx context.Context, userID, orgID string) (bool, error) {
+	var sent bool
+	err := a.db.QueryRowContext(ctx, `SELECT sent_at IS NOT NULL FROM abuse_org_closures WHERE user_id = $1 AND org_id = $2`, userID, orgID).Scan(&sent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return sent, err
+}
+
+// ReleaseClosureMail makes the closure mail owed again after a send that failed.
+func (a *AdminConsole) ReleaseClosureMail(ctx context.Context, userID, orgID string) error {
+	_, err := a.db.ExecContext(ctx, `DELETE FROM abuse_org_closures WHERE user_id = $1 AND org_id = $2`, userID, orgID)
+	return err
+}
+
 // Unsuspend reactivates the account and removes the suspension. The app
 // records stay until each app is resumed.
 func (a *AdminConsole) Unsuspend(ctx context.Context, userID string) error {
@@ -103,8 +158,9 @@ func (a *AdminConsole) Unsuspend(ctx context.Context, userID string) error {
 
 func (a *AdminConsole) SuspendedApps(ctx context.Context, userID string) ([]adminconsole.SuspendedApp, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT project_id, app_id, app_name, previous_replicas FROM abuse_suspension_apps
-		WHERE user_id = $1 ORDER BY project_id, app_id`, userID)
+		SELECT sa.project_id, sa.app_id, sa.app_name, sa.previous_replicas, COALESCE(di.project_name, '')
+		FROM abuse_suspension_apps sa LEFT JOIN database_instances di ON di.project_id = sa.project_id
+		WHERE sa.user_id = $1 ORDER BY sa.project_id, sa.app_id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +168,7 @@ func (a *AdminConsole) SuspendedApps(ctx context.Context, userID string) ([]admi
 	out := []adminconsole.SuspendedApp{}
 	for rows.Next() {
 		var app adminconsole.SuspendedApp
-		if err := rows.Scan(&app.ProjectID, &app.AppID, &app.AppName, &app.PreviousReplicas); err != nil {
+		if err := rows.Scan(&app.ProjectID, &app.AppID, &app.AppName, &app.PreviousReplicas, &app.ProjectName); err != nil {
 			return nil, err
 		}
 		out = append(out, app)

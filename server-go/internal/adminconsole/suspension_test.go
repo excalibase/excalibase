@@ -11,23 +11,31 @@ import (
 )
 
 type fakeSuspensions struct {
-	mu        sync.Mutex
-	users     map[string]*UserRef
-	owned     map[string][]OwnedApp
-	recorded  map[string][]SuspendedApp
-	reasons   map[string]string
-	suspended map[string]bool
+	mu          sync.Mutex
+	users       map[string]*UserRef
+	owned       map[string][]OwnedApp
+	recorded    map[string][]SuspendedApp
+	reasons     map[string]string
+	codes       map[string]ReasonCode
+	mailSent    map[string]bool
+	suspended   map[string]bool
+	closureSent map[string]bool
+	closureDone map[string]bool
 	// calls is the order the store was used in.
 	calls []string
 }
 
 func newFakeSuspensions() *fakeSuspensions {
 	return &fakeSuspensions{
-		users:     map[string]*UserRef{},
-		owned:     map[string][]OwnedApp{},
-		recorded:  map[string][]SuspendedApp{},
-		reasons:   map[string]string{},
-		suspended: map[string]bool{},
+		users:       map[string]*UserRef{},
+		owned:       map[string][]OwnedApp{},
+		recorded:    map[string][]SuspendedApp{},
+		reasons:     map[string]string{},
+		codes:       map[string]ReasonCode{},
+		mailSent:    map[string]bool{},
+		suspended:   map[string]bool{},
+		closureSent: map[string]bool{},
+		closureDone: map[string]bool{},
 	}
 }
 
@@ -40,6 +48,7 @@ func (f *fakeSuspensions) FindUser(_ context.Context, id string) (*UserRef, erro
 	}
 	copied := *u
 	copied.Suspended = f.suspended[id]
+	copied.MailSent = f.mailSent[id]
 	return &copied, nil
 }
 
@@ -63,8 +72,57 @@ func (f *fakeSuspensions) Suspend(_ context.Context, s Suspension, apps []Suspen
 	f.users[s.UserID].Active = false
 	f.suspended[s.UserID] = true
 	f.reasons[s.UserID] = s.Reason
+	f.codes[s.UserID] = s.Code
 	f.calls = append(f.calls, "suspend")
 	return nil
+}
+
+func (f *fakeSuspensions) ClaimMail(_ context.Context, userID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mailSent[userID] {
+		return false, nil
+	}
+	f.mailSent[userID] = true
+	return true, nil
+}
+
+func (f *fakeSuspensions) ReleaseMail(_ context.Context, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.mailSent, userID)
+	return nil
+}
+
+func (f *fakeSuspensions) ClaimClosureMail(_ context.Context, userID, orgID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := userID + "/" + orgID
+	if f.closureSent[key] {
+		return false, nil
+	}
+	f.closureSent[key] = true
+	return true, nil
+}
+
+func (f *fakeSuspensions) ReleaseClosureMail(_ context.Context, userID, orgID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.closureSent, userID+"/"+orgID)
+	return nil
+}
+
+func (f *fakeSuspensions) MarkClosureMailSent(_ context.Context, userID, orgID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closureDone[userID+"/"+orgID] = true
+	return nil
+}
+
+func (f *fakeSuspensions) ClosureMailSent(_ context.Context, userID, orgID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closureDone[userID+"/"+orgID], nil
 }
 
 func (f *fakeSuspensions) Unsuspend(_ context.Context, userID string) error {
@@ -72,6 +130,7 @@ func (f *fakeSuspensions) Unsuspend(_ context.Context, userID string) error {
 	defer f.mu.Unlock()
 	f.users[userID].Active = true
 	f.suspended[userID] = false
+	delete(f.mailSent, userID)
 	return nil
 }
 
@@ -95,6 +154,7 @@ func (f *fakeSuspensions) ForgetSuspendedApp(_ context.Context, userID, projectI
 }
 
 type fakeControl struct {
+	mu              sync.Mutex
 	paused, resumed []string
 	failPause       map[string]error
 	failResume      map[string]error
@@ -104,6 +164,8 @@ func (c *fakeControl) PauseApp(_ context.Context, projectID, appID string) (*app
 	if err := c.failPause[appID]; err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.paused = append(c.paused, projectID+"/"+appID)
 	return &apphost.App{ID: appID}, nil
 }
@@ -112,13 +174,20 @@ func (c *fakeControl) ResumeApp(_ context.Context, projectID, appID, _ string) (
 	if err := c.failResume[appID]; err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.resumed = append(c.resumed, projectID+"/"+appID)
 	return &apphost.App{ID: appID}, nil
 }
 
-type captureAudit struct{ entries []*domain.AuditEntry }
+type captureAudit struct {
+	mu      sync.Mutex
+	entries []*domain.AuditEntry
+}
 
 func (a *captureAudit) LogAudit(_ context.Context, e *domain.AuditEntry) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.entries = append(a.entries, e)
 	return nil
 }
@@ -142,7 +211,7 @@ var admin = Actor{ID: "boss", IP: "203.0.113.9"}
 func TestSuspendDeactivatesRecordsAndStopsRunningApps(t *testing.T) {
 	svc, store, control, audit := newSuspensionFixture()
 
-	result, err := svc.Suspend(context.Background(), admin, "victim", "proxy abuse")
+	result, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "proxy abuse"})
 	if err != nil {
 		t.Fatalf("Suspend: %v", err)
 	}
@@ -169,7 +238,7 @@ func TestSuspendDeactivatesRecordsAndStopsRunningApps(t *testing.T) {
 func TestSuspendWritesTheSuspensionBeforeListingTheApps(t *testing.T) {
 	svc, store, _, _ := newSuspensionFixture()
 
-	if _, err := svc.Suspend(context.Background(), admin, "victim", "proxy abuse"); err != nil {
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "proxy abuse"}); err != nil {
 		t.Fatalf("Suspend: %v", err)
 	}
 	if len(store.calls) < 2 || store.calls[0] != "suspend" || store.calls[1] != "owned" {
@@ -181,7 +250,7 @@ func TestSuspendKeepsTheAccountBlockedWhenAnAppWillNotStop(t *testing.T) {
 	svc, store, control, _ := newSuspensionFixture()
 	control.failPause["a3"] = errors.New("cluster busy")
 
-	result, err := svc.Suspend(context.Background(), admin, "victim", "proxy abuse")
+	result, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "proxy abuse"})
 	if err != nil {
 		t.Fatalf("a failed pause must not undo the suspension: %v", err)
 	}
@@ -195,7 +264,7 @@ func TestSuspendKeepsTheAccountBlockedWhenAnAppWillNotStop(t *testing.T) {
 
 func TestSuspendRefusesWithoutAReason(t *testing.T) {
 	svc, store, _, _ := newSuspensionFixture()
-	if _, err := svc.Suspend(context.Background(), admin, "victim", "  "); !errors.Is(err, ErrReasonRequired) {
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "  "}); !errors.Is(err, ErrReasonRequired) {
 		t.Fatalf("err = %v, want ErrReasonRequired", err)
 	}
 	if !store.users["victim"].Active {
@@ -205,24 +274,24 @@ func TestSuspendRefusesWithoutAReason(t *testing.T) {
 
 func TestSuspendRefusesPlatformAccountsAndYourself(t *testing.T) {
 	svc, _, _, _ := newSuspensionFixture()
-	if _, err := svc.Suspend(context.Background(), Actor{ID: "other"}, "boss", "x"); !errors.Is(err, ErrProtectedAccount) {
+	if _, err := svc.Suspend(context.Background(), Actor{ID: "other"}, "boss", Reason{Text: "x"}); !errors.Is(err, ErrProtectedAccount) {
 		t.Fatalf("platform account: err = %v", err)
 	}
-	if _, err := svc.Suspend(context.Background(), Actor{ID: "victim"}, "victim", "x"); !errors.Is(err, ErrProtectedAccount) {
+	if _, err := svc.Suspend(context.Background(), Actor{ID: "victim"}, "victim", Reason{Text: "x"}); !errors.Is(err, ErrProtectedAccount) {
 		t.Fatalf("self: err = %v", err)
 	}
 }
 
 func TestSuspendUnknownUser(t *testing.T) {
 	svc, _, _, _ := newSuspensionFixture()
-	if _, err := svc.Suspend(context.Background(), admin, "nobody", "x"); !errors.Is(err, ErrUserNotFound) {
+	if _, err := svc.Suspend(context.Background(), admin, "nobody", Reason{Text: "x"}); !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestUnsuspendRefusesWithoutAReason(t *testing.T) {
 	svc, store, _, _ := newSuspensionFixture()
-	if _, err := svc.Suspend(context.Background(), admin, "victim", "x"); err != nil {
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Unsuspend(context.Background(), admin, "victim", " "); !errors.Is(err, ErrReasonRequired) {
@@ -235,7 +304,7 @@ func TestUnsuspendRefusesWithoutAReason(t *testing.T) {
 
 func TestUnsuspendReactivatesAndResumesOnlyWhatSuspendStopped(t *testing.T) {
 	svc, store, control, audit := newSuspensionFixture()
-	if _, err := svc.Suspend(context.Background(), admin, "victim", "proxy abuse"); err != nil {
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "proxy abuse"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -259,7 +328,7 @@ func TestUnsuspendReactivatesAndResumesOnlyWhatSuspendStopped(t *testing.T) {
 
 func TestUnsuspendKeepsTheRecordOfAnAppThatDidNotResume(t *testing.T) {
 	svc, store, control, _ := newSuspensionFixture()
-	if _, err := svc.Suspend(context.Background(), admin, "victim", "x"); err != nil {
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	control.failResume["a1"] = errors.New("over plan")
