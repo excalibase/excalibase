@@ -32,6 +32,6 @@ describe.each(VIEWS)('%s', (_name, View) => {
 
   test('a failure without text still says so, in generic wording', () => {
     render(<View currentStage={ProvisioningStage.FAILED} />);
-    expect(screen.getByText('Provisioning failed. Try again or contact support.')).toBeInTheDocument();
+    expect(screen.getByText('Provisioning failed. Delete it and add it again. If it keeps failing, tell us.')).toBeInTheDocument();
   });
 });

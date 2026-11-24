@@ -18,7 +18,7 @@ describe('ProvisionFailure', () => {
 
   test('an unknown text gives the generic wording and no raw text', () => {
     render(<ProvisionFailure reason="secret-internal-detail" />);
-    expect(screen.getByText('Provisioning failed. Try again or contact support.')).toBeInTheDocument();
+    expect(screen.getByText('Provisioning failed. Delete it and add it again. If it keeps failing, tell us.')).toBeInTheDocument();
     expect(screen.queryByText(/secret-internal-detail/)).not.toBeInTheDocument();
   });
 
@@ -29,6 +29,12 @@ describe('ProvisionFailure', () => {
     expect(block).not.toHaveAttribute('open');
     expect(block).toHaveTextContent('pod db-1 CrashLoopBackOff');
     expect(block).toHaveTextContent('rollback line');
+  });
+
+  test('a platform operator gets the technical details too', () => {
+    signIn('platform_operator');
+    render(<ProvisionFailure reason="pod db-1 CrashLoopBackOff" />);
+    expect(screen.getByText('Technical details').closest('details')).toHaveTextContent('pod db-1 CrashLoopBackOff');
   });
 
   test('an admin with no raw text and no detail gets no block', () => {

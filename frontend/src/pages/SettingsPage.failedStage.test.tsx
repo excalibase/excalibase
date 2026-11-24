@@ -84,7 +84,7 @@ describe('SettingsPage — failed provisioning banner', () => {
   test('an unknown failure text gives the generic wording and is never shown', async () => {
     serve({ currentStage: 'FAILED', failureStage: 'CRD_DEPLOYMENT', failureReason: 'weird internal text' });
     renderSettings();
-    expect(await screen.findByText('Provisioning failed. Try again or contact support.')).toBeInTheDocument();
+    expect(await screen.findByText('Provisioning failed. Delete it and add it again. If it keeps failing, tell us.')).toBeInTheDocument();
     await settle();
     expect(screen.queryByText(/weird internal text/)).not.toBeInTheDocument();
   });

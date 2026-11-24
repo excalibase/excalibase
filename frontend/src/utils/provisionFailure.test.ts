@@ -2,21 +2,47 @@ import { describe, test, expect } from 'vitest';
 import { GENERIC_PROVISION_FAILURE, PROVISION_FAILURE_MESSAGES, plainProvisionFailure } from './provisionFailure';
 
 describe('plainProvisionFailure', () => {
+  // One row per alternative of each rule, each matching only that alternative.
+  const [OOM, STORAGE, IMAGE, CRASH, ROOM, SLOW] = PROVISION_FAILURE_MESSAGES;
   test.each([
-    ['container db OOMKilled (exit 137)', 'ran out of memory'],
-    ['pod db-1 was OOMKilled', 'ran out of memory'],
-    ['persistentvolumeclaim "data-db-1" not found', 'storage could not be attached'],
-    ['PVC data-1 is pending', 'storage could not be attached'],
-    ['FailedAttachVolume: Multi-Attach error', 'storage could not be attached'],
-    ['db: ImagePullBackOff: back-off pulling image "pg:99"', 'image could not be downloaded'],
-    ['ErrImagePull', 'image could not be downloaded'],
-    ['pod is in CrashLoopBackOff', 'kept crashing'],
-    ['0/3 nodes are available: Insufficient memory. Unschedulable', 'no room'],
-    ['timed out waiting for the cluster to become ready', 'took too long'],
-    ['context deadline exceeded', 'took too long'],
-  ])('translates %s', (raw, wording) => {
-    expect(plainProvisionFailure(raw).toLowerCase()).toContain(wording);
+    ['OOMKilled', OOM],
+    ['it ran out of memory', OOM],
+    ['Out Of Memory', OOM],
+    ['persistentvolumeclaim "data-1" not found', STORAGE],
+    ['PVC data-1 is pending', STORAGE],
+    ['FailedAttachVolume for data-1', STORAGE],
+    ['FailedMount for data-1', STORAGE],
+    ['Multi-Attach error', STORAGE],
+    ['ImagePullBackOff', IMAGE],
+    ['ErrImagePull', IMAGE],
+    ['InvalidImageName', IMAGE],
+    ['CrashLoopBackOff', CRASH],
+    ['Unschedulable', ROOM],
+    ['Insufficient cpu', ROOM],
+    ['Insufficient memory', ROOM],
+    ['0/3 nodes are available', ROOM],
+    ['the database did not become ready', SLOW],
+    ['timed out waiting for the database', SLOW],
+    ['provisioning timed out', SLOW],
+    ['provisioning timeout', SLOW],
+    ['readiness deadline exceeded', SLOW],
+  ])('%s gives its own wording', (raw, expected) => {
+    expect(plainProvisionFailure(raw)).toBe(expected);
   });
+
+  test('every wording says what to do next, with no support address', () => {
+    for (const message of [GENERIC_PROVISION_FAILURE, ...PROVISION_FAILURE_MESSAGES]) {
+      expect(message).toContain('Delete it and add it again. If it keeps failing, tell us.');
+      expect(message).not.toMatch(/@|https?:|contact support/);
+    }
+  });
+
+  test.each(['canceling statement due to lock timeout', 'etcdserver: request timed out', 'context deadline exceeded'])(
+    'a timeout that is not about starting up (%s) stays generic',
+    (raw) => {
+      expect(plainProvisionFailure(raw)).toBe(GENERIC_PROVISION_FAILURE);
+    },
+  );
 
   test('the first matching rule wins, specific before broad', () => {
     expect(plainProvisionFailure('OOMKilled then CrashLoopBackOff').toLowerCase()).toContain('ran out of memory');
@@ -27,7 +53,7 @@ describe('plainProvisionFailure', () => {
     (raw) => {
       const out = plainProvisionFailure(raw);
       expect(out).toBe(GENERIC_PROVISION_FAILURE);
-      expect(out).toBe('Provisioning failed. Try again or contact support.');
+      expect(out).toBe('Provisioning failed. Delete it and add it again. If it keeps failing, tell us.');
     },
   );
 

@@ -12,7 +12,7 @@ interface ProvisionFailureProps {
 // A failed provisioning in customer words. The server's raw text sits in a
 // collapsed block for a platform admin and is never shown to anyone else.
 export function ProvisionFailure({ reason, detail, className = 'text-xs text-text-secondary break-words' }: ProvisionFailureProps) {
-  const admin = useAuthStore((s) => s.user?.role === 'platform_admin');
+  const admin = useAuthStore((s) => s.user?.role === 'platform_admin' || s.user?.role === 'platform_operator');
   const showTechnical = admin && (Boolean(reason) || Boolean(detail));
   return (
     <div>

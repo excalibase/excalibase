@@ -72,7 +72,7 @@ describe('ProjectOverviewPage — no database', () => {
   test('names the last failed add in plain words, never the raw text', async () => {
     renderPage(noDatabaseProject({ failureReason: 'cluster rejected' }));
     const card = await screen.findByTestId('service-database');
-    expect(await within(card).findByText('Provisioning failed. Try again or contact support.')).toBeInTheDocument();
+    expect(await within(card).findByText('Provisioning failed. Delete it and add it again. If it keeps failing, tell us.')).toBeInTheDocument();
     expect(within(card).queryByText(/cluster rejected/)).not.toBeInTheDocument();
   });
 

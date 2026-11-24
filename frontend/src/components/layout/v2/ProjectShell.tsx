@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { IconRail } from '../IconRail';
 import { SubNav } from '../SubNav';
@@ -32,10 +32,20 @@ export function ProjectShell() {
   }, [drawerShown, searching]);
   const closeDrawer = () => setDrawerOpen(false);
   // The drawer makes everything behind it inert, the search included, so it closes first.
-  const changeSearching = (open: boolean) => {
-    if (open) setDrawerOpen(false);
+  // When it closes, focus goes back to the menu button if the drawer was open, else to whatever opened it.
+  const searchOpener = useRef<HTMLElement | null>(null);
+  const changeSearching = useCallback((open: boolean) => {
+    if (open) {
+      searchOpener.current = drawerShown ? menuButton.current : (document.activeElement as HTMLElement | null);
+      setDrawerOpen(false);
+    }
     setSearching(open);
-  };
+  }, [drawerShown]);
+  const wasSearching = useRef(false);
+  useEffect(() => {
+    if (wasSearching.current && !searching) searchOpener.current?.focus();
+    wasSearching.current = searching;
+  }, [searching]);
   const showSubNav = section && PROJECT_NAV.find((s) => s.key === section)?.children;
   return (
     <div data-testid="studio-shell" className="flex h-screen flex-col overflow-hidden bg-bg-primary">

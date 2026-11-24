@@ -208,6 +208,27 @@ describe('ProjectShell on a phone', () => {
     for (const child of screen.getByTestId('studio-shell').children) expect(child).not.toHaveAttribute('inert');
   });
 
+  test('drawer, Ctrl+K, Escape returns focus to the menu button', async () => {
+    renderShell('/project/p1');
+    const { menu } = await openDrawer();
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await screen.findByRole('dialog', { name: 'Search' });
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(menu).toHaveFocus();
+  });
+
+  test('Ctrl+K and Escape without the drawer returns focus to what had it', async () => {
+    renderShell('/project/p1');
+    await screen.findByRole('button', { name: 'Menu' });
+    const opener = screen.getByRole('button', { name: 'Search' });
+    opener.focus();
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await screen.findByRole('dialog', { name: 'Search' });
+    await userEvent.keyboard('{Escape}');
+    expect(opener).toHaveFocus();
+  });
+
   test('the backdrop closes the drawer', async () => {
     renderShell('/project/p1');
     await openDrawer();

@@ -106,7 +106,7 @@ describe('AddDatabasePage', () => {
     renderAt('/project/proj-1/database/add');
     await user.click(await screen.findByTestId('pg-version-16'));
     await user.click(screen.getByTestId('add-database-submit'));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Provisioning failed. Try again or contact support.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Provisioning failed. Delete it and add it again. If it keeps failing, tell us.');
     expect(screen.queryByText(/cluster rejected/)).not.toBeInTheDocument();
     expect(navigate).not.toHaveBeenCalled();
   });
