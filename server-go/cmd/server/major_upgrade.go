@@ -42,7 +42,7 @@ func wireMajorUpgrades(cfg config.AppConfig, sqlStore storage.PlatformStore, d m
 	archives := service.NewMajorUpgradeArchives(runs)
 	d.backupSvc.SetMajorUpgradeArchives(archives)
 	svc := service.NewMajorUpgradeService(service.MajorUpgradeConfig{
-		Runs: runs, Instances: d.store, Projects: d.provSvc, Probe: service.NewVaultDatabaseProbe(d.vault),
+		Runs: runs, Instances: d.store, Projects: d.provSvc, Probe: service.NewVaultDatabaseProbe(d.vault).WithInstances(d.store),
 		Engines:   majorUpgradeEngines(d, archives),
 		Backups:   func(inst *domain.DatabaseInstance) bool { return backupStoreFor(d.backupSvc, inst) },
 		Observers: d.observers,

@@ -49,6 +49,9 @@ type Overrides struct {
 	Host    string
 	Port    string
 	SSLMode string
+	// SingleHost is a process that provisions on a Docker or Podman host. Only
+	// such a process may take a project row's word that its database serves no TLS.
+	SingleHost bool
 }
 
 // OverridesFromEnv reads the SCHEMA_DB_* knobs the schema browser and the
@@ -56,9 +59,10 @@ type Overrides struct {
 // the same address.
 func OverridesFromEnv() Overrides {
 	return Overrides{
-		Host:    os.Getenv("SCHEMA_DB_HOST"),
-		Port:    os.Getenv("SCHEMA_DB_PORT"),
-		SSLMode: os.Getenv("SCHEMA_DB_SSLMODE"),
+		Host:       os.Getenv("SCHEMA_DB_HOST"),
+		Port:       os.Getenv("SCHEMA_DB_PORT"),
+		SSLMode:    os.Getenv("SCHEMA_DB_SSLMODE"),
+		SingleHost: os.Getenv("PROVISIONER_MODE") == "docker",
 	}
 }
 
@@ -344,10 +348,11 @@ func (o *Opener) openPostgresFor(inst *domain.DatabaseInstance) func(creds map[s
 // OverridesFor adds what a single host's row states to the process-wide
 // overrides: its database serves no TLS and has no client CA, so its platform
 // roles log in with their passwords. Only a row that says so itself turns TLS
-// off, never one on Kubernetes (whose platform roles log in by certificate),
-// and never over an override that names a mode.
+// off, never in a process that is not itself a single host, never one on
+// Kubernetes (whose platform roles log in by certificate), and never over an
+// override that names a mode.
 func OverridesFor(base Overrides, inst *domain.DatabaseInstance) Overrides {
-	if base.SSLMode == "" && inst != nil && inst.DeploymentMode == domain.ModeDocker && inst.SSLMode == domain.SSLModeDisable {
+	if base.SSLMode == "" && base.SingleHost && inst != nil && inst.DeploymentMode == domain.ModeDocker && inst.SSLMode == domain.SSLModeDisable {
 		base.SSLMode = domain.SSLModeDisable
 	}
 	return base

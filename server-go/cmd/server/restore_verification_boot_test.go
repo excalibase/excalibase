@@ -87,7 +87,7 @@ func bootBackupService(t *testing.T, modes ...domain.DeploymentMode) *service.Ba
 func TestRestoreVerificationWiresBothAdapters(t *testing.T) {
 	svc := bootBackupService(t, domain.ModeK8s, domain.ModeDocker)
 
-	if err := wireRestoreVerification(svc, bootVault{}, bootReadyTimeout); err != nil {
+	if err := wireRestoreVerification(svc, bootVault{}, bootReadyTimeout, nil); err != nil {
 		t.Fatalf("wireRestoreVerification: %v", err)
 	}
 }
@@ -95,7 +95,7 @@ func TestRestoreVerificationWiresBothAdapters(t *testing.T) {
 func TestRestoreVerificationFailsAtBootWithoutAVault(t *testing.T) {
 	svc := bootBackupService(t, domain.ModeK8s, domain.ModeDocker)
 
-	err := wireRestoreVerification(svc, nil, bootReadyTimeout)
+	err := wireRestoreVerification(svc, nil, bootReadyTimeout, nil)
 	if err == nil {
 		t.Fatal("a platform whose probe has no vault to read must not start")
 	}
@@ -107,7 +107,7 @@ func TestRestoreVerificationFailsAtBootWithoutAVault(t *testing.T) {
 func TestRestoreVerificationFailsAtBootWithNoAdapters(t *testing.T) {
 	svc := bootBackupService(t)
 
-	err := wireRestoreVerification(svc, bootVault{}, bootReadyTimeout)
+	err := wireRestoreVerification(svc, bootVault{}, bootReadyTimeout, nil)
 	if !errors.Is(err, service.ErrDatabaseProbeNotConfigured) {
 		t.Fatalf("err: got %v, want ErrDatabaseProbeNotConfigured", err)
 	}
@@ -122,7 +122,7 @@ func TestRestoreVerificationFailsAtBootForAnAdapterThatCannotVerify(t *testing.T
 		domain.DeploymentMode("legacy"): unverifiableAdapter{},
 	}, t.TempDir())
 
-	err = wireRestoreVerification(svc, bootVault{}, bootReadyTimeout)
+	err = wireRestoreVerification(svc, bootVault{}, bootReadyTimeout, nil)
 	if !errors.Is(err, service.ErrDatabaseProbeNotConfigured) {
 		t.Fatalf("err: got %v, want ErrDatabaseProbeNotConfigured", err)
 	}

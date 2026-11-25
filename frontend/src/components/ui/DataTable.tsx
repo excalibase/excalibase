@@ -245,9 +245,11 @@ function Body<T>(p: BodyProps<T>) {
     );
   }
   return (
+    <>
+    <PhoneControls visible={p.visible} sort={p.sort} onSort={p.onSort} selectable={p.selectable} selection={p.selection} />
     <table className="w-full text-sm max-md:block" aria-labelledby={captionId}>
       <caption id={captionId} className="sr-only">{p.label}</caption>
-      <thead className="max-md:sr-only">
+      <thead className="max-md:hidden">
         <tr className="text-text-tertiary border-b border-border-primary bg-bg-secondary">
           {p.selectable && (
             <th scope="col" className="w-10 px-4 py-3">
@@ -276,6 +278,36 @@ function Body<T>(p: BodyProps<T>) {
         })}
       </tbody>
     </table>
+    </>
+  );
+}
+
+// The header row is hidden on a phone, where rows are cards; these keep sorting and select-all usable there.
+function PhoneControls<T>({ visible, sort, onSort, selectable, selection }: Pick<BodyProps<T>, 'visible' | 'sort' | 'onSort' | 'selectable' | 'selection'>) {
+  const sortable = visible.filter((c) => c.sortValue);
+  if (sortable.length === 0 && !selectable) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-border-primary px-4 py-2 text-sm md:hidden" data-testid="phone-controls">
+      {sortable.length > 0 && (
+        <>
+          <select aria-label="Sort by" value={sort?.columnId ?? ''} onChange={(e) => onSort(e.target.value)} className={cn(FIELD, 'min-h-9 px-2')}>
+            <option value="" disabled>Sort by</option>
+            {sortable.map((c) => <option key={c.id} value={c.id}>{c.header}</option>)}
+          </select>
+          {sort && (
+            <button type="button" onClick={() => onSort(sort.columnId)} className={cn(FIELD, 'min-h-9 px-3')}>
+              {sort.direction === 'asc' ? 'Ascending' : 'Descending'}
+            </button>
+          )}
+        </>
+      )}
+      {selectable && (
+        <label className="flex items-center gap-2">
+          <input type="checkbox" aria-label="Select every row on this page" checked={selection.allSelected} onChange={selection.toggleAll} />
+          Select page
+        </label>
+      )}
+    </div>
   );
 }
 

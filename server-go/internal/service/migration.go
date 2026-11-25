@@ -52,7 +52,7 @@ func NewMigrationService(store storage.InstanceStore, vault vaultclient.VaultCli
 
 // withProjectSSLMode lets a single host's own row state that it serves no TLS.
 func withProjectSSLMode(o dsnOverrides, inst *domain.DatabaseInstance) dsnOverrides {
-	o.sslmode = projectdb.OverridesFor(projectdb.Overrides{SSLMode: o.sslmode}, inst).SSLMode
+	o.sslmode = projectdb.OverridesFor(projectdb.Overrides{SSLMode: o.sslmode, SingleHost: projectdb.OverridesFromEnv().SingleHost}, inst).SSLMode
 	return o
 }
 

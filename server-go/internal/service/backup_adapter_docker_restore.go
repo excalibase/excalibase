@@ -275,12 +275,14 @@ type restoredDockerSpec struct {
 func restoredDockerInstance(src *domain.DatabaseInstance, spec restoredDockerSpec) *domain.DatabaseInstance {
 	port := 5432
 	restored := &domain.DatabaseInstance{
-		ProjectID:             spec.projectID,
-		ProjectName:           spec.projectName,
-		OrgID:                 src.OrgID,
-		OwnerID:               src.OwnerID,
-		DBType:                src.DBType,
-		DeploymentMode:        domain.ModeDocker,
+		ProjectID:      spec.projectID,
+		ProjectName:    spec.projectName,
+		OrgID:          src.OrgID,
+		OwnerID:        src.OwnerID,
+		DBType:         src.DBType,
+		DeploymentMode: domain.ModeDocker,
+		// The restored container serves no TLS, like the one the provisioner builds.
+		SSLMode:               domain.SSLModeDisable,
 		Namespace:             spec.containerID,
 		Host:                  spec.containerName,
 		Port:                  &port,

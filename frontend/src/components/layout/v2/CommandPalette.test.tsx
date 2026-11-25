@@ -5,9 +5,16 @@ const BASE = { appHosting: true, mcp: true, sites: true, postgres: true, platfor
 const labels = (pages: { label: string }[]) => pages.map((p) => p.label);
 
 describe('project pages in the palette follow the navigation', () => {
-  test('no Vault for anyone but platform staff', () => {
-    expect(labels(projectPages('p1', { ...BASE, platformStaff: false }, false, {}))).not.toContain('Vault');
-    expect(labels(projectPages('p1', BASE, false, {}))).toContain('Vault');
+  test('no Secrets (the vault) for anyone but platform staff', () => {
+    expect(labels(projectPages('p1', { ...BASE, platformStaff: false }, false, {}))).not.toContain('Secrets');
+    expect(labels(projectPages('p1', BASE, false, {}))).toContain('Secrets');
+  });
+
+  test('pages carry the v2 names, not Databases, Containers or Vault', () => {
+    const pages = labels(projectPages('p1', BASE, false, {}));
+    expect(pages).toContain('Database: Tables');
+    expect(pages).toContain('Apps');
+    for (const old of ['Databases: Tables', 'Containers', 'Vault']) expect(pages).not.toContain(old);
   });
 
   test('no page behind a flag that is off', () => {

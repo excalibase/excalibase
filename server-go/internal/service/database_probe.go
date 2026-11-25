@@ -12,6 +12,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
@@ -32,6 +33,14 @@ type VaultDatabaseProbe struct {
 	vault     vaultclient.VaultClient
 	overrides dsnOverrides
 	timeout   time.Duration
+	// instances lets the probe reach a single host the way its row says; nil reads no row.
+	instances storage.InstanceStore
+}
+
+// WithInstances makes the probe read each project's row, as the opener does.
+func (p *VaultDatabaseProbe) WithInstances(instances storage.InstanceStore) *VaultDatabaseProbe {
+	p.instances = instances
+	return p
 }
 
 // NewVaultDatabaseProbe wires the probe against the platform's vault. It
@@ -54,7 +63,8 @@ func (p *VaultDatabaseProbe) Probe(ctx context.Context, projectID string) error 
 	if err != nil {
 		return fmt.Errorf("read %s credentials: %w", roleApp, err)
 	}
-	db, err := p.open(creds)
+	overrides := p.overridesFor(projectID)
+	db, err := p.open(creds, overrides)
 	if err != nil {
 		return err
 	}
@@ -71,7 +81,20 @@ func (p *VaultDatabaseProbe) Probe(ctx context.Context, projectID string) error 
 
 // open connects as the record's engine says: MySQL with its password over
 // TLS, Postgres with the role's client certificate.
-func (p *VaultDatabaseProbe) open(creds map[string]string) (*sql.DB, error) {
+// overridesFor adds what the project's row states, when the probe can read it.
+func (p *VaultDatabaseProbe) overridesFor(projectID string) dsnOverrides {
+	if p.instances == nil {
+		return p.overrides
+	}
+	inst, err := p.instances.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		// No row to read: the strict default stands, TLS and the certificate.
+		return p.overrides
+	}
+	return withProjectSSLMode(p.overrides, inst)
+}
+
+func (p *VaultDatabaseProbe) open(creds map[string]string, overrides dsnOverrides) (*sql.DB, error) {
 	if domain.IsMySQLRecord(creds) {
 		port, err := strconv.Atoi(creds["port"])
 		if err != nil {
@@ -88,7 +111,7 @@ func (p *VaultDatabaseProbe) open(creds map[string]string) (*sql.DB, error) {
 		}
 		return sql.OpenDB(connector), nil
 	}
-	dsn, err := buildTenantDSN(creds, p.overrides)
+	dsn, err := buildTenantDSN(creds, overrides)
 	if err != nil {
 		return nil, err
 	}

@@ -96,6 +96,14 @@ describe('LogExplorerPage', () => {
     expect(screen.queryByText('No logs available')).not.toBeInTheDocument();
     expect(screen.queryByText(/status code/)).not.toBeInTheDocument();
   });
+  test('a single host without log search says so instead of "No logs available"', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { logs: '', notOffered: 'log search is not turned on for this single host: switch on host monitoring to search the database logs' } } as never);
+    renderPage();
+    expect(await screen.findByTestId('logs-not-offered')).toHaveTextContent('Log search is not turned on for this single host: switch on host monitoring to search the database logs.');
+    expect(screen.queryByText('No logs available')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   // EXC-659: the plan decides how long logs are kept; Studio offers no range past it.
   test('says how long the plan keeps logs and offers no range past it', async () => {
     vi.mocked(api.get).mockResolvedValue({ data: { logs: LOGS, retentionHours: 24 } } as never);

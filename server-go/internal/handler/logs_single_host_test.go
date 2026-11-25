@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -38,5 +39,18 @@ func TestGetLogs_ASingleHostWithoutLogSearchSaysItIsNotOffered(t *testing.T) {
 	notOffered, _ := resp["notOffered"].(string)
 	if w.Code != 200 || resp["logs"] != "" || !strings.Contains(notOffered, "single host") || strings.Contains(strings.ToLower(w.Body.String()), "kubernetes") {
 		t.Fatalf("got %d %v", w.Code, resp)
+	}
+}
+
+// Realtime reaches a single host's project with its password, from the row.
+func TestRealtimeDSN_ASingleHostRowLogsInWithoutACertificate(t *testing.T) {
+	creds := map[string]string{"host": "db", "port": "5432", "username": "excalibase_app", "password": "pw", "database": "app"}
+	row := &domain.DatabaseInstance{DeploymentMode: domain.ModeDocker, SSLMode: domain.SSLModeDisable}
+	dsn, err := realtimeDSN(creds, projectdb.OverridesFor(projectdb.Overrides{SingleHost: true}, row))
+	if err != nil || strings.Contains(dsn, "sslcert") || !strings.Contains(dsn, "sslmode='disable'") {
+		t.Fatalf("dsn %q, err %v", dsn, err)
+	}
+	if _, err := realtimeDSN(creds, projectdb.OverridesFor(projectdb.Overrides{}, row)); err == nil {
+		t.Fatal("a process that is not a single host must still demand the certificate")
 	}
 }

@@ -173,7 +173,10 @@ func (s *ProvisioningService) SetSingleHostLogs(logs SingleHostLogs) { s.singleH
 // searchSingleHostLogs reads what the engine kept of the database container's
 // output since it was created; the container is the project's own, by id.
 func (s *ProvisioningService) searchSingleHostLogs(ctx context.Context, inst *domain.DatabaseInstance, search LogSearch) (LogPage, error) {
-	if (s.singleHostLogs == nil && s.hostLogStore == "") || inst.DeploymentMode != domain.ModeDocker || inst.Namespace == "" {
+	if inst.DeploymentMode != domain.ModeDocker || inst.Namespace == "" {
+		return LogPage{}, ErrLogsUnavailable
+	}
+	if s.singleHostLogs == nil && s.hostLogStore == "" {
 		return LogPage{}, errLogsOnSingleHost
 	}
 	if s.hostLogStore != "" {
