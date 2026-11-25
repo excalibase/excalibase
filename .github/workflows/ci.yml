@@ -248,7 +248,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: read
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -259,6 +262,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build provisioning and Studio from this checkout
         run: |
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
@@ -270,6 +280,16 @@ jobs:
           path: single-host-images.tar.gz
           retention-days: 1
           compression-level: 0
+      # EXC-880: each third-party image is pulled once here (with retries) and loaded by the
+      # shards, which used to pull them all again at the same moment and hit the rate limits.
+      - name: Pull the third-party images once
+        run: sh deploy/ci/third-party-images.sh save single-host third-party-single-host.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: third-party-single-host
+          path: third-party-single-host.tar.gz
+          retention-days: 1
+          compression-level: 0
 
   # One fresh install per shard; the firewall and bridge checks are the first shard.
   single-host-boot-shard:
@@ -279,6 +299,9 @@ jobs:
     runs-on: ubuntu-24.04
     # Each shard keeps the timeout of the work it holds; the longest ran 45 minutes in one job.
     timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
     strategy:
       fail-fast: false
       matrix:
@@ -323,10 +346,22 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # Provisioning pulls through the daemon API without registry auth, so these stay anonymous
-      # whatever the runner logged in as. Pulled here with the CLI, the daemon finds them local.
-      - name: Pre-pull the images provisioning pulls anonymously
-        run: sh deploy/single-host/tests/prepull-provisioning-images.sh
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Provisioning pulls through the daemon API without registry auth, so those pulls stay
+      # anonymous whatever the runner logged in as. The images job pulled them once; loaded here,
+      # the daemon finds them local (EXC-880).
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: third-party-single-host
+          path: ${{ runner.temp }}/third-party
+      - name: Load the third-party images
+        run: sh deploy/ci/third-party-images.sh load single-host "$RUNNER_TEMP/third-party/third-party-single-host.tar.gz"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: single-host-images
@@ -347,6 +382,8 @@ jobs:
         run: sh deploy/single-host/tests/install-gvisor.sh
       - name: Fresh install (${{ matrix.name }})
         if: matrix.script == 'smoke'
+        # Ends the step itself, 10 minutes before the job's 90, so a hang is a red step with a log.
+        timeout-minutes: 80
         env:
           PLATFORM_TAG: ci
           PG_BACKUPS: ${{ matrix.pg_backups }}
@@ -623,10 +660,49 @@ jobs:
         # tool advisory, Vitest, not shipped in the app bundle).
         run: cd frontend && npm ci && npm audit --audit-level=critical
 
+  # EXC-880: the shards' testcontainers images are pulled once here, not four times at once.
+  go-integration-images:
+    name: Go Integration images
+    runs-on: ubuntu-24.04
+    needs: [changes, go-lint]
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the testcontainers images once
+        run: sh deploy/ci/third-party-images.sh save go-integration third-party-go-integration.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: third-party-go-integration
+          path: third-party-go-integration.tar.gz
+          retention-days: 1
+          compression-level: 0
+
   go-integration-shard:
     name: Go Integration shard ${{ matrix.shard }}/4
     runs-on: ubuntu-24.04
-    needs: [changes, go-lint]
+    needs: [changes, go-lint, go-integration-images]
+    permissions:
+      contents: read
+      packages: read
     # Integration tests need a Docker daemon (testcontainers spins up
     # Postgres, NATS, LocalStack, and one-off postgres containers for
     # restore E2Es). ubuntu-24.04 has Docker available out of the box.
@@ -652,6 +728,20 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: third-party-go-integration
+          path: ${{ runner.temp }}/third-party
+      - name: Load the testcontainers images
+        working-directory: .
+        run: sh deploy/ci/third-party-images.sh load go-integration "$RUNNER_TEMP/third-party/third-party-go-integration.tar.gz"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'

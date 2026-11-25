@@ -50,6 +50,9 @@ jobs:
     # to the full multi-tenant stack, move this to a self-hosted label instead.
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
     env:
       K3D_VERSION: v5.7.4
       CLUSTER: excalibase
@@ -66,6 +69,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build provisioning image
         run: docker build -t "$IMAGE" -f server-go/Dockerfile server-go
