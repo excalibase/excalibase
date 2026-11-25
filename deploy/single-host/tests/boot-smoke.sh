@@ -44,6 +44,13 @@
 # a table's changes across a NATS restart, a pause and a resume.
 # Destroys the bundle's containers and volumes; never run it on an install you keep.
 set -uo pipefail
+# A run that outlives its deadline ends itself with a failure instead of waiting on the CI timeout.
+# The default sits under the CI step's 80 minutes.
+BOOT_SMOKE_DEADLINE=${BOOT_SMOKE_DEADLINE:-4500}
+trap 'echo "FAIL boot-smoke passed its ${BOOT_SMOKE_DEADLINE}s deadline"; exit 1' USR1
+( sleep "$BOOT_SMOKE_DEADLINE"; kill -USR1 $$ 2>/dev/null ) >/dev/null 2>&1 &
+WATCHDOG=$!
+trap 'kill $WATCHDOG 2>/dev/null' EXIT
 ENGINE=${1:-docker}
 BUNDLE=$(cd "$(dirname "$0")/.." && pwd)
 TESTS=$BUNDLE/tests
@@ -161,7 +168,17 @@ EOF
   $DOCKER network connect excalibase-net-build-egress "$SITE_FAKES"
 fi
 [ -n "${LOG_DRAINS:-}" ] && drains_setup
-timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; echo "up exit $?"; grep -iE "^Error|error:" "$W/up.log" | sort -u | head -5
+timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; up_rc=$?
+echo "up exit $up_rc"
+if [ "$up_rc" -ne 0 ]; then
+  # Every later step waits on a stack that is not there: say why and stop (EXC-880).
+  echo "== docker compose up failed (exit $up_rc); its output:"
+  cat "$W/up.log"
+  echo "== docker compose ps -a"
+  $COMPOSE $P ps -a 2>&1
+  [ -n "${KEEP:-}" ] || { $COMPOSE $P down -v >/dev/null 2>&1; wipe_managed; drains_teardown; }
+  exit 1
+fi
 [ -n "${SITE_BUILDS:-}" ] && $DOCKER network connect excalibase-platform "$SITE_FAKES"
 for i in $(seq 90); do [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.Status}}' 2>/dev/null)" = exited ] && break; sleep 2; done
 if [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.ExitCode}}' 2>/dev/null)" = 0 ] && logs_have excalibase-objectstore-setup 'OBJECT STORE READY'; then
