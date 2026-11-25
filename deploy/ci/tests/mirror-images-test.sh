@@ -132,7 +132,31 @@ inject "an unqualified image in a live Go test" server-go/internal/x/a_test.go '
 package x
 
 const img = "redis:7-alpine"' 'redis:7-alpine'
-printf 'package x\n' > "$REPO/server-go/internal/x/ok.go"
+inject "a flag the list did not know" deploy/single-host/tests/f.sh 'docker run --shm-size 1g --pids-limit 5 --rm tomcat:10 true' 'tomcat:10'
+inject "k3d cluster create --image" .github/workflows/k.yml '      - run: k3d cluster create c --image rancher/k3s:v8.8.8-k3s1' 'rancher/k3s:v8.8.8-k3s1'
+inject_release() { # <name> <content>
+  printf '%s\n' "$2" > "$REPO/.github/workflows/pub.yml"
+  git -C "$REPO" add -A >/dev/null
+  if sh "$REPO/deploy/ci/mirror-images.sh" guard >"$WORK/guard.out" 2>&1; then echo "FAIL guard missed $1"; failed=$((failed + 1))
+  else grep -q 'pub.yml' "$WORK/guard.out" && echo "PASS guard catches $1" || { echo "FAIL release guard output for $1: $(cat "$WORK/guard.out")"; failed=$((failed + 1)); }; fi
+  git -C "$REPO" rm -qf --cached .github/workflows/pub.yml >/dev/null; rm -f "$REPO/.github/workflows/pub.yml"
+}
+inject_release "a push: true build with HUB_MIRROR" 'jobs:
+  b:
+    steps:
+      - uses: docker/build-push-action@x
+        with:
+          push: true
+          build-args: HUB_MIRROR=${{ env.HUB_MIRROR }}'
+inject_release "a docker push job using IMAGE_MIRROR" '      - run: docker push x:1
+      - run: echo $IMAGE_MIRROR'
+inject_release "a pushing job naming excalibase/mirror" '      - run: docker buildx build --push --build-arg B=ghcr.io/excalibase/mirror/golang:1 .'
+for bad in '../../owner/repo/main' '/etc' 'a//b' 'a/../b' 'feat x' ''; do
+  sh "$TOOL" check-ref "$bad" >/dev/null 2>&1 && { echo "FAIL check-ref accepted '$bad'"; failed=$((failed + 1)); } || echo "PASS check-ref rejects '$bad'"
+done
+for good in main exc-881-ci-mirror release/1.7 v1.2.3; do
+  sh "$TOOL" check-ref "$good" >/dev/null 2>&1 && echo "PASS check-ref accepts $good" || { echo "FAIL check-ref rejected $good"; failed=$((failed + 1)); }
+done
 
 [ "$failed" -eq 0 ] || { echo "$failed check(s) failed"; exit 1; }
 echo "all mirror checks passed"

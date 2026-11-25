@@ -52,7 +52,7 @@ jobs:
         env:
           ENGINE_REF: ${{ inputs.engine_ref || 'main' }}
         run: |
-          case "$ENGINE_REF" in *[!A-Za-z0-9._/-]*) echo "engine_ref has odd characters"; exit 1 ;; esac
+          sh deploy/ci/mirror-images.sh check-ref "$ENGINE_REF"
           cp deploy/ci/mirror-images.txt "$RUNNER_TEMP/all.txt"
           # The engine list arrives with the engine's CI change; until then only the platform list is copied.
           status=$(curl -s -o "$RUNNER_TEMP/engine.txt" -w '%{http_code}' "https://raw.githubusercontent.com/excalibase/excalibase-graphql/$ENGINE_REF/ci/mirror-images.txt")

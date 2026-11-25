@@ -162,20 +162,27 @@ DOCKER_RUN_AWK='
 function image_after(words, n, start,   j, w) {
   for (j = start; j <= n; j++) {
     w = words[j]
-    if (w ~ /^-/) { if (w !~ /=/ && w ~ FLAGS_WITH_VALUE) j++; continue }
+    if (w ~ /^-/) { if (w !~ /=/ && (w !~ BOOLEAN_FLAGS || w ~ SHORT_VALUE)) j++; continue }
     gsub(/["\x27]/, "", w)
     if (w == "" || w ~ /[$(){}`]/) return ""
     return w
   }
   return ""
 }
-BEGIN { FLAGS_WITH_VALUE = "^(-e|--env|-v|--volume|--name|--network|--net|-p|--publish|--env-file|--entrypoint|--stop-signal|--restart|-w|--workdir|--label|-l|--user|-u|--cap-add|--cap-drop|--security-opt|--tmpfs|--hostname|-h|--memory|-m|--cpus|--platform|--pull|--add-host|--device|--dns|--log-driver|--mount|--pid|--ipc|--runtime|--network-alias|--group-add|--ulimit|--sysctl|--health-cmd)$" }
+BEGIN { BOOLEAN_FLAGS = "^(-[a-zA-Z]*|--(rm|privileged|detach|interactive|tty|init|read-only|quiet|no-healthcheck|oom-kill-disable|all-tags|disable-content-trust|sig-proxy|publish-all|no-trunc))$"; SHORT_VALUE = "^-[ehlmpuvw]$" }
 {
   line = $0
   while (line ~ /\\[ \t]*$/ && (getline nxt) > 0) { sub(/\\[ \t]*$/, "", line); line = line " " nxt }
   n = split(line, words, /[ \t]+/)
   for (i = 1; i < n; i++) {
     tool = words[i]; gsub(/["\x27]/, "", tool)
+    if (tool == "k3d" && words[i + 1] == "cluster" && words[i + 2] == "create") {
+      for (j = i + 3; j <= n; j++) if (words[j] == "--image" || words[j] ~ /^--image=/) {
+        ref = (words[j] == "--image") ? words[j + 1] : substr(words[j], 9)
+        gsub(/["\x27]/, "", ref)
+        if (ref != "" && ref !~ /[$(){}`]/) print ref
+      }
+    }
     if (tool ~ /^(docker|podman|[$]DOCKER|[$]ENGINE|[$][{]ENGINE[}]|[$][{]DOCKER[}])$/ && words[i + 1] ~ /^(run|pull|create)$/) {
       ref = image_after(words, n, i + 2)
       if (ref != "") print ref
@@ -256,7 +263,39 @@ set_candidates() {
   done | while read -r ref; do hub_path "$ref"; done | sed '/^$/d' | sort -u
 }
 
+# release_mirror_uses: workflows that push an image (push: true, docker push) or release one (cd,
+# release*) and still name the mirror. What ships is never built from it: its base layers come from Docker Hub.
+release_mirror_uses() {
+  (
+    set +e
+    cd "$MIRROR_ROOT"
+    for file in $(git ls-files '.github/workflows/*.yml'); do
+      case ${file##*/} in mirror-images.yml) continue ;; esac
+      case ${file##*/} in
+        cd.yml|release*.yml) pushes=1 ;;
+        *) if grep -qE '^[[:space:]]*push:[[:space:]]*true|docker[[:space:]]+(buildx[[:space:]]+)?push|--push' "$file"; then pushes=1; else pushes=0; fi ;;
+      esac
+      [ "$pushes" -eq 1 ] || continue
+      grep -nH -E 'HUB_MIRROR|IMAGE_MIRROR|excalibase/mirror' "$file" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
+    done
+    true
+  )
+}
+
+# check_ref <ref>: a branch or tag name that stays inside its repository (it is put in a URL path).
+check_ref() {
+  case $1 in
+    ''|/*|*//*|*..*|*[!A-Za-z0-9._/-]*) echo "not an acceptable ref: $1" >&2; return 1 ;;
+  esac
+}
+
 cmd_guard() {
+  pushed=$(release_mirror_uses)
+  [ -z "$pushed" ] || {
+    echo "a workflow that pushes or releases an image names the mirror; what ships is never built from it:" >&2
+    echo "$pushed" | sed 's/^/  /' >&2
+    return 1
+  }
   missing=$( { guard_candidates; set_candidates; } | sort -u | while read -r path; do
     in_list "$path" || echo "$path"
   done)
@@ -284,7 +323,8 @@ case ${0##*/} in
       rewrite) cmd_rewrite "$@" ;;
       sync) cmd_sync "$@" ;;
       guard) cmd_guard ;;
-      *) echo "usage: $0 ref <ref> | rewrite <file>... | sync [list] | guard" >&2; exit 2 ;;
+      check-ref) check_ref "${1:?usage: check-ref <ref>}" ;;
+      *) echo "usage: $0 ref <ref> | check-ref <ref> | rewrite <file>... | sync [list] | guard" >&2; exit 2 ;;
     esac
     ;;
 esac
