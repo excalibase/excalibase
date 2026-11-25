@@ -67,18 +67,16 @@ func (on signInFlags) addTo(guide map[string]any, auth string) {
 	}
 }
 
-// userIDTypeText says how the token names the user. Guests make the sub the
-// account id; without them the sub is the address.
+// userIDTypeText says how the token names the user. The sub is the account
+// id as a string, with guests on or off; the address is the email claim.
 func userIDTypeText(guests bool) string {
-	text := "userId is the user's database id as a JSON number (\"userId\": 42); read it as a number in function code. "
+	text := "userId is the user's database id as a JSON number (\"userId\": 42); read it as a number in function code. " +
+		"The token's sub is the account id as a string (\"42\"), the same value as userId, and it does not change when the user changes their address. " +
+		"Read the address from the email claim (permissions read it as X-Excalibase-Email). X-Excalibase-User-Id is the account id. "
 	if guests {
-		return text + "The token's sub is the account id as a string (\"42\"), never the address, so a guest has one too. " +
-			"The address is the email claim (permissions read it as X-Excalibase-Email); a guest has no email claim and an is_guest claim of true, and an engine version that falls back to the sub would read the account id as the guest's X-Excalibase-Email, so identify a guest by X-Excalibase-Is-Guest or X-Excalibase-User-Id. " +
-			"test_auth_flow shows the real claims of a test sign-in. See permissions.ownerColumnType for comparing userId with an owner column."
+		text += "A guest has a sub too, but no email claim and an is_guest claim of true, and an engine version that falls back to the sub would read the account id as the guest's X-Excalibase-Email, so identify a guest by X-Excalibase-Is-Guest or X-Excalibase-User-Id. "
 	}
-	return text + "The token's sub is the user's email. X-Excalibase-Email is read from the email claim when the token has one; an engine version that falls back to the sub reads that otherwise, " +
-		"and one that does not has no X-Excalibase-Email for a token with no email claim, so a permission that uses it fails with missing_session_variable. " +
-		"test_auth_flow shows the real claims of a test sign-in, so check it before relying on the email claim. See permissions.ownerColumnType for comparing userId with an owner column."
+	return text + "test_auth_flow shows the real claims of a test sign-in. See permissions.ownerColumnType for comparing userId with an owner column."
 }
 
 // permissionsGuide is how a permission names the signed-in user.

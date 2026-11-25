@@ -111,8 +111,8 @@ Empty array on the first call is fine. The user has no rows yet.
 ## Where to go next
 
 * **Row-level security**: open the **RLS** tab and add a policy.
-  The JWT's `sub` claim is exposed to Postgres as `request.user_id`,
-  so the usual filter is
+  The JWT's `userId` claim (the account id, same value as `sub`) is exposed
+  to Postgres as `request.user_id`, so the usual filter is
   `using (user_id = current_setting('request.user_id', true))`.
 * **Edge functions**: write a Deno handler, deploy it with `curl`,
   invoke it at `/functions/v1/<projectId>/<fnId>`.
