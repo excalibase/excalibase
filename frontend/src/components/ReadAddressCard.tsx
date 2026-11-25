@@ -25,7 +25,7 @@ const NO_REPLICA =
 
 const SINGLE_HOST =
   'A single host runs one copy of the database, so there is no replica to read from. ' +
-  'Read replicas need a Kubernetes cluster with a node per copy.';
+  'Read replicas need a multi-server installation with a server per copy.';
 
 // ReadAddressCard shows the database's read-only address to its replicas and
 // opens or closes its public port (EXC-666). Hidden while the flag is off.

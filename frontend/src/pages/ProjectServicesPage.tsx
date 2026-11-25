@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams, type To } from 'react-router-dom';
 import { apiErrorMessage } from '../api/apps';
+import { SitesUnavailable } from '../components/services/SitesUnavailable';
 import { AddServiceMenu, EmptyServices } from '../components/services/v2/AddService';
 import { ServicePanel } from '../components/services/v2/ServicePanel';
 import { ServiceList, ServicesLoading } from '../components/services/v2/ServiceList';
@@ -30,7 +31,14 @@ export function ProjectServicesPage() {
   if (services.loading && !services.project) return <ServicesLoading />;
 
   const failed = services.error != null;
-  if (isEmptyProject(services)) return <EmptyServices projectId={projectId} services={services} />;
+  if (isEmptyProject(services)) {
+    return (
+      <>
+        <EmptyServices projectId={projectId} services={services} />
+        {!services.sitesOn && <div className="mx-auto max-w-2xl text-center"><SitesUnavailable projectId={projectId} /></div>}
+      </>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-4" data-testid="project-services">
@@ -57,6 +65,7 @@ export function ProjectServicesPage() {
           />
         )}
       </div>
+      {!services.sitesOn && <SitesUnavailable projectId={projectId} />}
     </div>
   );
 }

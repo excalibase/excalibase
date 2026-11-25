@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +28,9 @@ func TestLifecycleErrorWriters_PoolBusyIs503WithRetryAfter(t *testing.T) {
 		"cluster":     func(w http.ResponseWriter) { writeClusterChangeError(w, "p1", "resize", busy) },
 		"read addr":   func(w http.ResponseWriter) { writeDBReadAddressError(w, "p1", busy) },
 		"allow list":  func(w http.ResponseWriter) { writeDBAllowListError(w, "p1", busy) },
-		"pause":       func(w http.ResponseWriter) { (&ProvisioningHandler{}).writeLifecycleError(w, "p1", busy) },
+		"pause": func(w http.ResponseWriter) {
+			(&ProvisioningHandler{}).writeLifecycleError(context.Background(), w, "p1", busy)
+		},
 	}
 	for name, write := range writers {
 		rec := httptest.NewRecorder()

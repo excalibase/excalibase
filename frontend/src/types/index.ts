@@ -87,6 +87,10 @@ export interface DatabaseInstance {
   currentStage: ProvisioningStage;
   currentStep?: string;
   failureReason?: string;
+  // The plain class of the failure (EXC-869). A customer gets this in place of failureReason and rollbackLog.
+  failureKind?: string;
+  // The failure when it is one of the server's own sentences, which a customer may read as it is.
+  failureMessage?: string;
   // A teardown that stopped: the step it stopped at and why.
   deletionStep?: string;
   deletionError?: string;
@@ -94,6 +98,8 @@ export interface DatabaseInstance {
   failureStep?: string;
   rollbackLog?: string;
   backupEnabled: boolean;
+  // The disk the project has now, as a quantity ("5Gi"); absent on older rows.
+  storageSize?: string;
   // Set on a project made as a copy of another: the source and the backup it came from.
   restoredFromProjectId?: string;
   restoredFromBackupId?: string;

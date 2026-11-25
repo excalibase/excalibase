@@ -163,6 +163,9 @@ func (s *DBEndpointService) SetAllowedSources(ctx context.Context, projectID str
 	if !list.Chosen() {
 		return DBAllowListView{}, fmt.Errorf("%w: access %q is not a choice", domain.ErrInvalidDBSourceAllowList, list.Access)
 	}
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return DBAllowListView{}, err
+	}
 	release, err := s.serializeWithAllowList(ctx, projectID)
 	if err != nil {
 		return DBAllowListView{}, err

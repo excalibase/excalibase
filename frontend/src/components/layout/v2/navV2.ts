@@ -1,4 +1,4 @@
-import { Home, Database, Gauge, KeyRound, Users, Settings, BookOpen, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { Home, Database, Gauge, KeyRound, Users, Settings, BookOpen, ShieldCheck, Building2, Server, type LucideIcon } from 'lucide-react';
 
 export interface ShellNavItem {
   key: string;
@@ -23,6 +23,7 @@ export function shellNav(orgId: string | undefined): { main: ShellNavItem[]; hel
   const main: ShellNavItem[] = [
     { key: 'home', label: 'Home', icon: Home, to: '/' },
     { key: 'projects', label: 'Projects', icon: Database, to: '/instances' },
+    { key: 'orgs', label: 'Organizations', icon: Building2, to: '/orgs' },
     { key: 'usage', label: 'Usage & credits', icon: Gauge, to: '/usage' },
     { key: 'tokens', label: 'Access keys', icon: KeyRound, to: '/account/tokens' },
     { key: 'members', label: 'Access (IAM)', icon: Users, to: orgPage('members') },
@@ -33,5 +34,8 @@ export function shellNav(orgId: string | undefined): { main: ShellNavItem[]; hel
 }
 
 export const ADMIN_CONSOLE: ShellNavItem = { key: 'admin', label: 'Admin console', icon: ShieldCheck, to: '/admin' };
+
+// Host monitoring of a single-host install (EXC-670): shown to admins where the feature is on.
+export const ADMIN_HOST: ShellNavItem = { key: 'admin-host', label: 'Host', icon: Server, to: '/admin/host' };
 
 export const PLATFORM_ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);

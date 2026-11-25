@@ -45,3 +45,23 @@ describe('/usage belongs to studio_v2', () => {
     expect(await screen.findByTestId('usage-page')).toBeInTheDocument();
   });
 });
+
+describe.each([
+  ['/account', 'account-page'],
+  ['/project/p1/variables', 'project-variables'],
+])('%s belongs to studio_v2', (path, testId) => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('flag off: the page is not served', async () => {
+    serve({ studio_v2: false });
+    renderAt(path);
+    expect(await screen.findByTestId('feature-unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId(testId)).not.toBeInTheDocument();
+  });
+
+  test('flag on: the page is served', async () => {
+    serve({ studio_v2: true });
+    renderAt(path);
+    expect(await screen.findByTestId(testId)).toBeInTheDocument();
+  });
+});

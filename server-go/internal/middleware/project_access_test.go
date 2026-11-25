@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
@@ -265,5 +266,23 @@ func TestRequireProjectAccess_DeletingProjectStaysReachable(t *testing.T) {
 		if code := serve(t, RequireProjectAccess(inst, orgs), r); code != http.StatusOK {
 			t.Errorf("%s on a DELETING project: got %d, want 200", method, code)
 		}
+	}
+}
+
+// A platform admin's access carries the override that lets work start again
+// in an organisation whose owner is abuse-suspended; a member's does not.
+func TestWithProjectAccess_OnlyAPlatformAdminCarriesTheSuspensionOverride(t *testing.T) {
+	admin := WithProjectAccess(context.Background(), &ProjectAccess{PlatformAdmin: true})
+	member := WithProjectAccess(context.Background(), &ProjectAccess{Member: &domain.OrgMember{Role: domain.OrgRoleDeveloper}})
+	suspended := func(context.Context) (map[string]bool, error) { return map[string]bool{testOrg: true}, nil }
+	inst := fakestore.NewInstances()
+	inst.Create(&domain.DatabaseInstance{ProjectID: testProject, OrgID: testOrg})
+	guard := orgguard.New(inst, suspended)
+
+	if err := guard.CheckProject(admin, testProject); err != nil {
+		t.Errorf("platform admin refused: %v", err)
+	}
+	if err := guard.CheckProject(member, testProject); err == nil {
+		t.Error("a developer was let through a suspended organisation")
 	}
 }

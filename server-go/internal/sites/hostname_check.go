@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 )
 
 // routing is what a check may assume when it routes an active hostname.
@@ -308,6 +309,12 @@ func (s *Service) routeHostname(ctx context.Context, site *Site, hostname *Custo
 }
 
 func (s *Service) projectServing(ctx context.Context, projectID string) (bool, error) {
+	if err := s.options.OrgGuard.CheckServingUnlessAdmin(ctx, projectID); err != nil {
+		if errors.Is(err, orgguard.ErrOrgSuspended) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read whether the project's owner is suspended: %w", err)
+	}
 	gate := s.options.Projects
 	if gate == nil {
 		return true, nil

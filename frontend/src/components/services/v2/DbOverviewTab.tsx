@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ProvisionFailure } from '../../shared/ProvisionFailure';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, PauseCircle, PlayCircle } from 'lucide-react';
 import { useCurrentMetrics } from '../../../hooks/useMetrics';
@@ -15,19 +16,9 @@ import { formatWhen } from '../../containers/appCopy';
 import { ToneBadge } from '../../containers/ContainerBits';
 import { databaseServiceStatus } from '../serviceStatus';
 import { panelSearch } from './panelState';
+import { card, Fact } from './sections';
 
 const NOT_AVAILABLE = 'Not available';
-
-function Fact({ label, children }: { readonly label: string; readonly children: React.ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs text-text-tertiary">{label}</dt>
-      <dd className="text-sm text-text-primary">{children}</dd>
-    </div>
-  );
-}
-
-const card = 'space-y-3 rounded-lg border border-border-primary bg-bg-secondary p-4';
 
 function LiveState({ project }: { readonly project: DatabaseInstance }) {
   const { data: metrics, dataUpdatedAt } = useCurrentMetrics(project.projectId);
@@ -53,7 +44,7 @@ function LiveState({ project }: { readonly project: DatabaseInstance }) {
         <Fact label="Last backup">{newest ? formatWhen(newest.timestamp) : 'None yet'}</Fact>
         <Fact label="Compute">{compute}</Fact>
       </dl>
-      {project.failureReason && project.currentStage === 'FAILED' && <p className="break-words text-xs text-red-400">{project.failureReason}</p>}
+      {(project.failureReason || project.failureKind) && project.currentStage === 'FAILED' && <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} className="break-words text-xs text-red-400" />}
     </section>
   );
 }

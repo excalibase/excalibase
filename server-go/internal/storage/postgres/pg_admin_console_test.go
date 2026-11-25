@@ -247,6 +247,54 @@ func TestOwnerSuspendedOrgsNamesOrgsOfSuspendedOwners(t *testing.T) {
 	}
 }
 
+func TestSuspensionTakesDownOnlyWhatTheAccountsOrgsHold(t *testing.T) {
+	store, console := consoleFixture(t)
+	ctx := context.Background()
+	// A project the account made in someone else's org is that org's, not the account's.
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO database_instances (project_id, org_id, owner_id, status, project_name, namespace, storage_size, no_database, created_at)
+		 VALUES ('p-made', 'o-other', 'u-cust', 'ACTIVE', 'p-made', 'ns-made', '1Gi', FALSE, NOW())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO apps (project_id, id, name, status, doc) VALUES ('p-made', 'a-made', 'a-made', 'ACTIVE', '{"replicas":1}'::jsonb)`); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := console.OwnedProjects(ctx, "u-cust")
+	if err != nil || len(projects) != 1 || projects[0] != "p-cust" {
+		t.Fatalf("projects = %v, %v; want only the org the account owns", projects, err)
+	}
+	apps, err := console.OwnedApps(ctx, "u-cust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, app := range apps {
+		if app.ProjectID == "p-made" {
+			t.Fatalf("app %s of a good-standing org's project is listed for the suspension", app.AppID)
+		}
+	}
+}
+
+func TestSuspendedUsersAndRecordSuspendedApps(t *testing.T) {
+	_, console := consoleFixture(t)
+	ctx := context.Background()
+	if err := console.Suspend(ctx, adminconsole.Suspension{UserID: "u-cust", Reason: "x", At: time.Now()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	users, err := console.SuspendedUsers(ctx)
+	if err != nil || !users["u-cust"] || users["u-other"] {
+		t.Fatalf("users = %v, %v", users, err)
+	}
+	stopped := []adminconsole.SuspendedApp{{ProjectID: "p", AppID: "a", AppName: "web", PreviousReplicas: 2}}
+	if err := console.RecordSuspendedApps(ctx, "u-cust", stopped); err != nil {
+		t.Fatal(err)
+	}
+	got, err := console.SuspendedApps(ctx, "u-cust")
+	if err != nil || len(got) != 1 || got[0].PreviousReplicas != 2 {
+		t.Fatalf("recorded = %+v, %v", got, err)
+	}
+}
+
 func store(t *testing.T, console *AdminConsole) *Store {
 	t.Helper()
 	return &Store{db: console.db}

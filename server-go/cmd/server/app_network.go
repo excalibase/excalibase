@@ -76,7 +76,7 @@ func newAppTemplateHandler(a appTemplateArgs) *handler.AppTemplateHandler {
 	deps := service.AppTemplateDeps{
 		Apps: apphost.NewPostgresAppStore(a.sqlStore.DB()), Deployer: a.deployer, Projects: a.projects,
 		Plans: plans, Limits: service.NewAppLimits(plans, a.tiers), Disks: a.disks, Budget: a.budget,
-		Claimer: a.claimer, Flags: a.flags,
+		Claimer: a.claimer, Flags: a.flags, Guard: newOrgGuard(a.projects, a.sqlStore),
 	}
 	// Left nil, not a typed nil, so the service sees "no network" and "no vault".
 	if a.network != nil {

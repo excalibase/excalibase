@@ -52,7 +52,7 @@ func TestAProjectsStoredFailureTextIsScrubbedForACustomer(t *testing.T) {
 
 func TestACreateAnswerFailureTextIsScrubbed(t *testing.T) {
 	resp := &domain.ProvisioningResponse{Status: "FAILED", Namespace: "org1-p1", FailureReason: rawFailure, RollbackLog: rawFailure, FailureStep: rawFailure}
-	got := scrubbedCreateAnswer(resp)
+	got := customerProvisioning(userContext("user"), resp)
 	assertScrubbed(t, "create answer", got.FailureReason+got.RollbackLog+got.FailureStep)
 }
 
@@ -71,7 +71,7 @@ func TestTheLifecycleErrorBodyScrubsTheFailureReason(t *testing.T) {
 		"p1": {ProjectID: "p1", Namespace: "org1-p1", Status: "ACTIVE", FailureReason: rawFailure},
 	}}}
 	w := httptest.NewRecorder()
-	h.writeLifecycleError(w, "p1", errors.New(rawFailure))
+	h.writeLifecycleError(userContext("user"), w, "p1", errors.New(rawFailure))
 	assertScrubbed(t, "lifecycle error", w.Body.String())
 }
 

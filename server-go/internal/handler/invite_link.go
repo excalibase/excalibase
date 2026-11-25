@@ -56,6 +56,10 @@ func inviteErrorMessage(err error) string {
 // Only the token's hash is stored, so the link cannot be shown again; inviting
 // the same address again issues a fresh one.
 func (h *OrgHandler) createInviteLink(w http.ResponseWriter, r *http.Request, orgID, email, role string) {
+	if err := h.orgGuard.CheckOrg(r.Context(), orgID); err != nil {
+		writeOrgGuardError(w, err)
+		return
+	}
 	token, hash, err := mintToken()
 	if err != nil {
 		httpError(w, "failed to create invite", http.StatusInternalServerError)
@@ -93,6 +97,10 @@ func (h *OrgHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 	invite, err := h.orgStore.FindPendingInviteByToken(r.Context(), hash, time.Now())
 	if err != nil {
 		httpError(w, inviteErrorMessage(err), inviteErrorStatus(err))
+		return
+	}
+	if err := h.orgGuard.CheckOrg(r.Context(), invite.OrgID); err != nil {
+		writeOrgGuardError(w, err)
 		return
 	}
 	if user.EmailVerifiedAt == nil || !strings.EqualFold(invite.Email, user.Email) {

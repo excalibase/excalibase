@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { plainProvisionFailure } from '../utils/provisionFailure';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Database, Loader2 } from 'lucide-react';
 import { useAddDatabase, useInstance } from '../hooks/useProvisioning';
@@ -19,7 +20,7 @@ import { ProjectPasswordPanel } from '../components/ProjectPasswordPanel';
 type Engine = 'POSTGRESQL' | 'DOCUMENTDB' | 'MYSQL';
 
 const ENGINES: readonly { engine: Engine; icon: string; label: string; desc: string }[] = [
-  { engine: 'POSTGRESQL', icon: '🐘', label: 'PostgreSQL', desc: 'CloudNativePG operator' },
+  { engine: 'POSTGRESQL', icon: '🐘', label: 'PostgreSQL', desc: 'Managed Postgres' },
   { engine: 'DOCUMENTDB', icon: '🍃', label: DOCUMENTDB_LABEL, desc: 'MongoDB wire protocol on PostgreSQL' },
   { engine: 'MYSQL', icon: '🐬', label: 'MySQL', desc: 'MySQL 8.4, TLS required' },
 ];
@@ -110,7 +111,7 @@ export function AddDatabasePage() {
     addDatabase.reset();
     setPassword('');
     if (result.noDatabase && result.status !== 'PROVISIONING') {
-      setFailure(result.failureReason || 'The database could not be created.');
+      setFailure(result.failureMessage ?? plainProvisionFailure(result.failureReason, result.failureKind));
       return;
     }
     if (result.password) {

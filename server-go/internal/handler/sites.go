@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/go-chi/chi/v5"
 )
@@ -233,6 +234,8 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	var rateErr *sites.RateLimitError
 	switch {
+	case orgguard.IsRefusal(err):
+		writeOrgGuardError(w, err)
 	case errors.Is(err, sites.ErrServerSitesOff):
 		// As an unmounted route answers (EXC-554), so a dark feature is not advertised.
 		http.Error(w, "404 page not found", http.StatusNotFound)

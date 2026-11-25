@@ -69,7 +69,19 @@ type DeployConfig struct {
 	Args            []string        `json:"args,omitempty"`
 	Replicas        int             `json:"replicas"`
 	Tier            domain.TierType `json:"tier"`
+	// ImagePull is how the pinned image is pulled, decided when the digest was
+	// resolved (EXC-839): ImagePullPublic when an anonymous manifest request
+	// succeeded, ImagePullCredentialed when the pull needs the project's
+	// credentials. Empty on a deploy made before it existed or with pinning off.
+	ImagePull string `json:"imagePull,omitempty"`
 }
+
+// The ImagePull modes. Only a public image may be reused from a node's cache:
+// a credentialed one is checked with its registry on every pull.
+const (
+	ImagePullPublic       = "public"
+	ImagePullCredentialed = "credentialed"
+)
 
 // ConfigFromApp freezes the app's current config into a deploy's config. The
 // env slice is copied so a later edit to the app cannot reach back into an

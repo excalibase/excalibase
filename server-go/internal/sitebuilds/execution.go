@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 )
 
 // buildKind is what a site build and an app build do differently inside one run.
@@ -68,6 +69,9 @@ func (e *execution) execute(ctx context.Context) outcome {
 	if e.build.Requeues > 0 {
 		e.note(fmt.Sprintf("== retry ==\nan earlier build of this commit found no room to be taken in; retry %d of %d\n", e.build.Requeues, MaxSpoolRequeues))
 	}
+	if refused := e.checkNotSuspended(ctx); refused != nil {
+		return *refused
+	}
 	if refused := e.checkSource(ctx); refused != nil {
 		return *refused
 	}
@@ -91,6 +95,21 @@ func (e *execution) execute(ctx context.Context) outcome {
 	deployCtx, cancelDeploy := context.WithTimeout(ctx, e.dispatcher.options.DeployBudget)
 	defer cancelDeploy()
 	return e.kind.deliver(deployCtx)
+}
+
+// checkNotSuspended stops a build queued before its org's owner was suspended, before any Job exists.
+func (e *execution) checkNotSuspended(ctx context.Context) *outcome {
+	err := e.dispatcher.service.options.OrgGuard.CheckProject(ctx, e.build.ProjectID)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, orgguard.ErrOrgSuspended):
+		return refuse(FailPlatform, orgguard.Message)
+	default:
+		log.Printf("%s build %s: check the organisation is not suspended: %v", e.build.Kind, e.build.ID, err)
+		// A blip must not cost a legitimate build: it goes back to the queue.
+		return &outcome{requeue: true, waitReason: checkWaitReason, giveUpReason: checkFailReason}
+	}
 }
 
 // retry drops the failed attempt's Job and runs once more, after the source checks pass again.

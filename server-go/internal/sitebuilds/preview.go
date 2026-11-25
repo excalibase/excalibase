@@ -442,9 +442,19 @@ func (s *Service) queuePreview(ctx context.Context, connection *Connection, comm
 				log.Printf("site build %s: record the refused preview: %v", build.ID, recordErr)
 			}
 		}
-		s.postStatus(ctx, build, gitprovider.StatusFailure, "", build.FailureReason)
+		s.postStatus(ctx, build, gitprovider.StatusFailure, "", refusedStatus(build))
 	}
 	return created, err
+}
+
+// refusedStatus is what a refused preview says on its commit, which anyone who reads a public repository
+// sees. A suspension is the platform's own refusal, so it says no more than any failed preview; the
+// build record keeps the real reason for Studio.
+func refusedStatus(build *Build) string {
+	if build.FailureKind == FailPlatform {
+		return publicFailure(build.FailureKind)
+	}
+	return build.FailureReason
 }
 
 // skipPreview is whether this delivery makes no preview for the connection: its connector lost access,

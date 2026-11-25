@@ -14,6 +14,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/sdkkeys"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // EXC-684: every write tool added for the gap-epic features meets the same
@@ -46,6 +47,22 @@ func exc684WriteToolCalls() map[string]map[string]any {
 		"revoke_publishable_key": {"project_id": matrixProjectA, "key_id": 7},
 		"rebuild_app":            with(nil),
 	}
+}
+
+// mcpCallConfirmed makes a call and, when the tool only asked for confirmation, makes it again with the token it handed back.
+func mcpCallConfirmed(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
+	t.Helper()
+	res := mcpCall(t, cs, name, args)
+	asked, _ := res.StructuredContent.(map[string]any)
+	token, _ := asked["confirmationToken"].(string)
+	if res.IsError || token == "" {
+		return res
+	}
+	again := map[string]any{"confirmation_token": token}
+	for key, value := range args {
+		again[key] = value
+	}
+	return mcpCall(t, cs, name, again)
 }
 
 // appReads stands in for the app store the harness leaves offline: only the read the tools make first.
@@ -94,7 +111,7 @@ func TestEXC684WriteToolsRefuseAViewer(t *testing.T) {
 		t.Fatalf("connect viewer: %v", err)
 	}
 	for name, args := range exc684WriteToolCalls() {
-		res := mcpCall(t, viewer, name, args)
+		res := mcpCallConfirmed(t, viewer, name, args)
 		if !res.IsError || !strings.Contains(mcpText(res), "insufficient project role") {
 			t.Errorf("%s as a viewer = %s", name, mcpText(res))
 		}
@@ -132,11 +149,44 @@ func TestEXC684DeveloperRevokesOnlyAPublishableKey(t *testing.T) {
 	if res := mcpCall(t, dev, "revoke_publishable_key", map[string]any{"project_id": matrixProjectA, "key_id": 8}); !res.IsError {
 		t.Fatalf("a secret key was revoked: %s", mcpText(res))
 	}
-	if res := mcpCall(t, dev, "revoke_publishable_key", map[string]any{"project_id": matrixProjectA, "key_id": 7}); res.IsError {
+	if res := mcpCallConfirmed(t, dev, "revoke_publishable_key", map[string]any{"project_id": matrixProjectA, "key_id": 7}); res.IsError {
 		t.Fatalf("a developer could not revoke a publishable key: %s", mcpText(res))
 	}
 	if len(keys.revoked) != 1 || keys.revoked[0] != 7 {
 		t.Errorf("revoked = %v, want [7]", keys.revoked)
+	}
+}
+
+// Through the production router and transport: the first call revokes nothing, the token revokes once, a replay is refused.
+func TestMCPConfirmationThroughTheRealRouter(t *testing.T) {
+	server, keys := exc684Server(t)
+	dev, err := mcpConnect(t, server.URL+"/mcp", mcpDevPAT)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	args := map[string]any{"project_id": matrixProjectA, "key_id": 7}
+	first := mcpCall(t, dev, "revoke_publishable_key", args)
+	asked, _ := first.StructuredContent.(map[string]any)
+	token, _ := asked["confirmationToken"].(string)
+	if first.IsError || token == "" || len(keys.revoked) != 0 {
+		t.Fatalf("first call = %s, revoked %v", mcpText(first), keys.revoked)
+	}
+	again := map[string]any{"project_id": matrixProjectA, "key_id": 7, "confirmation_token": token}
+	if res := mcpCall(t, dev, "revoke_publishable_key", again); res.IsError || len(keys.revoked) != 1 {
+		t.Fatalf("confirmed call = %s, revoked %v", mcpText(res), keys.revoked)
+	}
+	if res := mcpCall(t, dev, "revoke_publishable_key", again); !res.IsError || len(keys.revoked) != 1 {
+		t.Fatalf("a replay was accepted: %s, revoked %v", mcpText(res), keys.revoked)
+	}
+	other, err := mcpConnect(t, server.URL+"/mcp", mcpViewPAT)
+	if err != nil {
+		t.Fatalf("connect viewer: %v", err)
+	}
+	stolen := mcpCall(t, dev, "revoke_publishable_key", args)
+	asked, _ = stolen.StructuredContent.(map[string]any)
+	token, _ = asked["confirmationToken"].(string)
+	if res := mcpCall(t, other, "revoke_publishable_key", map[string]any{"project_id": matrixProjectA, "key_id": 7, "confirmation_token": token}); !res.IsError {
+		t.Fatalf("another caller used the developer's token: %s", mcpText(res))
 	}
 }
 

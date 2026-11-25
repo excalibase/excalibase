@@ -16,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/loginguard"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -30,9 +31,10 @@ type AuthHandler struct {
 	tokenStore    storage.TokenStore
 	orgStore      storage.OrgStore      // optional — joins an org through an invite token at registration
 	instanceStore storage.InstanceStore // optional — lets CreateToken bind a PAT to a project the caller can see
-	auditLog      auditWriter           // optional — records PAT rotations
-	signupGuard   *abuse.SignupGuard    // optional — EXC-755
-	inviteOnly    bool                  // when true, only an invite token (or the first admin) may register
+	orgGuard      *orgguard.Guard
+	auditLog      auditWriter        // optional — records PAT rotations
+	signupGuard   *abuse.SignupGuard // optional — EXC-755
+	inviteOnly    bool               // when true, only an invite token (or the first admin) may register
 	setupTokens   storage.SetupTokenStore
 	// ceilings bound what a service token may mint or rotate for each
 	// principal it manages (EXC-485); a principal without one gets nothing.
@@ -88,6 +90,9 @@ func (h *AuthHandler) SetSetupTokenStore(s storage.SetupTokenStore) { h.setupTok
 
 // SetInstanceStore wires the instance store CreateToken uses to confirm the
 // caller may see the project a new PAT is bound to.
+// SetOrgGuard makes an invite into a suspended owner's org refuse at sign-up (EXC-845).
+func (h *AuthHandler) SetOrgGuard(guard *orgguard.Guard) { h.orgGuard = guard }
+
 func (h *AuthHandler) SetInstanceStore(s storage.InstanceStore) { h.instanceStore = s }
 
 func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) *AuthHandler {
@@ -776,6 +781,9 @@ func (h *AuthHandler) checkRegistrationInvite(ctx context.Context, token, addres
 	}
 	if !strings.EqualFold(invite.Email, address) {
 		return "", http.StatusForbidden, errInviteForAnotherAddress
+	}
+	if err := h.orgGuard.CheckOrg(ctx, invite.OrgID); err != nil {
+		return "", http.StatusForbidden, orgguard.Message
 	}
 	return hash, 0, ""
 }

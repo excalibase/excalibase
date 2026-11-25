@@ -25,8 +25,11 @@ type ProjectInfo struct {
 	// null.
 	RequireEmailVerification bool   `json:"requireEmailVerification"`
 	SiteURL                  string `json:"siteUrl"`
-	// ProjectOAuthInfo is present only while the authoauth or authotp flag
-	// is on (EXC-662); nil keeps its keys off the wire entirely.
+	// AllowNewUsers is whether sign-up is open; always sent, whatever the
+	// sign-in flags (EXC-457), so a project can close registration on any deploy.
+	AllowNewUsers bool `json:"allowNewUsers"`
+	// ProjectOAuthInfo is present only while a sign-in flag is on
+	// (EXC-662); nil keeps its keys off the wire entirely.
 	*ProjectOAuthInfo
 	// UserAPIEnabled is sent, as true, only while the authuser flag is on;
 	// nil keeps the key off the wire.
@@ -69,7 +72,6 @@ func (i *AuthHooksInfo) Set(hook, url string) {
 // offer. Never null inside.
 type ProjectOAuthInfo struct {
 	RedirectURLs   []string            `json:"redirectUrls"`
-	AllowNewUsers  bool                `json:"allowNewUsers"`
 	OAuthProviders []OAuthProviderInfo `json:"oauthProviders"`
 	// EmailOTPEnabled is sent only while authotp is on.
 	EmailOTPEnabled *bool `json:"emailOtpEnabled,omitempty"`

@@ -28,6 +28,16 @@ var (
 	ErrInPlaceRestoreNotConfigured = errors.New("restore: in-place restore is not configured")
 )
 
+// The in-place restore's own sentences. Each is a fixed text with at most a
+// backup id in it; the customer-facing allowlist is built from them, so a
+// change here changes what may be shown.
+const (
+	RestoreStoppedReason      = "the restore did not complete; restore again from Backups"
+	RestoreFirewallDownFormat = "the restore did not complete and the host firewall is still not healthy, so the database could not be put back; once it is healthy, restore backup %s into this project"
+	RestoreNotPutBackFormat   = "the restore did not complete and the database could not be put back automatically; its data from just before the restore is in backup %s — restore that backup into this project"
+	RestorePutBackFormat      = "the restore did not complete, so the project was put back as it was just before it (backup %s)"
+)
+
 // InPlaceRestoreError is how an in-place restore that did not complete ends:
 // Public is written for the user, Cause stays in the log.
 type InPlaceRestoreError struct {
@@ -210,7 +220,7 @@ func (r *InPlaceRestore) replace(ctx context.Context, cluster InPlaceCluster, in
 // its data back.
 func (r *InPlaceRestore) rollBack(ctx context.Context, cluster InPlaceCluster, inst *domain.DatabaseInstance, safety *safetyBackup, cause error) error {
 	if safety == nil {
-		reason := "the restore did not complete; restore again from Backups"
+		reason := RestoreStoppedReason
 		// The backup an earlier failure named is still the way back.
 		if inst.CurrentStep == domain.RestoreStepRestoreStopped && inst.FailureReason != "" {
 			reason = inst.FailureReason
@@ -226,8 +236,7 @@ func (r *InPlaceRestore) rollBack(ctx context.Context, cluster InPlaceCluster, i
 		ctx = context.WithoutCancel(ctx)
 		if waiter, ok := cluster.(HostFirewallWaiter); ok {
 			if err := waiter.WaitHostFirewall(ctx); err != nil {
-				reason := fmt.Sprintf("the restore did not complete and the host firewall is still not healthy, so the database could not be put back; "+
-					"once it is healthy, restore backup %s into this project", safety.id)
+				reason := fmt.Sprintf(RestoreFirewallDownFormat, safety.id)
 				if statusErr := r.setStatus(inst.ProjectID, domain.StatusRestoring, domain.RestoreStepRestoreStopped, reason); statusErr != nil {
 					log.Printf("in-place restore %s: record failure: %v", inst.ProjectID, statusErr)
 				}
@@ -236,8 +245,7 @@ func (r *InPlaceRestore) rollBack(ctx context.Context, cluster InPlaceCluster, i
 		}
 	}
 	if err := r.replace(ctx, cluster, inst, safety.target); err != nil {
-		reason := fmt.Sprintf("the restore did not complete and the database could not be put back automatically; "+
-			"its data from just before the restore is in backup %s — restore that backup into this project", safety.id)
+		reason := fmt.Sprintf(RestoreNotPutBackFormat, safety.id)
 		if statusErr := r.setStatus(inst.ProjectID, domain.StatusRestoring, domain.RestoreStepRestoreStopped, reason); statusErr != nil {
 			log.Printf("in-place restore %s: record failure: %v", inst.ProjectID, statusErr)
 		}
@@ -247,7 +255,7 @@ func (r *InPlaceRestore) rollBack(ctx context.Context, cluster InPlaceCluster, i
 		return err
 	}
 	return &InPlaceRestoreError{
-		Public: fmt.Sprintf("the restore did not complete, so the project was put back as it was just before it (backup %s)", safety.id),
+		Public: fmt.Sprintf(RestorePutBackFormat, safety.id),
 		Cause:  cause,
 	}
 }

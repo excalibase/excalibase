@@ -10,6 +10,7 @@ import { AuthProvidersCard } from '../components/auth/AuthProvidersCard';
 import { EmailSignInCard } from '../components/auth/EmailSignInCard';
 import { GuestSignInCard } from '../components/auth/GuestSignInCard';
 import { MFACard } from '../components/auth/MFACard';
+import { AllowNewUsersToggle } from '../components/auth/AllowNewUsersToggle';
 import { RedirectUrlsCard } from '../components/auth/RedirectUrlsCard';
 import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { serverErrorMessage } from '../utils/serverError';
@@ -109,6 +110,11 @@ export function AuthSettingsPage() {
       {isError || !data
         ? <p className="text-sm text-red-400" role="alert">Could not load the auth settings.</p>
         : <SiteUrlForm projectId={projectId || ''} initial={data} />}
+      {!(oauthOn || otpOn || guestOn) && data && (
+        <section className="mt-8 rounded-lg border border-border-primary bg-surface-card p-4" data-testid="allow-new-users-card">
+          <AllowNewUsersToggle projectId={projectId || ''} settings={data} />
+        </section>
+      )}
       {(oauthOn || otpOn || guestOn) && data && (
         <div className="mt-8 space-y-6">
           <RedirectUrlsCard projectId={projectId || ''} settings={data} />

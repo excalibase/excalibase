@@ -140,7 +140,7 @@ func TestResumeThatIsNotObservedAnswersConflictWithTheProjectState(t *testing.T)
 	if body["status"] != string(domain.StatusResuming) {
 		t.Errorf("body status: got %v, want RESUMING", body["status"])
 	}
-	if body["failureReason"] != service.ErrResumeNotObserved.Error() {
-		t.Errorf("body failureReason: got %v", body["failureReason"])
+	if _, leaked := body["failureReason"]; leaked || body["failureKind"] != string(domain.FailureUnknown) {
+		t.Errorf("a customer reads the kind, not the text: failureReason %v, failureKind %v", body["failureReason"], body["failureKind"])
 	}
 }
