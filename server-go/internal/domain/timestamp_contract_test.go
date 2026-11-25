@@ -91,30 +91,35 @@ func TestEveryTimeFieldInTheListedResponseTypesCarriesItsZone(t *testing.T) {
 	instant := time.Date(2026, 11, 25, 9, 30, 15, 123456789, saigonZone)
 	for name, response := range responses {
 		t.Run(name, func(t *testing.T) {
-			fillTimes(reflect.ValueOf(response), instant)
-			raw, err := json.Marshal(response)
-			if err != nil {
-				t.Fatalf("marshal: %v", err)
-			}
-			var decoded any
-			if err := json.Unmarshal(raw, &decoded); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			found := map[string]string{}
-			collectTimestampStrings(decoded, name, found)
-			if len(found) == 0 {
-				t.Fatalf("%s has no time field; drop it from the list", name)
-			}
-			for path, text := range found {
-				if !zonedTime.MatchString(text) {
-					t.Errorf("%s = %q has no zone", path, text)
-				}
-				parsed, err := time.Parse(time.RFC3339Nano, text)
-				if err != nil || !parsed.Equal(instant) {
-					t.Errorf("%s = %q is not the instant %s (%v)", path, text, instant, err)
-				}
-			}
+			assertTimesCarryZone(t, name, response, instant)
 		})
+	}
+}
+
+func assertTimesCarryZone(t *testing.T, name string, response any, instant time.Time) {
+	t.Helper()
+	fillTimes(reflect.ValueOf(response), instant)
+	raw, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	found := map[string]string{}
+	collectTimestampStrings(decoded, name, found)
+	if len(found) == 0 {
+		t.Fatalf("%s has no time field; drop it from the list", name)
+	}
+	for path, text := range found {
+		if !zonedTime.MatchString(text) {
+			t.Errorf("%s = %q has no zone", path, text)
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, text)
+		if err != nil || !parsed.Equal(instant) {
+			t.Errorf("%s = %q is not the instant %s (%v)", path, text, instant, err)
+		}
 	}
 }
 
