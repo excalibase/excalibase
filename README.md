@@ -442,7 +442,7 @@ Works against a local socket *or* a remote Docker daemon over TLS, same setup pa
 | `DENO_RUNTIME_URL` | `http://deno-runtime.serverless.svc.cluster.local:8000` | Deno runtime endpoint |
 | `DENO_RUNTIME_SECRET` | | Shared secret for Deno runtime auth |
 | `DENO_NAMESPACE` | `serverless` | K8s namespace for Deno pods |
-| `DENO_RUNTIME_IMAGE` | none (required in k8s mode) | Per-project Deno pod image. A release version or a digest; `latest` or no tag is refused at boot |
+| `DENO_RUNTIME_IMAGE` | none (required in k8s mode) | Per-project Deno pod image: `name@sha256:<64 hex>`, or a tag `X.Y.Z`, `vX.Y.Z`, `main-<sha>` or `release-X.Y-<sha>`. Any other tag (`latest`, `main`, `1.7`, `stable`) or no tag stops boot |
 | `EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS` | | Operator-level outbound allowlist merged into every project's edge-function egress: comma-separated `host`, `host:port` or `*.suffix` entries in Deno `--allow-net` form (e.g. `*.excalibase.io,api.resend.com`). Empty = projects start with no egress and opt hosts in via `PUT /api/projects/{id}/functions/egress`. Private / cluster-internal addresses are refused; a malformed list stops the server at boot. See `docs/functions-egress.md`. |
 
 **Pooler / CDC**

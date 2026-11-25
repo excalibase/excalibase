@@ -21,10 +21,10 @@ func TestCheckDenoRuntimeImage(t *testing.T) {
 	}{
 		"k8s with a release tag":    {cfg: AppConfig{ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: pinnedDenoImage}},
 		"k8s without an image":      {cfg: AppConfig{ProvisionerMode: "k8s", DenoRuntimeSecret: "s"}, wantErr: "DENO_RUNTIME_IMAGE"},
-		"k8s latest":                {cfg: AppConfig{ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: "excalibase/deno-runtime:latest"}, wantErr: "latest"},
+		"k8s latest":                {cfg: AppConfig{ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: "excalibase/deno-runtime:latest"}, wantErr: "accepted"},
 		"k8s untagged":              {cfg: AppConfig{ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: "excalibase/deno-runtime"}, wantErr: "tag"},
 		"docker mode runs no pod":   {cfg: AppConfig{ProvisionerMode: "docker"}},
-		"docker mode, bad override": {cfg: AppConfig{ProvisionerMode: "docker", DenoRuntimeImage: "x:latest"}, wantErr: "latest"},
+		"docker mode, bad override": {cfg: AppConfig{ProvisionerMode: "docker", DenoRuntimeImage: "x:latest"}, wantErr: "accepted"},
 		"no functions secret":       {cfg: AppConfig{ProvisionerMode: "k8s"}},
 	}
 	for name, tc := range cases {
@@ -40,5 +40,17 @@ func TestCheckDenoRuntimeImage(t *testing.T) {
 				t.Fatalf("got %v, want an error naming %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestLoadDenoRuntimeImageKeepsTheValueItWillValidate(t *testing.T) {
+	t.Setenv("DENO_RUNTIME_IMAGE", " "+pinnedDenoImage+"\n")
+	cfg := Load()
+	if cfg.DenoRuntimeImage != " "+pinnedDenoImage+"\n" {
+		t.Fatalf("Load changed the image to %q", cfg.DenoRuntimeImage)
+	}
+	cfg.ProvisionerMode, cfg.DenoRuntimeSecret = "k8s", "s"
+	if err := cfg.CheckDenoRuntimeImage(); err == nil {
+		t.Fatal("an image with stray whitespace was accepted")
 	}
 }

@@ -12,7 +12,7 @@ import (
 
 const (
 	egressNS    = "egress-ns"
-	egressImage = "excalibase/deno-runtime:test"
+	egressImage = "excalibase/deno-runtime:1.0.0"
 )
 
 func denoDeployment(t *testing.T, c *Client) *appsv1.Deployment {

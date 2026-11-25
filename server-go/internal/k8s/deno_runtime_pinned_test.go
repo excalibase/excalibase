@@ -13,6 +13,7 @@ func TestEnsureDenoRuntime_NewRuntimeRefusesAFloatingImage(t *testing.T) {
 	for name, image := range map[string]string{
 		"no image": "",
 		"latest":   "excalibase/deno-runtime:latest",
+		"moving":   "excalibase/deno-runtime:main",
 		"untagged": "excalibase/deno-runtime",
 	} {
 		t.Run(name, func(t *testing.T) {

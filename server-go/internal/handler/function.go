@@ -1398,7 +1398,7 @@ func (h *FunctionHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	keys, err := h.secrets.ListKeys(projectID)
 	if err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		writeSecretsUnavailable(w, "list secrets", err)
 		return
 	}
 	out := make([]map[string]string, 0, len(keys))

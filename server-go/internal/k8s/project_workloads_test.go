@@ -40,7 +40,7 @@ var withRoutes = WithdrawOptions{AppRoutes: true}
 func TestWithdrawProjectWorkloads_WithoutAppHostingNeverTouchesRoutes(t *testing.T) {
 	c, clientset := newLifecycleFakeClient()
 	ctx := context.Background()
-	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}); err != nil {
+	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:1.0.0", RuntimeSecret: "s"}); err != nil {
 		t.Fatal(err)
 	}
 	foreign := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "db-public", Namespace: testNamespace}}
@@ -67,7 +67,7 @@ func TestWithdrawProjectWorkloads_WithoutAppHostingNeverTouchesRoutes(t *testing
 func TestRestartFunctionRuntime_RefusesAnUnreadableCount(t *testing.T) {
 	c, _ := newLifecycleFakeClient()
 	ctx := context.Background()
-	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}); err != nil {
+	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:1.0.0", RuntimeSecret: "s"}); err != nil {
 		t.Fatal(err)
 	}
 	dep, _ := c.clientset.AppsV1().Deployments(testNamespace).Get(ctx, denoRuntimeName, metav1.GetOptions{})
@@ -78,7 +78,7 @@ func TestRestartFunctionRuntime_RefusesAnUnreadableCount(t *testing.T) {
 	if err := c.RestartFunctionRuntime(ctx, testNamespace); err == nil {
 		t.Fatal("an unreadable count must not be guessed")
 	}
-	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}); err == nil {
+	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:1.0.0", RuntimeSecret: "s"}); err == nil {
 		t.Fatal("a function deploy must not guess it either")
 	}
 }
@@ -135,7 +135,7 @@ func TestWithdrawProjectWorkloads_RemovesEveryAppRouteAndScalesEverythingToZero(
 	if _, err := c.clientset.NetworkingV1().Ingresses(testNamespace).Create(ctx, foreign, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}); err != nil {
+	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:1.0.0", RuntimeSecret: "s"}); err != nil {
 		t.Fatalf("deno runtime: %v", err)
 	}
 
@@ -174,7 +174,7 @@ func TestWithdrawProjectWorkloads_InAnEmptyNamespaceDoesNothing(t *testing.T) {
 func TestRestartFunctionRuntime_RestoresTheStoppedRuntime(t *testing.T) {
 	c, _ := newLifecycleFakeClient()
 	ctx := context.Background()
-	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}); err != nil {
+	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:1.0.0", RuntimeSecret: "s"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.WithdrawProjectWorkloads(ctx, testNamespace, withRoutes); err != nil {
@@ -206,7 +206,7 @@ func TestRestartFunctionRuntime_WithoutARuntimeDoesNothing(t *testing.T) {
 func TestEnsureDenoRuntime_StartsARuntimeAProjectDeletionStopped(t *testing.T) {
 	c, _ := newLifecycleFakeClient()
 	ctx := context.Background()
-	spec := DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}
+	spec := DenoRuntimeSpec{Image: "deno:1.0.0", RuntimeSecret: "s"}
 	if err := c.EnsureDenoRuntime(ctx, testNamespace, spec); err != nil {
 		t.Fatal(err)
 	}

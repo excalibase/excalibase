@@ -158,3 +158,18 @@ func TestSetSecret_SuccessStillAnswersOK(t *testing.T) {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestListSecrets_VaultFailureIsAnUnavailableAnswerWithoutTheCause(t *testing.T) {
+	var failDeploys atomic.Bool
+	h, vault, router := secretHandler(t, &failDeploys)
+	router.Get("/api/projects/{projectId}/functions/secrets", h.ListSecrets)
+	vault.broken.Store(true)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest("GET", secretsPath, nil))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503: %s", w.Code, w.Body.String())
+	}
+	assertCustomerSafe(t, w)
+}

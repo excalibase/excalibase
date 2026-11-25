@@ -285,7 +285,7 @@ Environment variables:
 - `DENO_RUNTIME_URL` — Deno runtime HTTP endpoint
 - `DENO_RUNTIME_SECRET` — shared secret for Deno auth
 - `DENO_NAMESPACE` — K8s namespace for Deno pods (default: serverless)
-- `DENO_RUNTIME_IMAGE` — pinned image (release version or digest, never `latest`) for per-project Deno pods; required in k8s mode
+- `DENO_RUNTIME_IMAGE` — pinned image (digest, X.Y.Z, main-<sha> or release-X.Y-<sha> tag; never a moving tag) for per-project Deno pods; required in k8s mode
 
 **Pooler / CDC**
 - `NATS_URL` — NATS server for policy-change events + CDC fan-out

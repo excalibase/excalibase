@@ -98,7 +98,7 @@ func TestEnsureDenoRuntime_CreatesDeploymentAndService(t *testing.T) {
 	ns := "proj-deno"
 
 	err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{
-		Image: "custom/deno:1", RuntimeSecret: "shh", Tier: "STANDARD",
+		Image: "custom/deno:1.0.0", RuntimeSecret: "shh", Tier: "STANDARD",
 	})
 	if err != nil {
 		t.Fatalf("EnsureDenoRuntime: %v", err)
