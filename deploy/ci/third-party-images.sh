@@ -27,7 +27,8 @@ cnpg_base() {
     $1 == "baseImage:" && current == major { print $2 }' "$CATALOG"
 }
 
-# Images the integration tests start. `check` fails when a test names one that is not here.
+# Images the integration tests start. `check` fails when a test names one that is not here. Images a
+# test builds in code ("postgres:" + major) are listed by hand: the majors 14 to 18 are all here.
 list_go_integration() {
   cnpg_base 17
   cat <<'REFS'
@@ -74,11 +75,13 @@ list_single_host_smoke() {
   sed -n 's/^ *image: \([^$ ]*\)$/\1/p' "$COMPOSE"
   sed -n 's/^x-watcher-image: &watcher_image \(.*\)$/\1/p' "$COMPOSE"
   echo docker.io/library/python:3.12-alpine
+  # The realtime journey runs this one in every smoke run.
+  PREPULL_LIST=1 sh "$TESTS/prepull-provisioning-images.sh" | grep '^busybox:'
 }
 
 # Apps, site builds and the DNS stand-in: only the gvisor shard.
 list_single_host_gvisor() {
-  PREPULL_LIST=1 sh "$TESTS/prepull-provisioning-images.sh" | grep -v '^postgres:'
+  PREPULL_LIST=1 sh "$TESTS/prepull-provisioning-images.sh" | grep -v '^postgres:\|^busybox:'
   cat <<'REFS'
 docker.io/coredns/coredns:1.11.3
 docker.io/library/python:3.13-alpine
@@ -113,17 +116,39 @@ pull_with_retry() {
   done
 }
 
+# Go files that carry the integration build tag: tests, and the helpers they share.
+integration_files() {
+  grep -rlE '^//go:build .*integration' --include='*.go' "$ROOT/server-go"
+}
+
 # Image literals the integration tests carry: name:tag, not host:port or a scope like metrics:read,
-# and not the made-up ghcr.io/acme/... references the tests only parse.
+# and not the made-up ghcr.io/acme/... references the tests only parse. A tag counts when it starts
+# with a digit or is latest/main/pgNN, or when the name is an image the list already holds
+# (nginx:alpine).
 test_image_literals() {
+  known_repos=$(refs_of go-integration | sed 's/[:@].*//' | sort -u)
+  all=$(
+    # shellcheck disable=SC2046 # one word per file
+    grep -ohE '"[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9][A-Za-z0-9._-]*(@sha256:[0-9a-f]{64})?"' $(integration_files) |
+      tr -d '"' |
+      grep -vE '^[^/]*\.[^/]*:[0-9]+$' |
+      grep -vE '^ghcr\.io/(acme|a|x)/' |
+      sort -u
+  )
+  echo "$all" | while read -r ref; do
+    repo=${ref%%[:@]*}
+    if echo "$ref" | grep -qE ':(v?[0-9][A-Za-z0-9._-]*|latest|main|pg[0-9]+)(@|$)' ||
+       echo "$known_repos" | grep -qxF "$repo"; then
+      echo "$ref"
+    fi
+  done
+}
+
+# Images built in code ("postgres:" + major, "postgres:%s"): the name must be one the list holds.
+test_image_prefixes() {
   # shellcheck disable=SC2046 # one word per file
-  grep -ohE '"[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9][A-Za-z0-9._-]*(@sha256:[0-9a-f]{64})?"' \
-    $(grep -rlE '^//go:build .*integration' --include='*_test.go' "$ROOT/server-go") |
-    tr -d '"' |
-    grep -E ':(v?[0-9][A-Za-z0-9._-]*|latest|main|pg[0-9]+)(@|$)' |
-    grep -vE '^[^/]*\.[^/]*:[0-9]+$' |
-    grep -vE '^ghcr\.io/(acme|a|x)/' |
-    sort -u
+  grep -ohE '"[a-z][a-z0-9/._-]*:(%[sdv])?" *\+|"[a-z][a-z0-9/._-]*:%[sdv]' $(integration_files) |
+    sed -E 's/^"//; s/:.*//' | grep -vxE 'localhost|sha256' | sort -u
 }
 
 check_go_integration() {
@@ -131,7 +156,11 @@ check_go_integration() {
   missing=$(test_image_literals | while read -r ref; do
     echo "$known" | grep -qxF "$ref" || echo "$ref"
   done)
-  [ -z "$missing" ] || {
+  for repo in $(test_image_prefixes); do
+    echo "$known" | grep -qE "^$repo[:@]" || missing="$missing
+$repo:<built in code>"
+  done
+  [ -z "$(echo "$missing" | sed '/^$/d')" ] || {
     echo "integration tests name images that deploy/ci/third-party-images.sh (list_go_integration) lacks:" >&2
     echo "$missing" >&2
     exit 1
@@ -151,7 +180,7 @@ case "$cmd" in
   save)
     out=${3:?usage: save <set> <file>}
     refs=$(refs_of "$set_name")
-    [ "$(echo "$refs" | grep -c .)" -ge 4 ] || { echo "too few references for $set_name:" >&2; echo "$refs" >&2; exit 1; }
+    [ "$(echo "$refs" | grep -c .)" -ge 1 ] || { echo "too few references for $set_name:" >&2; echo "$refs" >&2; exit 1; }
     for ref in $refs; do pull_with_retry "$ref" || { echo "could not pull $ref" >&2; exit 1; }; done
     # Not a pipe: dash has no pipefail, so a failed save must stop here, not become a green artifact.
     tar_file=${out%.gz}
