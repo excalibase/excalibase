@@ -31,8 +31,37 @@ function names(): string[] {
   return screen.getAllByRole('row').slice(1).map((row) => within(row).getAllByRole('cell')[0].textContent ?? '');
 }
 
+const selectableNames = () => screen.getAllByRole('row').slice(1).map((row) => within(row).getAllByRole('cell')[1].textContent ?? '');
+
 describe('DataTable', () => {
   beforeEach(() => localStorage.clear());
+
+  // The header row is display:none on a phone, so sorting and select-all live in a bar above the cards.
+  test('a phone bar sorts by a column, flips the direction and selects the page', async () => {
+    render(<DataTable label="Projects" columns={COLUMNS} rows={makeRows(3).reverse()} getRowId={(r) => r.id} selectable />);
+    const bar = within(screen.getByTestId('phone-controls'));
+    expect(bar.getByRole('combobox', { name: 'Sort by' })).toHaveValue('');
+    await userEvent.selectOptions(bar.getByRole('combobox', { name: 'Sort by' }), 'name');
+    expect(selectableNames()).toEqual(['proj-01', 'proj-02', 'proj-03']);
+    await userEvent.click(bar.getByRole('button', { name: 'Ascending' }));
+    expect(selectableNames()).toEqual(['proj-03', 'proj-02', 'proj-01']);
+    await userEvent.click(bar.getByRole('checkbox', { name: 'Select every row on this page' }));
+    expect(screen.getByText('3 selected')).toBeInTheDocument();
+  });
+
+  test('a table with nothing sortable or selectable has no phone bar', () => {
+    render(<DataTable label="Projects" columns={[{ id: 'n', header: 'Name', cell: (r: Row) => r.name }]} rows={makeRows(1)} getRowId={(r) => r.id} />);
+    expect(screen.queryByTestId('phone-controls')).not.toBeInTheDocument();
+  });
+
+  // On a phone the rows stack into cards; each cell then names its own column.
+  test('every cell carries its column name, and the header row is kept for screen readers on a phone', () => {
+    render(<DataTable label="Projects" columns={COLUMNS} rows={makeRows(1)} getRowId={(r) => r.id} rowActions={() => <a href="/x">Open</a>} />);
+    const cells = within(screen.getAllByRole('row')[1]).getAllByRole('cell');
+    expect(cells.map((c) => c.getAttribute('data-label'))).toEqual(['Name', 'Plan', 'Size', null]);
+    expect(screen.getByRole('table')).toHaveClass('max-md:block');
+    expect(screen.getAllByRole('row')[0].closest('thead')).toHaveClass('max-md:hidden');
+  });
 
   test('filters rows by text', async () => {
     render(<DataTable label="Projects" columns={COLUMNS} rows={makeRows(5)} getRowId={(r) => r.id} />);

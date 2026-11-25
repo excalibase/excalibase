@@ -3,6 +3,7 @@ import { useInstance } from '../../../hooks/useProvisioning';
 import { useApps, type App } from '../../../api/apps';
 import { useSites, type Site } from '../../../api/sites';
 import { useBuckets, type Bucket } from '../../../hooks/useStorage';
+import { isNotOffered } from '../../../utils/notOffered';
 import type { DatabaseInstance } from '../../../types';
 import type { ServiceRef } from './panelState';
 
@@ -16,6 +17,8 @@ export interface ProjectServices {
   readonly buckets: readonly Bucket[];
   readonly appHosting: boolean;
   readonly sitesOn: boolean;
+  // False when the install does not mount storage: its list answers 404.
+  readonly storageOffered: boolean;
   readonly loading: boolean;
   readonly error: unknown;
 }
@@ -32,6 +35,7 @@ export function useProjectServices(projectId: string): ProjectServices {
   const sites = useSites(sitesOn ? projectId : '');
   const buckets = useBuckets(projectId);
   const project = instance.data;
+  const storageOffered = !isNotOffered(buckets.error);
 
   return {
     project,
@@ -41,8 +45,9 @@ export function useProjectServices(projectId: string): ProjectServices {
     buckets: Array.isArray(buckets.data) ? buckets.data : [],
     appHosting,
     sitesOn,
+    storageOffered,
     loading: hostingLoading || sitesConfigLoading || instance.isLoading || apps.isLoading || sites.isLoading || buckets.isLoading,
-    error: instance.error ?? apps.error ?? sites.error ?? buckets.error,
+    error: instance.error ?? apps.error ?? sites.error ?? (storageOffered ? buckets.error : undefined),
   };
 }
 

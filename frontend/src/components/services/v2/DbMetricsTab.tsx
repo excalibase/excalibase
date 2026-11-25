@@ -1,5 +1,6 @@
 import { useCurrentMetrics, useMetricsHistory } from '../../../hooks/useMetrics';
 import { useFeatureEnabled } from '../../../hooks/useDeploymentMode';
+import { sentence } from '../../../utils/sentence';
 import { databaseSize } from '../../../utils/databaseSize';
 import type { DatabaseInstance, DatabaseMetrics, MetricsHistory, PodMetrics } from '../../../types';
 import { MetricsEndpointCard } from '../../MetricsEndpointCard';
@@ -108,7 +109,7 @@ function Trend({ projectId }: { readonly projectId: string }) {
 function Unavailable({ reason }: { readonly reason: string | null }) {
   return (
     <Section id="db-metrics-unavailable" title="Metrics unavailable">
-      <p className="text-sm text-text-secondary">{reason ?? 'Usage cannot be read from the database right now.'}</p>
+      <p className="text-sm text-text-secondary">{reason ? sentence(reason) : 'Usage cannot be read from the database right now.'}</p>
     </Section>
   );
 }

@@ -114,7 +114,7 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 	}
 	if s.k8sClient == nil {
 		metrics.MetricsAvailable = false
-		reason := "database metrics are read from Kubernetes; this installation runs its databases on a single host"
+		reason := "database metrics are not turned on for this single host: switch on host monitoring to see them"
 		metrics.UnavailableReason = &reason
 		return metrics
 	}

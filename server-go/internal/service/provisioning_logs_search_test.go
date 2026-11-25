@@ -286,6 +286,29 @@ func TestLogSearchOnASingleHostIsUnavailable(t *testing.T) {
 	}
 }
 
+// Only a single host whose monitoring is off is told to switch it on; any other
+// refusal is the generic one.
+func TestLogSearchRefusalsOtherThanMonitoringOffAreGeneric(t *testing.T) {
+	cases := map[string]*domain.DatabaseInstance{
+		"single host with no container": {ProjectID: "host-a", OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeDocker, Status: "ACTIVE", Tier: domain.Free},
+		"kubernetes row, no client":     {ProjectID: "host-a", OrgID: "org1", Namespace: "ns", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeK8s, Status: "ACTIVE", Tier: domain.Free},
+	}
+	for name, inst := range cases {
+		t.Run(name, func(t *testing.T) {
+			store, _ := storage.NewFileSystemStore(t.TempDir())
+			if err := store.Create(inst); err != nil {
+				t.Fatal(err)
+			}
+			svc := NewProvisioningService(store, provisioner.NewFactory(), nil)
+
+			_, err := svc.SearchLogs(context.Background(), "host-a", LogSearch{Lines: 10})
+			if !errors.Is(err, ErrLogsUnavailable) || errors.Is(err, ErrLogsNotOffered) || strings.Contains(err.Error(), "host monitoring") {
+				t.Fatalf("err = %v, want the generic ErrLogsUnavailable", err)
+			}
+		})
+	}
+}
+
 // The live pod log asks for as many lines as Loki would: 1..5000 (more is cut to 5000), else 100.
 func TestLogSearchClampsThePodLogTailLikeLoki(t *testing.T) {
 	for _, tc := range []struct {

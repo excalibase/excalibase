@@ -407,7 +407,7 @@ func wireInPlaceRestore(backupSvc *service.BackupService, provSvc *service.Provi
 	backupSvc.SetInPlaceRestore(service.NewInPlaceRestore(service.InPlaceRestoreConfig{
 		Projects:  provSvc,
 		Instances: store,
-		Probe:     service.NewVaultDatabaseProbe(vc),
+		Probe:     service.NewVaultDatabaseProbe(vc).WithInstances(store),
 		Observers: observers,
 	}))
 }
@@ -1632,11 +1632,11 @@ type handlerDepsArgs struct {
 // an adapter that did not take a probe — or a vault the probe cannot read
 // through — is a startup failure, not something to discover on the first
 // restore a customer runs.
-func wireRestoreVerification(backupSvc *service.BackupService, vc vaultclient.VaultClient, readyTimeout time.Duration) error {
+func wireRestoreVerification(backupSvc *service.BackupService, vc vaultclient.VaultClient, readyTimeout time.Duration, instances storage.InstanceStore) error {
 	if vc == nil {
 		return errors.New("no vault client: the probe cannot read the credentials a restored project is registered with")
 	}
-	if err := backupSvc.SetDatabaseProbe(service.NewVaultDatabaseProbe(vc)); err != nil {
+	if err := backupSvc.SetDatabaseProbe(service.NewVaultDatabaseProbe(vc).WithInstances(instances)); err != nil {
 		return err
 	}
 	backupSvc.SetRestoreReadyTimeout(readyTimeout)
@@ -1830,7 +1830,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	backupSvc.SetRestorePlanSource(provSvc)
 	backupSvc.SetBackupCredentials(provSvc.BackupCredentials())
-	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout); err != nil {
+	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout, store); err != nil {
 		log.Fatalf("restore verification: %v", err)
 	}
 	startHostMySQLBackups(hostMySQLBackups, store)

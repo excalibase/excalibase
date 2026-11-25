@@ -53,5 +53,5 @@ export function useLogExplorer(projectId: string) {
     return allLines.filter((l) => l.toLowerCase().includes(term));
   }, [rawLogs, search]);
 
-  return { search, setSearch, ranges, range, setRangeLabel, retentionHours, logLines, isLoading, error };
+  return { search, setSearch, ranges, range, setRangeLabel, retentionHours, logLines, isLoading, error, notOffered: data?.notOffered };
 }

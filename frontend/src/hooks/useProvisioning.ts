@@ -375,6 +375,8 @@ export interface LogPage {
   logs: string;
   /** How long the project's plan keeps logs; absent when the plan does not decide it (EXC-659). */
   retentionHours?: number;
+  /** Why this install has no log search, when it has none: not a failure (a single host with host monitoring off). */
+  notOffered?: string;
 }
 
 export const useLogSearch = (projectId: string, lines: number = 100, { since, search }: LogQuery = {}) => {

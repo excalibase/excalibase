@@ -93,9 +93,17 @@ describe('metrics tab', () => {
 
   test('metrics that cannot be read say why, without setup instructions', async () => {
     open({ metricsAvailable: false, unavailableReason: 'The database is not reachable' });
-    expect(await screen.findByText('The database is not reachable')).toBeInTheDocument();
+    expect(await screen.findByText('The database is not reachable.')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Metrics unavailable' })).toBeInTheDocument();
     expect(screen.queryByText(/9187|metricsEnabled/)).not.toBeInTheDocument();
+  });
+
+  test('a single host with monitoring off says metrics are not on, as a plain sentence and with no Kubernetes', async () => {
+    open({ metricsAvailable: false, unavailableReason: 'database metrics are not turned on for this single host: switch on host monitoring to see them' });
+    const note = await screen.findByText(/^Database metrics are not turned on for this single host/);
+    expect(note).toHaveTextContent(/to see them\.$/);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(note.textContent).not.toMatch(/kubernetes/i);
   });
 
   test('a project that has no metrics yet says so', async () => {

@@ -49,6 +49,9 @@ type Overrides struct {
 	Host    string
 	Port    string
 	SSLMode string
+	// SingleHost is a process that provisions on a Docker or Podman host. Only
+	// such a process may take a project row's word that its database serves no TLS.
+	SingleHost bool
 }
 
 // OverridesFromEnv reads the SCHEMA_DB_* knobs the schema browser and the
@@ -56,9 +59,10 @@ type Overrides struct {
 // the same address.
 func OverridesFromEnv() Overrides {
 	return Overrides{
-		Host:    os.Getenv("SCHEMA_DB_HOST"),
-		Port:    os.Getenv("SCHEMA_DB_PORT"),
-		SSLMode: os.Getenv("SCHEMA_DB_SSLMODE"),
+		Host:       os.Getenv("SCHEMA_DB_HOST"),
+		Port:       os.Getenv("SCHEMA_DB_PORT"),
+		SSLMode:    os.Getenv("SCHEMA_DB_SSLMODE"),
+		SingleHost: os.Getenv("PROVISIONER_MODE") == "docker",
 	}
 }
 
@@ -258,30 +262,33 @@ func NewOpener(
 
 // Open returns the project's pool, opening it on first use.
 func (o *Opener) Open(_ context.Context, projectID string) (*sql.DB, error) {
-	if err := o.checkServable(projectID); err != nil {
+	inst, err := o.postgresInstance(projectID)
+	if err != nil {
 		return nil, err
 	}
-	return o.cached(projectID, projectID, appRole, o.openPostgres)
+	return o.cached(projectID, projectID, appRole, o.openPostgresFor(inst))
 }
 
 // OpenScheduler returns the project's pool for the scheduler's bookkeeping in
 // the excalibase schema, logged in as excalibase_scheduler. It is never handed
 // to a path that runs customer SQL.
 func (o *Opener) OpenScheduler(_ context.Context, projectID string) (*sql.DB, error) {
-	if err := o.checkServable(projectID); err != nil {
+	inst, err := o.postgresInstance(projectID)
+	if err != nil {
 		return nil, err
 	}
-	return o.cached(projectID, schedulerKey(projectID), schedulerRole, o.openPostgres)
+	return o.cached(projectID, schedulerKey(projectID), schedulerRole, o.openPostgresFor(inst))
 }
 
 // OpenOwner returns the project's pool logged in as its owner. Only role
 // management uses it, because the role functions run for the owner alone;
 // customer SQL runs as excalibase_app and is never handed this pool (EXC-761).
 func (o *Opener) OpenOwner(_ context.Context, projectID string) (*sql.DB, error) {
-	if err := o.checkServable(projectID); err != nil {
+	inst, err := o.postgresInstance(projectID)
+	if err != nil {
 		return nil, err
 	}
-	return o.cached(projectID, ownerKey(projectID), ownerRole, o.openPostgres)
+	return o.cached(projectID, ownerKey(projectID), ownerRole, o.openPostgresFor(inst))
 }
 
 // ownerRole is the vault record name of the project's owner login.
@@ -322,16 +329,33 @@ func (o *Opener) cached(projectID, key, role string, open func(creds map[string]
 	return db, nil
 }
 
-func (o *Opener) openPostgres(creds map[string]string) (*sql.DB, error) {
-	dsn, err := poolDSN(creds, o.overrides, o.limits)
-	if err != nil {
-		return nil, err
+// openPostgresFor opens a pool the way the project's own row says it is reached.
+func (o *Opener) openPostgresFor(inst *domain.DatabaseInstance) func(creds map[string]string) (*sql.DB, error) {
+	overrides := OverridesFor(o.overrides, inst)
+	return func(creds map[string]string) (*sql.DB, error) {
+		dsn, err := poolDSN(creds, overrides, o.limits)
+		if err != nil {
+			return nil, err
+		}
+		db, err := OpenPostgres(dsn, o.limits.ioTimeout())
+		if err != nil {
+			return nil, fmt.Errorf("open database: %w", err)
+		}
+		return db, nil
 	}
-	db, err := OpenPostgres(dsn, o.limits.ioTimeout())
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+}
+
+// OverridesFor adds what a single host's row states to the process-wide
+// overrides: its database serves no TLS and has no client CA, so its platform
+// roles log in with their passwords. Only a row that says so itself turns TLS
+// off, never in a process that is not itself a single host, never one on
+// Kubernetes (whose platform roles log in by certificate), and never over an
+// override that names a mode.
+func OverridesFor(base Overrides, inst *domain.DatabaseInstance) Overrides {
+	if base.SSLMode == "" && base.SingleHost && inst != nil && inst.DeploymentMode == domain.ModeDocker && inst.SSLMode == domain.SSLModeDisable {
+		base.SSLMode = domain.SSLModeDisable
 	}
-	return db, nil
+	return base
 }
 
 // evictOldestLocked closes the least recently used pool when the cache is
@@ -402,17 +426,17 @@ func (o *Opener) ProjectStatusChanged(projectID, status string) {
 	}
 }
 
-// checkServable refuses a project that has no row or that the platform must
-// not serve.
-func (o *Opener) checkServable(projectID string) error {
+// postgresInstance refuses a project that has no row, that the platform must
+// not serve, or that is not Postgres, and otherwise returns its row.
+func (o *Opener) postgresInstance(projectID string) (*domain.DatabaseInstance, error) {
 	inst, err := o.servableInstance(projectID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if inst.DBType == domain.MySQL {
-		return fmt.Errorf("%w: %s", domain.ErrPostgresOnly, projectID)
+		return nil, fmt.Errorf("%w: %s", domain.ErrPostgresOnly, projectID)
 	}
-	return nil
+	return inst, nil
 }
 
 // servableInstance is the project's row when its database may be reached.

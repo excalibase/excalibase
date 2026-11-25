@@ -24,6 +24,8 @@ interface World {
   sites?: unknown[];
   projectError?: boolean;
   bucketsError?: boolean;
+  // The install does not mount storage, so the control plane answers 404.
+  bucketsMissing?: boolean;
   config?: Record<string, unknown>;
 }
 
@@ -37,6 +39,7 @@ function stub(world: World) {
     if (url.endsWith('/apps/api')) return data(app);
     if (url.includes('/apps/api/deploys')) return data(world.deploys ?? []);
     if (url.endsWith('/sites/')) return data(world.sites ?? []);
+    if (url.endsWith('/storage/buckets') && world.bucketsMissing) return Promise.reject(Object.assign(new Error('Request failed with status code 404'), { response: { status: 404, data: {} } }));
     if (url.endsWith('/storage/buckets')) return world.bucketsError ? Promise.reject(new Error('buckets down')) : data(world.buckets ?? []);
     if (url.endsWith('/functions')) return data(world.functions ?? []);
     return Promise.reject(Object.assign(new Error('not mocked'), { response: { status: 404 } }));
@@ -156,6 +159,22 @@ describe('ProjectServicesPage', () => {
     renderAt('/project/p1');
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not be loaded|buckets down/i);
     expect(screen.queryByRole('heading', { name: 'Add your first service' })).not.toBeInTheDocument();
+  });
+
+  test('storage that the install does not offer is said so, not shown as a failed load', async () => {
+    stub({ bucketsMissing: true, config: { appHosting: false } });
+    renderAt('/project/p1');
+    expect(await screen.findByTestId('project-services')).toBeInTheDocument();
+    expect(await screen.findByTestId('not-offered')).toHaveTextContent(/app hosting and file storage are not offered/i);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Services' })).toBeInTheDocument();
+  });
+
+  test('a storage list that failed for another reason is still an error', async () => {
+    stub({ bucketsError: true });
+    renderAt('/project/p1');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not be loaded|buckets down/i);
+    expect(screen.queryByTestId('not-offered')).not.toBeInTheDocument();
   });
 
   test('a MySQL project has no Postgres-only cluster settings in its database panel', async () => {

@@ -6,6 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
 // probeVault serves one credential set, or refuses.
@@ -77,5 +81,27 @@ func closedPortCreds() map[string]string {
 		"host": "127.0.0.1", "port": "1",
 		"username": "excalibase_app", "password": "pw", "database": "app",
 		"sslcert": "CERT-PEM", "sslkey": "KEY-PEM", "sslrootcert": "CA-PEM",
+	}
+}
+
+// A single host's restored database has no client certificate; the probe reads
+// the project's row, as the opener does, and logs in with the password.
+func TestProbeOfASingleHostProjectDoesNotDemandACertificate(t *testing.T) {
+	t.Setenv("PROVISIONER_MODE", "docker")
+	creds := closedPortCreds()
+	creds["username"] = "excalibase_app"
+	delete(creds, "sslcert")
+	for mode, wantCertError := range map[domain.DeploymentMode]bool{domain.ModeDocker: false, domain.ModeK8s: true} {
+		store, _ := storage.NewFileSystemStore(t.TempDir())
+		if err := store.Create(&domain.DatabaseInstance{ProjectID: "dst", Status: "ACTIVE", DeploymentMode: mode, SSLMode: domain.SSLModeDisable}); err != nil {
+			t.Fatal(err)
+		}
+		probe := NewVaultDatabaseProbe(&probeVault{creds: creds}).WithInstances(store)
+		probe.timeout = time.Second
+
+		err := probe.Probe(context.Background(), "dst")
+		if got := errors.Is(err, tenantcert.ErrNoClientCertificate); got != wantCertError {
+			t.Errorf("mode %s: err = %v, certificate refusal = %v, want %v", mode, err, got, wantCertError)
+		}
 	}
 }

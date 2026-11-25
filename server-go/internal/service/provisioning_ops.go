@@ -72,7 +72,11 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 // ErrLogsUnavailable is a log backend that did not answer.
 var ErrLogsUnavailable = errors.New("the database's logs are not available right now")
 
-var errLogsOnSingleHost = fmt.Errorf("%w: the log search reads Kubernetes pod logs; this installation runs its databases on a single host", ErrLogsUnavailable)
+// ErrLogsNotOffered is an install that has no log search for its databases; it is
+// not a failure, so a caller shows it as a plain "not offered".
+var ErrLogsNotOffered = errors.New("log search is not turned on for this single host: switch on host monitoring to search the database's logs")
+
+var errLogsOnSingleHost = fmt.Errorf("%w: %w", ErrLogsUnavailable, ErrLogsNotOffered)
 
 // maxLokiAnswer bounds one Loki reply: 5000 lines with their labels.
 const maxLokiAnswer = 32 << 20
@@ -169,7 +173,10 @@ func (s *ProvisioningService) SetSingleHostLogs(logs SingleHostLogs) { s.singleH
 // searchSingleHostLogs reads what the engine kept of the database container's
 // output since it was created; the container is the project's own, by id.
 func (s *ProvisioningService) searchSingleHostLogs(ctx context.Context, inst *domain.DatabaseInstance, search LogSearch) (LogPage, error) {
-	if (s.singleHostLogs == nil && s.hostLogStore == "") || inst.DeploymentMode != domain.ModeDocker || inst.Namespace == "" {
+	if inst.DeploymentMode != domain.ModeDocker || inst.Namespace == "" {
+		return LogPage{}, ErrLogsUnavailable
+	}
+	if s.singleHostLogs == nil && s.hostLogStore == "" {
 		return LogPage{}, errLogsOnSingleHost
 	}
 	if s.hostLogStore != "" {

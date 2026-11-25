@@ -33,9 +33,10 @@ const API_APP = app({
 });
 const WORKER = app({ id: 'a2', name: 'worker', env: [] });
 
-function renderPage(apps: unknown[] | Error = [API_APP, WORKER], orgRole = 'developer') {
+function renderPage(apps: unknown[] | Error = [API_APP, WORKER], orgRole = 'developer', appHosting = true) {
   answers.length = 0;
   vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url === '/config') return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting } }) as never;
     if (url === '/provision/p1') return Promise.resolve({ data: { projectId: 'p1', orgId: 'org-1' } }) as never;
     if (url === '/orgs') return Promise.resolve({ data: [{ id: 'org-1', name: 'Acme', slug: 'a', tier: 'FREE', ownerId: 'x', role: orgRole }] }) as never;
     if (url !== '/projects/p1/apps/') return Promise.reject(new Error(`unexpected GET ${url}`));
@@ -157,5 +158,13 @@ describe('ProjectVariablesPage', () => {
   test('a failed load says so', async () => {
     renderPage(new Error('down'));
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not load/i);
+  });
+
+  test('an install without app hosting says it is not offered, and never asks for the apps', async () => {
+    renderPage([], 'developer', false);
+    expect(await screen.findByTestId('variables-not-offered')).toHaveTextContent(/app hosting is not offered/i);
+    await settle();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(vi.mocked(api.get).mock.calls.some(([url]) => url === '/projects/p1/apps/')).toBe(false);
   });
 });
