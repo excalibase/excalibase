@@ -2,9 +2,12 @@ package edgefn
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 )
 
 // fakeVault mirrors the vaultclient.VaultClient interface for in-memory testing.
@@ -18,7 +21,7 @@ func (f *fakeVault) Get(p string) (map[string]string, error) {
 	if d, ok := f.data[p]; ok {
 		return d, nil
 	}
-	return nil, errors.New("not found")
+	return nil, fmt.Errorf("%w: %s", vault.ErrNotFound, p)
 }
 func (f *fakeVault) Put(p string, d map[string]string) error {
 	// copy to avoid aliasing

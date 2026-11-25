@@ -138,6 +138,9 @@ func runServer(cfg config.AppConfig) {
 	if cfg.AdminConsoleDisabled() {
 		log.Println("WARN: ADMIN_HOST is not set: the admin console is off, every /api/admin route except service accounts answers 404")
 	}
+	if err := cfg.CheckDenoRuntimeImage(); err != nil {
+		log.Fatal(err)
+	}
 	if err := cfg.CheckDenoProvisioningURL(); err != nil {
 		log.Fatal(err)
 	}

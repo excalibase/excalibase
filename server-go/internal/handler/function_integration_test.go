@@ -20,6 +20,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -192,7 +193,7 @@ func (f *e2eFakeVault) Get(p string) (map[string]string, error) {
 	if d, ok := f.data[p]; ok {
 		return d, nil
 	}
-	return nil, fmt.Errorf("not found")
+	return nil, fmt.Errorf("%w: %s", vault.ErrNotFound, p)
 }
 func (f *e2eFakeVault) Put(p string, d map[string]string) error {
 	cp := make(map[string]string, len(d))

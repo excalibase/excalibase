@@ -1,12 +1,19 @@
 package edgefn
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 )
+
+// ErrSecretsUnavailable marks a vault read or write that failed, as opposed to
+// a request the store refused: callers answer it as a service problem, not as
+// a bad request, and never show its cause to a customer.
+var ErrSecretsUnavailable = errors.New("function secrets are unavailable")
 
 // MaxSecretCount caps secrets per project. Keeps bundle size bounded and
 // discourages misuse as general-purpose key-value storage.
@@ -54,16 +61,20 @@ func (s *SecretsStore) vaultPath(projectID string) string {
 	return fmt.Sprintf("projects/%s/edgefn/secrets", projectID)
 }
 
-// GetAll returns every secret for the project as a map. Missing/empty returns
-// an empty map, not an error — this is the normal state for new projects.
+// GetAll returns every secret for the project as a map. A project that has
+// none yet returns an empty map — the normal state for new projects. Any other
+// vault failure is an error: reading it as "no secrets" would deploy a function
+// without them, and let Set overwrite the project's other secrets (EXC-447).
 func (s *SecretsStore) GetAll(projectID string) (map[string]string, error) {
 	if s.vault == nil {
 		return map[string]string{}, nil
 	}
 	data, err := s.vault.Get(s.vaultPath(projectID))
-	if err != nil {
-		// Vault returns "not found" for new projects — return empty.
+	if errors.Is(err, vault.ErrNotFound) {
 		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: read: %w", ErrSecretsUnavailable, err)
 	}
 	if data == nil {
 		return map[string]string{}, nil
@@ -109,7 +120,7 @@ func (s *SecretsStore) Set(projectID, key, value string) error {
 		return fmt.Errorf("project has reached the max of %d secrets", MaxSecretCount)
 	}
 	all[key] = value
-	return s.vault.Put(s.vaultPath(projectID), all)
+	return s.put(projectID, all)
 }
 
 // Delete removes a single key from the project's secret map. Missing key is not
@@ -129,7 +140,14 @@ func (s *SecretsStore) Delete(projectID, key string) error {
 		return nil
 	}
 	delete(all, key)
-	return s.vault.Put(s.vaultPath(projectID), all)
+	return s.put(projectID, all)
+}
+
+func (s *SecretsStore) put(projectID string, all map[string]string) error {
+	if err := s.vault.Put(s.vaultPath(projectID), all); err != nil {
+		return fmt.Errorf("%w: write: %w", ErrSecretsUnavailable, err)
+	}
+	return nil
 }
 
 // BuildEnvForDeploy merges user secrets with the platform's built-in env vars.

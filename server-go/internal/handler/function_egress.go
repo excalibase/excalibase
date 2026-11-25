@@ -167,7 +167,10 @@ func (h *FunctionHandler) PutEgress(w http.ResponseWriter, r *http.Request) {
 		// replay. Surface the rollout failure without failing the write.
 		log.Printf("WARN: render egress for %s: %v", projectID, err)
 	}
-	h.redeployAll(r, projectID)
+	if err := h.redeployAll(r, projectID); err != nil {
+		writeRedeployFailure(w, projectID, err)
+		return
+	}
 	writeJSON(w, h.egressResponseFor(hosts))
 }
 

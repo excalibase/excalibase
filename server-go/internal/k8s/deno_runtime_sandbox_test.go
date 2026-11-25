@@ -20,7 +20,7 @@ type runtimeClassView struct{ name *string }
 
 func TestEnsureDenoRuntime_RunsUnderTheSandboxRuntimeClass(t *testing.T) {
 	c := newFakeClient()
-	if err := c.EnsureDenoRuntime(context.Background(), "proj-sandbox", DenoRuntimeSpec{Tier: "FREE", RuntimeClass: "gvisor-custom"}); err != nil {
+	if err := c.EnsureDenoRuntime(context.Background(), "proj-sandbox", DenoRuntimeSpec{Image: egressImage, Tier: "FREE", RuntimeClass: "gvisor-custom"}); err != nil {
 		t.Fatalf("EnsureDenoRuntime: %v", err)
 	}
 	got := denoDeploymentOf(t, c, "proj-sandbox").name
@@ -31,7 +31,7 @@ func TestEnsureDenoRuntime_RunsUnderTheSandboxRuntimeClass(t *testing.T) {
 
 func TestEnsureDenoRuntime_NeverRunsUnsandboxedWhenNoClassIsNamed(t *testing.T) {
 	c := newFakeClient()
-	if err := c.EnsureDenoRuntime(context.Background(), "proj-default", DenoRuntimeSpec{Tier: "FREE"}); err != nil {
+	if err := c.EnsureDenoRuntime(context.Background(), "proj-default", DenoRuntimeSpec{Image: egressImage, Tier: "FREE"}); err != nil {
 		t.Fatalf("EnsureDenoRuntime: %v", err)
 	}
 	got := denoDeploymentOf(t, c, "proj-default").name
@@ -43,7 +43,7 @@ func TestEnsureDenoRuntime_NeverRunsUnsandboxedWhenNoClassIsNamed(t *testing.T) 
 func TestEnsureDenoRuntime_ExistingUnsandboxedRuntimeMovesIntoTheSandbox(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
-	spec := DenoRuntimeSpec{Tier: "FREE", RuntimeClass: "gvisor"}
+	spec := DenoRuntimeSpec{Image: egressImage, Tier: "FREE", RuntimeClass: "gvisor"}
 	if err := c.EnsureDenoRuntime(ctx, "proj-old", spec); err != nil {
 		t.Fatalf("EnsureDenoRuntime: %v", err)
 	}
