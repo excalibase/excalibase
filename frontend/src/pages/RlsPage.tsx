@@ -200,13 +200,13 @@ export function RlsPage() {
             <label htmlFor="policy-using-input" className="block text-sm font-medium text-text-secondary mb-1">USING expression</label>
             <textarea id="policy-using-input" value={pUsing} onChange={e => setPUsing(e.target.value)} rows={3}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. user_id = current_setting('request.user_id', true)" />
+              placeholder="e.g. owner_id = 42" />
           </div>
           <div>
             <label htmlFor="policy-withcheck-input" className="block text-sm font-medium text-text-secondary mb-1">WITH CHECK expression</label>
             <textarea id="policy-withcheck-input" value={pWithCheck} onChange={e => setPWithCheck(e.target.value)} rows={3}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. user_id = current_setting('request.user_id', true)" />
+              placeholder="e.g. owner_id = 42" />
           </div>
         </div>
       </SidePanel>

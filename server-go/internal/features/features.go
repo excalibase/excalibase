@@ -50,7 +50,7 @@ const (
 	// change, sign-out scopes, and Studio's per-user details and delete.
 	AuthUser Feature = "authuser"
 	// AuthGuest is end-user guest accounts (no address, role guest) and the
-	// stable token subject: sub becomes the account id.
+	// is_guest claim. The token sub is the account id with or without it.
 	AuthGuest Feature = "authguest"
 	// AuthMFA is end-user TOTP factors, recovery codes and the aal claim:
 	// the project's switch and its per-project key in the vault.

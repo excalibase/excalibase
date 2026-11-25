@@ -27,8 +27,8 @@ func TestProjectInfoStatesTheEndUserIdTypeAndHowToCompareIt(t *testing.T) {
 	auth, _ := out["endUserAuth"].(map[string]any)
 	permissions, _ := out["permissions"].(map[string]any)
 	idType, _ := auth["userIdType"].(string)
-	// EXC-641: auth signs userId as a JSON number; with guests off the sub is the address.
-	for _, want := range []string{"JSON number", `"userId": 42`, "email claim", "sub", "X-Excalibase-Email"} {
+	// EXC-641: auth signs userId as a JSON number. EXC-879: the sub is the account id, guests on or off.
+	for _, want := range []string{"JSON number", `"userId": 42`, "email claim", "sub is the account id", "X-Excalibase-Email"} {
 		if !strings.Contains(idType, want) {
 			t.Errorf("userIdType lacks %q: %s", want, idType)
 		}
@@ -92,7 +92,7 @@ func TestAuthGuideLeavesOutMethodsWhoseFlagIsOff(t *testing.T) {
 		}
 	}
 	idType, _ := auth["userIdType"].(string)
-	if strings.Contains(idType, "account id") {
+	if strings.Contains(idType, "is_guest") {
 		t.Errorf("userIdType speaks of guests while authguest is off: %s", idType)
 	}
 }
@@ -162,11 +162,13 @@ func TestSessionVariablesNameTheEmailClaimWithGuestsOff(t *testing.T) {
 	}
 }
 
-// Published auth builds before the guest release carry no email claim, so with guests off the guide must not promise one.
-func TestUserIDTypeDoesNotPromiseAnEmailClaimWithGuestsOff(t *testing.T) {
+// EXC-879: the sub is the account id with guests off too; the address is the email claim.
+func TestUserIDTypeNamesTheAccountIDAsSubWithGuestsOff(t *testing.T) {
 	idType, _ := guide(t, projectInfo(t), "endUserAuth")["userIdType"].(string)
-	mustContain(t, "userIdType", idType, "sub is the user's email", "falls back to the sub", "no email claim", "missing_session_variable", "test_auth_flow")
-	if strings.Contains(idType, "the same address is in the email claim") {
-		t.Errorf("userIdType promises an email claim: %s", idType)
+	mustContain(t, "userIdType", idType, "sub is the account id", "email claim", "X-Excalibase-User-Id is the account id", "test_auth_flow")
+	for _, stale := range []string{"sub is the user's email", "falls back to the sub", "missing_session_variable"} {
+		if strings.Contains(idType, stale) {
+			t.Errorf("userIdType still says %q: %s", stale, idType)
+		}
 	}
 }

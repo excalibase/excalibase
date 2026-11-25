@@ -1666,13 +1666,13 @@
       "height": 18,
       "strokeColor": "#1864ab",
       "backgroundColor": "transparent",
-      "text": "SET request.user_id = '{userId}'  (RLS)",
+      "text": "session X-Excalibase-User-Id = '{userId}'  (RLS)",
       "fontSize": 12,
       "fontFamily": 3,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "SET request.user_id = '{userId}'  (RLS)",
+      "originalText": "session X-Excalibase-User-Id = '{userId}'  (RLS)",
       "lineHeight": 1.35
     },
     {
@@ -2234,13 +2234,13 @@
       "height": 18,
       "strokeColor": "#1864ab",
       "backgroundColor": "transparent",
-      "text": "SET request.user_id + SELECT query",
+      "text": "X-Excalibase-User-Id + SELECT query",
       "fontSize": 12,
       "fontFamily": 3,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "SET request.user_id + SELECT query",
+      "originalText": "X-Excalibase-User-Id + SELECT query",
       "lineHeight": 1.35
     },
     {
