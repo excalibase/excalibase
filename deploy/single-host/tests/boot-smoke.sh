@@ -44,6 +44,13 @@
 # a table's changes across a NATS restart, a pause and a resume.
 # Destroys the bundle's containers and volumes; never run it on an install you keep.
 set -uo pipefail
+# A run that outlives its deadline ends itself with a failure instead of waiting on the CI timeout.
+# The default sits under the CI step's 80 minutes.
+BOOT_SMOKE_DEADLINE=${BOOT_SMOKE_DEADLINE:-4500}
+trap 'echo "FAIL boot-smoke passed its ${BOOT_SMOKE_DEADLINE}s deadline"; exit 1' USR1
+( sleep "$BOOT_SMOKE_DEADLINE"; kill -USR1 $$ 2>/dev/null ) >/dev/null 2>&1 &
+WATCHDOG=$!
+trap 'kill $WATCHDOG 2>/dev/null' EXIT
 ENGINE=${1:-docker}
 BUNDLE=$(cd "$(dirname "$0")/.." && pwd)
 TESTS=$BUNDLE/tests
@@ -60,6 +67,9 @@ ko() { echo "FAIL $*"; fail=$((fail+1)); }
 # when grep stops early and the engine's log writer gets SIGPIPE (Podman 4.9).
 logs_have() { local out; out=$($DOCKER logs "$1" 2>&1); grep -qF -- "$2" <<< "$out"; }
 c() { curl -sk --max-time 30 --resolve studio.localhost:$PORT:127.0.0.1 --resolve api.localhost:$PORT:127.0.0.1 --resolve files.localhost:$PORT:127.0.0.1 "$@"; }
+# vault_field <project> <role> <field>: a stored login read as the platform admin;
+# the credentials route no longer returns a password (EXC-759).
+vault_field() { c -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/vault/secrets/projects/$1/credentials/$2" | python3 -c "import json,sys;print(json.load(sys.stdin).get(sys.argv[1],''))" "$3" 2>/dev/null; }
 # Apps leave per-project networks and disks; they go with the managed containers.
 wipe_managed() {
   $DOCKER rm -f "$SMOKE_DNS" "$SITE_FAKES" >/dev/null 2>&1
@@ -158,7 +168,17 @@ EOF
   $DOCKER network connect excalibase-net-build-egress "$SITE_FAKES"
 fi
 [ -n "${LOG_DRAINS:-}" ] && drains_setup
-timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; echo "up exit $?"; grep -iE "^Error|error:" "$W/up.log" | sort -u | head -5
+timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; up_rc=$?
+echo "up exit $up_rc"
+if [ "$up_rc" -ne 0 ]; then
+  # Every later step waits on a stack that is not there: say why and stop (EXC-880).
+  echo "== docker compose up failed (exit $up_rc); its output:"
+  cat "$W/up.log"
+  echo "== docker compose ps -a"
+  $COMPOSE $P ps -a 2>&1
+  [ -n "${KEEP:-}" ] || { $COMPOSE $P down -v >/dev/null 2>&1; wipe_managed; drains_teardown; }
+  exit 1
+fi
 [ -n "${SITE_BUILDS:-}" ] && $DOCKER network connect excalibase-platform "$SITE_FAKES"
 for i in $(seq 90); do [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.Status}}' 2>/dev/null)" = exited ] && break; sleep 2; done
 if [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.ExitCode}}' 2>/dev/null)" = 0 ] && logs_have excalibase-objectstore-setup 'OBJECT STORE READY'; then
@@ -175,11 +195,16 @@ published=$($DOCKER ps --filter name=excalibase- --format '{{.Names}} {{.Ports}}
 [ "$published" = "excalibase-edge " ] && ok "only the edge is published" || ko "published: $published"
 mounts=$($DOCKER inspect excalibase-provisioning --format '{{range .Mounts}}{{.Source}} {{end}}')
 case "$mounts" in *sock*) ko "provisioning mounts a socket: $mounts" ;; *) ok "provisioning holds no engine socket" ;; esac
+# The api host answers a moment after the studio host (EXC-825): wait for any real reply, not a refused or bad-gateway one.
+for i in $(seq 60); do
+  code=$(c -o /dev/null -w '%{http_code}' https://api.localhost:$PORT/actuator/health 2>/dev/null)
+  case "$code" in 000|502|503|504) sleep 2 ;; *) break ;; esac
+done
 c -o /dev/null -w '%{http_code}' https://api.localhost:$PORT/actuator/health | grep -q 404 && ok "api host hides actuator" || ko "actuator reachable"
 
 echo "== studio sign-in"
 PW=$($DOCKER logs excalibase-bootstrap 2>&1 | sed -n 's/.*password: //p' | tail -1)
-T=$(c -X POST https://studio.localhost:$PORT/api/auth/login -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$PW\"}" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("token",""))')
+T=$(c -X POST https://studio.localhost:$PORT/api/auth/login -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$PW\"}" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("token",""))')
 [ -n "$T" ] && ok "admin signs in through the edge" || ko "sign-in failed"
 if [ -n "${MANUAL_UNSEAL:-}" ]; then
   echo "== manual unseal: the admin initializes the vault"

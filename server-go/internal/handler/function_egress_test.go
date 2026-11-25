@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/go-chi/chi/v5"
 )
@@ -298,10 +299,11 @@ const testEgressDBHost = "proj-egress1-postgres-rw.org1-proj-egress1.svc.cluster
 func TestEgress_WorkerMayOpenTheDatabaseItIsGiven(t *testing.T) {
 	f := setupEgressHandler(t)
 	vault := newFakeVault()
-	vault.data["projects/"+testEgressProject+"/credentials/admin"] = map[string]string{
-		"host": testEgressDBHost, "port": "5432", "database": "app", "username": "owner", "password": "p4ss",
+	vault.data["projects/"+testEgressProject+"/credentials/excalibase_runtime"] = map[string]string{
+		"host": testEgressDBHost, "port": "5432", "database": "app", "username": "excalibase_runtime", "password": "p4ss",
 	}
 	f.handler.SetVault(vault)
+	f.handler.SetFeatures(features.NewStatic(features.AppRuntimeLogin))
 	f.egress.hosts[testEgressProject] = []string{"api.stripe.com"}
 	deployEgressFn(t, f, "hello")
 
@@ -336,10 +338,11 @@ func TestEgress_NoDatabaseNoDatabaseHost(t *testing.T) {
 func TestEgress_DatabaseHostTheRuntimeCannotReadIsLeftOut(t *testing.T) {
 	f := setupEgressHandler(t)
 	vault := newFakeVault()
-	vault.data["projects/"+testEgressProject+"/credentials/admin"] = map[string]string{
-		"host": "excalibase-my_project-postgres", "port": "5432", "database": "app", "username": "owner", "password": "p4ss",
+	vault.data["projects/"+testEgressProject+"/credentials/excalibase_runtime"] = map[string]string{
+		"host": "excalibase-my_project-postgres", "port": "5432", "database": "app", "username": "excalibase_runtime", "password": "p4ss",
 	}
 	f.handler.SetVault(vault)
+	f.handler.SetFeatures(features.NewStatic(features.AppRuntimeLogin))
 	deployEgressFn(t, f, "hello")
 	if req := (*f.scripts)[testEgressProject+"__hello"]; len(req.AllowedHosts) != 0 {
 		t.Fatalf("an unreadable database host must not reach the deploy, got %v", req.AllowedHosts)

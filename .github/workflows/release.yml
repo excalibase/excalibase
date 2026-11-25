@@ -11,11 +11,15 @@ on:
         description: "Release version without the v prefix, e.g. 1.0.0 or 1.2.0-rc.1"
         required: true
       source_tag:
-        description: "Tag to promote from, e.g. main-c2565093 (default: main)"
+        description: "Tag to promote from, e.g. main-c2565093 or, for a patch, release-1.7-c2565093 (default: main)"
         default: main
       services:
         description: "Images to release"
         default: "provisioning,excalibase-graphql,excalibase-auth,studio"
+      move_major_latest:
+        description: "Also move the major tag (1) and latest. Set false when patching an older minor than the newest release"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -25,6 +29,10 @@ jobs:
     name: Retag ${{ inputs.version }}
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: ./.github/actions/install-trivy
+
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
@@ -36,53 +44,163 @@ jobs:
       # consumer follows: 1.2.0-rc.1 gets its own tag and nothing else.
       - name: Work out which tags this version carries
         id: plan
-        run: |
-          version='${{ inputs.version }}'
-          case "$version" in
-            v*) echo "::error::drop the v prefix: the git tag is v$version, the image tag is ${version#v}"; exit 1 ;;
-            *+*) echo "::error::a docker tag cannot contain '+'; use '-' or an OCI label"; exit 1 ;;
-          esac
-          major="${version%%.*}"
-          rest="${version#*.}"
-          minor="${rest%%.*}"
-          if printf '%s' "$version" | grep -q -- '-'; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "tags=$version" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "tags=$version $major.$minor $major latest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Retag each service
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SERVICES: ${{ inputs.services }}
+          MOVE_MAJOR_LATEST: ${{ inputs.move_major_latest }}
         run: |
           set -eu
-          summary=""
-          for service in $(printf '%s' '${{ inputs.services }}' | tr ',' ' '); do
+          semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          if ! printf '%s' "$VERSION" | grep -Eq "$semver"; then
+            echo "::error::version must be MAJOR.MINOR.PATCH with an optional -prerelease and no v prefix or +build (a docker tag cannot contain '+')"
+            exit 1
+          fi
+          if ! printf '%s' "$SOURCE_TAG" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+            echo "::error::source_tag may only contain letters, digits, '.', '_' and '-'"
+            exit 1
+          fi
+          if ! printf '%s' "$SERVICES" | grep -Eq '^[a-z0-9-]+(,[a-z0-9-]+)*$'; then
+            echo "::error::services must be a comma-separated list of image names"
+            exit 1
+          fi
+          tags=$(bash scripts/release-tags.sh "$VERSION" "$MOVE_MAJOR_LATEST")
+          if printf '%s' "$VERSION" | grep -q -- '-'; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      # Every check runs before any tag moves, so a refusal never leaves a
+      # half-released version. The native engine image is promoted from the same
+      # commit's <source_tag>-native; an engine build from before native tags
+      # existed has none, and that genuine not-found is skipped with a notice.
+      # Any other registry error fails the job.
+      - name: Retag each service
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SERVICES: ${{ inputs.services }}
+          TAGS: ${{ steps.plan.outputs.tags }}
+          MOVE_MAJOR_LATEST: ${{ inputs.move_major_latest }}
+        run: |
+          set -eu
+          services=$(printf '%s' "$SERVICES" | tr ',' ' ')
+          plan=$(mktemp)
+
+          # Phase 1: resolve every source and prove every target is absent.
+          for service in $services; do
             repository="excalibase/$service"
-            # A released version never moves: the chart pins it by tag alone.
-            if docker buildx imagetools inspect "$repository:${{ inputs.version }}" >/dev/null 2>&1; then
-              echo "::error::$repository:${{ inputs.version }} already exists; cut a new version instead"
+            status=0; bash scripts/inspect-digest.sh "$repository:$VERSION" >/dev/null || status=$?
+            case "$status" in
+              0) echo "::error::$repository:$VERSION already exists; cut a new version instead"; exit 1 ;;
+              3) ;;
+              *) echo "::error::could not check $repository:$VERSION"; exit 1 ;;
+            esac
+            status=0; digest=$(bash scripts/inspect-digest.sh "$repository:$SOURCE_TAG") || status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "::error::could not resolve $repository:$SOURCE_TAG (status $status)"
               exit 1
             fi
-            # `inspect` prints "Digest: sha256:…". Parsed rather than asked
-            # for as a Go template: Actions evaluates that brace syntax first,
-            # even inside a shell comment, and fails to parse the workflow.
-            digest=$(docker buildx imagetools inspect "$repository:${{ inputs.source_tag }}" \
-              | awk '/^Digest:/ { print $2; exit }')
-            test -n "$digest" && test "$digest" != "null"
+            echo "$repository $digest $TAGS" >> "$plan"
 
+            if [ "$service" = "excalibase-graphql" ]; then
+              status=0; native=$(bash scripts/inspect-digest.sh "$repository:$SOURCE_TAG-native") || status=$?
+              case "$status" in
+                0)
+                  native_tags=$(bash scripts/release-native-tags.sh "$VERSION" "$MOVE_MAJOR_LATEST")
+                  first=${native_tags%% *}
+                  status=0; bash scripts/inspect-digest.sh "$repository:$first" >/dev/null || status=$?
+                  case "$status" in
+                    0) echo "::error::$repository:$first already exists; cut a new version instead"; exit 1 ;;
+                    3) ;;
+                    *) echo "::error::could not check $repository:$first"; exit 1 ;;
+                  esac
+                  echo "$repository $native $native_tags" >> "$plan"
+                  ;;
+                3)
+                  echo "::notice::$repository:$SOURCE_TAG-native does not exist (engine build without a native image); native not released for $VERSION"
+                  echo "Native image: skipped, $repository:$SOURCE_TAG-native does not exist" >> "$GITHUB_STEP_SUMMARY"
+                  ;;
+                *) echo "::error::could not check $repository:$SOURCE_TAG-native"; exit 1 ;;
+              esac
+
+              # The one-database engine images (EXC-799) are promoted the same way, each from the same commit's
+              # <source_tag>-<variant>. All four go together or none do: a release with only some of them would
+              # leave a user of the missing one on the previous version. A source tag from before the images
+              # existed has none, and that is skipped with a notice, unless this major.minor has released a
+              # slim image before, or the source has some of them: then a missing variant is an error.
+              # Any other registry error fails the job.
+              variants="postgres mysql postgres-native mysql-native"
+              present=""; found=""; missing=""; released_before=""
+              minor_line="${VERSION%%.*}.$(printf '%s' "${VERSION#*.}" | cut -d. -f1)"
+              for variant in $variants; do
+                status=0; slim=$(bash scripts/inspect-digest.sh "$repository:$SOURCE_TAG-$variant") || status=$?
+                case "$status" in
+                  0) present="$present $variant"; found="$found$variant=$slim"$'\n' ;;
+                  3) missing="$missing $variant" ;;
+                  *) echo "::error::could not check $repository:$SOURCE_TAG-$variant"; exit 1 ;;
+                esac
+                status=0; bash scripts/inspect-digest.sh "$repository:$minor_line-$variant" >/dev/null || status=$?
+                case "$status" in
+                  0) released_before="$released_before $variant" ;;
+                  3) ;;
+                  *) echo "::error::could not check $repository:$minor_line-$variant"; exit 1 ;;
+                esac
+              done
+              if [ -n "$present$released_before" ] && [ -n "$missing" ]; then
+                echo "::error::$repository:$SOURCE_TAG lacks the one-database image(s)${missing}, but they are released for this version line (source has:${present:- none}; $minor_line has:${released_before:- none}). Release all four or none."
+                exit 1
+              fi
+              if [ -z "$present" ]; then
+                echo "::notice::$repository:$SOURCE_TAG has no one-database images (engine build without them); not released for $VERSION"
+                echo "One-database images: skipped, $repository:$SOURCE_TAG-* do not exist" >> "$GITHUB_STEP_SUMMARY"
+              else
+                for variant in $present; do
+                  slim_tags=$(bash scripts/release-slim-tags.sh "$VERSION" "$variant" "$MOVE_MAJOR_LATEST")
+                  first=${slim_tags%% *}
+                  status=0; bash scripts/inspect-digest.sh "$repository:$first" >/dev/null || status=$?
+                  case "$status" in
+                    0) echo "::error::$repository:$first already exists; cut a new version instead"; exit 1 ;;
+                    3) ;;
+                    *) echo "::error::could not check $repository:$first"; exit 1 ;;
+                  esac
+                  slim_digest=$(printf '%s' "$found" | sed -n "s/^$variant=//p")
+                  echo "$repository $slim_digest $slim_tags" >> "$plan"
+                done
+              fi
+            fi
+          done
+
+          # Phase 1b: refuse a fixable CRITICAL unless security/release-waivers.json
+          # waives it with a reason, an approver and an unexpired date (EXC-744).
+          reports=()
+          index=0
+          while read -r repository digest tags; do
+            index=$((index + 1))
+            report="$RUNNER_TEMP/trivy-$index.json"
+            # From RUNNER_TEMP with an empty ignore file, so a trivy.yaml or .trivyignore in the
+            # checkout cannot skip the waiver rules.
+            (cd "$RUNNER_TEMP" && trivy image --quiet --image-src remote --ignorefile /dev/null \
+              --scanners vuln --severity CRITICAL --ignore-unfixed \
+              --format json --output "$report" "$repository@$digest")
+            reports+=("$report")
+          done < "$plan"
+          bash scripts/cve-watch/gate.sh --waivers security/release-waivers.json "${reports[@]}"
+
+          # Phase 2: create.
+          summary=""
+          while read -r repository digest tags; do
             refs=""
-            for tag in ${{ steps.plan.outputs.tags }}; do refs="$refs -t $repository:$tag"; done
+            for tag in $tags; do refs="$refs -t $repository:$tag"; done
             # shellcheck disable=SC2086
             docker buildx imagetools create $refs "$repository@$digest"
-
-            echo "released $repository@$digest as ${{ steps.plan.outputs.tags }}"
-            summary="$summary- \`$repository@$digest\`\n"
-          done
+            echo "released $repository@$digest as $tags"
+            summary="$summary- \`$repository@$digest\` as $tags\n"
+          done < "$plan"
           {
-            echo "### Released ${{ inputs.version }}"
-            echo ""
-            echo "Tags: ${{ steps.plan.outputs.tags }}"
+            echo "### Released $VERSION"
             echo ""
             printf "%b" "$summary"
           } >> "$GITHUB_STEP_SUMMARY"

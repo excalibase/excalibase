@@ -42,7 +42,7 @@ The last command prints the **one-time setup token**. No admin account or passwo
 
 The vault unseal key is kept under AWS KMS (`vault.unseal.provider: awskms`, see docs/deployment/production-k8s-runbook.md §3.3.1); only its ciphertext is stored, and provisioning refuses to start when it cannot decrypt it.
 
-**Studio needs HTTPS.** Its only credential is the `excali_session` cookie, which is `HttpOnly`, `Secure` and `SameSite=Strict`, so a browser stores it only over HTTPS or on `http://localhost`. Plain HTTP on any other address signs nobody in. Writes that ride the cookie must come from `STUDIO_URL`'s origin (or an origin listed explicitly in `CORS_ORIGINS`), so open Studio at exactly that address. `CORS_ORIGINS=*` lets any page call the API with a bearer token but never with the cookie.
+**Studio needs HTTPS.** Its only credential is the `__Host-excali_session` cookie, which is `HttpOnly`, `Secure`, `Path=/`, without a `Domain` and `SameSite=Strict`, so a browser stores it only over HTTPS or on `http://localhost`, and a sibling subdomain cannot plant it. Plain HTTP on any other address signs nobody in. For a throwaway plain-HTTP install on a LAN address set `STUDIO_INSECURE_COOKIES=true`: the cookie then loses `Secure` and the prefix and a sibling host can plant it, so it is insecure and the server refuses it when `STUDIO_URL` is https. Keep `APP_DOMAIN` and `SITES_BASE_DOMAIN` off the Studio and API hosts; a domain equal to or above them stops the server, and one sharing their registrable domain logs a warning. Writes that ride the cookie must come from `STUDIO_URL`'s origin (or an origin listed explicitly in `CORS_ORIGINS`), so open Studio at exactly that address. `CORS_ORIGINS=*` lets any page call the API with a bearer token but never with the cookie.
 
 **Studio is reached through the edge on Kubernetes.** The admin ingress routes `/api` to provisioning's edge listener and everything else to the Studio Service; open Studio at that host. Studio's own `/api` proxy (in `frontend/nginx.conf`) serves the docker all-in-one only: on Kubernetes its `provisioning` upstream does not resolve (nginx's runtime resolver ignores the pod's DNS search list), and the platform NetworkPolicy admits only the edge on provisioning's edge listener, whose `X-Forwarded-For` it trusts. So a port-forward to the Studio Service alone answers 502 on `/api`; that is by design, not a second way in. For local access forward both Services and route `/api` to provisioning's public port, as `demo/stack/studio-proxy.cjs` in excalibase-service does.
 
@@ -136,8 +136,10 @@ The 15% safety headroom is set via `CAPACITY_HEADROOM_PERCENT` env. Set to 0 if 
 The studio's **Platform Admin** page (`/admin`) has the buttons. CLI equivalent:
 
 ```bash
-# Bypasses deletion_protection. Audited.
-curl -X DELETE -H "Authorization: Bearer $PAT" \
+# Bypasses deletion_protection. Audited; a written reason (500 characters
+# at most) is required and goes into the audit entry.
+curl -X DELETE -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  -d '{"reason":"abandoned, holding a node"}' \
   https://<host>/api/admin/projects/proj-abc123
 ```
 
@@ -311,7 +313,10 @@ indefinitely and the only way to find them is
 ```bash
 # ?cascade=true is required — without it the call refuses to avoid
 # orphaning projects whose org row would still exist.
-curl -X DELETE -H "Authorization: Bearer $PAT" \
+# A written reason is required (JSON body, 500 characters at most) and is
+# audited. The org's owner is suspended too, so they cannot sign in again.
+curl -X DELETE -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  -d '{"reason":"proxy abuse across every project"}' \
   "https://<host>/api/admin/orgs/<orgId>?cascade=true"
 ```
 
@@ -569,7 +574,7 @@ curl -X POST -H "Authorization: Bearer $PAT" \
 Find rows waiting for a retry with
 `SELECT project_id, failure_reason FROM database_instances WHERE status = 'BACKUPS_PENDING_DELETE'`.
 `DELETE /api/admin/projects/{projectId}` (force drop) accepts the same
-`confirmDeleteBackups` body field. With `Prefer: respond-async` it answers
+`confirmDeleteBackups` body field, and requires a `reason`. With `Prefer: respond-async` it answers
 202 once the project is `DELETING` and tears it down in the background; the
 row is gone when it finishes, or stays `DELETING` with `deletion_step` and
 `deletion_error`. A teardown never depends on the request staying connected.
@@ -1101,7 +1106,42 @@ Secret. If it still fails, check provisioning's log for
 connection is being refused) and confirm the `platform-nats` Secret was
 seeded by the bootstrap Job.
 
+## 6.5b. WAL archive guards (EXC-784)
+
+Two guards, both **on unless switched off** (`FEATURE_WALARCHIVEALERT=false`, `FEATURE_FREEWALUPLOAD=false`), on Kubernetes and on a single host.
+
+**Archive alerts.** A database whose CloudNativePG `ContinuousArchiving` condition has been False for `EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER` (default `30m`) raises a platform alert, metric `wal.archiving:<namespace>/<cluster>`, severity CRITICAL. A project whose backup credential renewal fails on every pass for the same time raises `backup.renewal:<project>`. Both go through the same path as the pod-pressure alerts (EXC-747): the platform alerts table (the admin alerts list) and an email to every verified platform admin when a mailer is configured: one mail per kind of alert (`backup.renewal`, `wal.archiving`, `wal.shipping`, `wal.monitor`) per hour, listing every affected project, so one shared cause is one mail while each project keeps its own alert row. Alerts of a kind raised close together are batched for 30 seconds; one raised inside the hour after a mail waits for the next mail of its kind, sent when the hour is up, so none is dropped, and an alert that has resolved by the time that mail goes out is left out of it (read once per mail; if the alerts table cannot be read at that moment, every queued alert is listed). Mail still queued when the process exits (inside that window, or waiting out the hour) is lost; the alert rows remain, and the alerts list is the source of truth. They resolve by themselves. A paused (hibernated) cluster never alerts: nothing runs and its last backup stays valid. On a single host, closed WAL waits in the project's container until the one-minute sweep ships it, so a store that refuses uploads fills that container's disk; a project whose shipping fails on every pass for the same time raises `wal.shipping:<project>` (paused projects are not swept and never alert).
+
+**Free uploads hourly.** Free databases get `archive_timeout = 1h`; Standard and Enterprise keep the operator's 5 minutes. An idle database otherwise writes a 16 MB segment every 5 minutes (about 4.6 GB a day) that fills a 5Gi disk within days if uploads fail. The cost: if a Free database's disk is destroyed, up to an hour of writes can be lost. New Free clusters get the setting at creation; existing ones get it on the next platform reconcile pass (at startup and every 10 minutes, no restart: `archive_timeout` reloads). On a single host the bootstrap organization is on Free, so every project there gets it unless `FEATURE_FREEWALUPLOAD=false`; a new Free container is started with it, and the same reconcile pass reads each running Free container's `archive_timeout` and reloads it when it differs (no restart); a restored or major-upgraded project, which comes back on 5 minutes, and a paused project after it resumes are corrected by that pass too. A project moved to another plan loses it with the plan change (Kubernetes). To undo, set `FEATURE_FREEWALUPLOAD=false`: the same reconcile pass then removes `archive_timeout` from every Kubernetes cluster (the operator's 5 minutes returns) and sets single-host containers back to `5min` explicitly (a `RESET` would leave Postgres' own 0, which never closes a quiet segment). No manual step. The reconcile skips projects still being provisioned or failed, which have no cluster yet.
+
+## 6.5c. App and function database login (EXC-765)
+
+Customer apps and functions connect with `excalibase_runtime`, not the project owner's login (**on unless switched off**, `FEATURE_APPRUNTIMELOGIN=false`, on Kubernetes and on a single host). On Postgres 16 and later the owner holds `CREATEROLE`, so code that held its password could create or alter logins, which breaks the rule that no credential does more than its creator.
+
+- **Postgres.** `excalibase_runtime` is `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. It inherits the owner's and `excalibase_app`'s rights over objects (DML, DDL on their tables, sequences, schemas) but not their attributes; from Postgres 16 the memberships carry `SET FALSE`, so it cannot `SET ROLE` to either. `excalibase.create_role`, `alter_role_password` and `drop_role` also refuse any session that is not the owner's (`session_user`), which is what keeps a member of the owner role on Postgres 15 out of them. Tables it creates are shared with the owner, `excalibase_app` and the reader through default privileges.
+- **MySQL.** `excalibase_runtime` holds `ALL PRIVILEGES` on the project database and nothing global: no `CREATE USER`, `GRANT OPTION` or `SUPER` (the owner's `admin` has none either). Database grants name the database with `_` and `%` escaped, since an unescaped `aut_` matched `auth`; the reconcile sets the grants again once for an older project whose name holds one, and the names `auth`, `excalibase`, `excalibase_*`, `mysql`, `sys`, `information_schema` and `performance_schema` are refused.
+- **What it does not stop.** The role functions refuse a call made from inside a trigger or another function, but not one made by a view, RLS policy, rule, column default, CHECK or inlined SQL function an app planted: those run as whoever uses them. If the owner login merely reads such an object, the planted code can call the role functions (Postgres 15 and earlier) or `CREATE ROLE` (16 and later). The owner login is the platform's and must not touch app-created objects at all, not even to read them (a known residual, pinned by a test; the robust fix is separate). The app login can also add triggers to tables Studio made, because it is a member of `excalibase_app`. Studio and the engine write those tables as `excalibase_app`, which holds no role management, so such a trigger never runs with role rights; only someone writing with the owner login by hand would run it as the owner (the EXC-807 case). Tables an app creates give the owner SELECT only, so the owner's session does not fire their triggers by default. On Postgres 15 the runtime login can `SET ROLE` to the owner as well as to `excalibase_app` (not on 16 and later, where the grant is `SET FALSE`), which is the same exposure as above; an upgrade to 16 has the reconcile remove it.
+- **Credential.** Filed in vault at `projects/{id}/credentials/excalibase_runtime`, rotated with the other logins by `POST .../credentials/rotate` (the sessions opened with the old password end when `FEATURE_DBREADROLE` is on), removed with the project, reset on a restore.
+- **Existing projects.** The start-up role reconcile (and every pass after it) creates and files the login for each running project without one. Nothing is redeployed: an app already running keeps the environment it was deployed with, owner login included, until its next deploy, which picks up the runtime login; a function picks it up on its next deploy. Until a project has the login, a deploy of an app that references the database is refused with "still being created, deploy again in a few minutes", and a function gets no `EXCALIBASE_DB_URL`; neither falls back to the owner's login. To cut an old app off, redeploy it and then rotate the credentials, which also ends its old sessions.
+- **Off.** Apps and functions get the owner's login as before, and a runtime login a restored copy brought is locked.
+
+## 6.5d. Function pages served as plain text (EXC-810)
+
+A function answer typed `text/html`, `application/xhtml+xml` or `image/svg+xml` is served as `text/plain` on the shared API origin (**on unless switched off**, `FEATURE_FUNCTIONHTMLGUARD=false`, on Kubernetes and on a single host), so a fake login page cannot be served from the platform's own host. Functions have no custom domain, so there is no pass-through. Details and the cases covered: `docs/functions-response-headers.md`. Customers host pages as apps or sites.
+
 ## 6.6. Project database credential rotation
+
+**Passwords are shown once (`FEATURE_ONETIMECREDENTIALS`, on by default, EXC-759).** With the
+flag on, a database owner password is returned only by the call that sets it:
+`POST /api/provision` and `POST /api/provision/{id}/database` accept an
+optional `password` (16 to 128 characters; blank generates one) and return it
+once; `POST .../credentials/rotate` takes an optional `{"password": ...}` and
+returns the new one once. `GET .../credentials` carries no password at all (the
+owner's or the read-only login's) and its `connectionUrl` holds `<password>`.
+The engine, functions, backups, the watcher and app deploys read the vault
+directly and are not affected. A project created before the flag has no way to
+read its password back: reset it. The flag is on unless
+`FEATURE_ONETIMECREDENTIALS=false` is set, on Kubernetes and on a single host.
 
 `POST /api/provision/{id}/credentials/rotate` replaces the passwords of every
 platform role filed under `projects/{id}/credentials/` — `auth_admin`, then
@@ -1373,3 +1413,48 @@ search-replace will quietly drop it.
 | `GET /api/capacity` | platform_admin | Cluster CPU/mem allocatable, requested, free, per-tier project headroom |
 | `GET /api/admin/projects` | platform_admin | Every project across orgs with live CPU/mem |
 | Grafana → Excalibase folder | grafana admin | Per-service dashboards (Auth, GraphQL, Provisioning, CNPG) with per-tenant filtering |
+
+## Suspending an account
+
+Suspend from the admin console (or by revoking an org); both use one operation
+that deactivates the account, records the row in `abuse_suspensions`, stops its
+apps and, with `FEATURE_SUSPENSIONEMAILS=true`, emails the account holder.
+`POST /api/admin/console/users/{id}/suspend` takes `reason` (required, audited)
+and `reasonCode`: `proxy_vpn`, `crypto_mining`, `spam_or_phishing`,
+`disposable_email` or `other` (the default). The mail names the stopped
+projects and apps, links `ACCEPTABLE_USE_URL#<reasonCode>` and tells the holder
+to reply to `SUPPORT_EMAIL`. A mail failure is logged and counted in
+`excalibase_suspension_mail_total{outcome="failed"}`; the suspension stands.
+Suspensions made before the flag was on are never mailed. A crash-loop stop is
+not a suspension and has its own mail.
+
+What a suspension stops (EXC-845). It keys on the owner of the org: a suspended
+account that only created a project in a good-standing org changes nothing
+there, beyond being unable to start new compute in it (EXC-843). For each
+project in an org the account owns, the apps are paused (including one still
+rolling out), sites come off their hostnames (static sites and previews too,
+and the site timer keeps them off), the function runtime stops (so functions
+and cron stop), and, on Kubernetes, the public database port and read address
+close. Each step is best effort: a failure is logged and listed as
+`servingFailed` in the answer, and never undoes the suspension. On a single
+host the database is published when its container is created (loopback, or
+every interface with `DOCKER_DB_PUBLIC`), so there is no port to close per
+project. The project then reads as unknown to the data plane:
+`GET /api/projects/{id}/info` and the vault credential read answer 404 (503 if
+the standing cannot be read), public storage files answer 404, and every write
+on a project route answers 403 for the org's other members. DELETE and `/pause`
+stay open, and so does the read-only `GET /api/schema/{id}/query`. A platform
+admin keeps the override. The engine and the auth service keep their last copy
+until their caches expire (the engine's pool up to 30 minutes, the auth service
+up to 1 hour, issued end-user JWTs up to 1 hour); there is no evict call yet.
+
+Unsuspend restores sites, the function runtime, the database port (for a running
+project; a paused one comes back with its resume) and the apps the suspension
+stopped, but only for a project that may serve: one awaiting deletion, in
+teardown or restore, or in an org whose owner is still suspended stays down.
+Serving resumes within 5 seconds, the guard's cache.
+
+EXC-843's start rule still applies to starting compute: resuming an idle-paused
+project and the background app start refuse a project created by a suspended
+member, so an org in good standing cannot resume such a project until that
+member is unsuspended or the project is recreated.

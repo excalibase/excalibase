@@ -30,11 +30,18 @@ func (s *AppDeployService) SetImageResolver(images ImageResolver) {
 // the reference as named, so the next plain deploy and the image watcher
 // follow it.
 func (s *AppDeployService) DeployImage(ctx context.Context, projectID, appID, image string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	if err := apphost.ValidateImageReference(image); err != nil {
 		return nil, err
 	}
 	app, err := s.lookupApp(projectID, appID)
 	if err != nil {
+		return nil, err
+	}
+	// Before the registry is asked about an image that would be refused anyway.
+	if err := s.proxyGuard.Check(ctx, appSubject(app, image, app.Env, origin.Actor, "deploy")); err != nil {
 		return nil, err
 	}
 	if s.internal.Names(image) {

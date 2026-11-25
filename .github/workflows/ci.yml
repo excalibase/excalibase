@@ -1,10 +1,20 @@
 name: CI
 
+# release/** runs the same suites as main: a patch is cut on release/<major>.<minor>
+# and CD (cd.yml) builds and publishes release-<major>.<minor>-<sha> from the
+# commit this run passes on.
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "release/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "release/**"]
+
+# A new push to a pull request cancels the older run of that PR (a run uses ~15
+# runner slots). Push runs on main/develop/release are keyed by run id, so each is
+# unique and never cancelled: cd.yml reads each push run's result.
+concurrency:
+  group: ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -38,16 +48,27 @@ jobs:
             backend:
               - 'server-go/**'
               - 'excalibase-vault/**'
+              - 'shared-fixtures/**'
             frontend:
               - 'frontend/**'
               - 'server-go/internal/shiptemplates/testdata/**'
+              - 'shared-fixtures/**'
             deno:
               - 'deno-server/**'
               - 'server-go/internal/k8s/deno_fence.ts'
             ci:
               - '.github/workflows/**'
+              - 'scripts/cve-watch/**'
+              - 'tests/cve-watch/**'
+              - 'scripts/guard-release-tag.sh'
+              - 'scripts/release-*.sh'
+              - 'tests/cd-*.sh'
+              - 'tests/release-*.sh'
+              - 'security/**'
             singlehost:
               - 'deploy/single-host/**'
+              - 'frontend/nginx.conf'
+              - 'frontend/docker-entrypoint.d/**'
             gatewayguard:
               - 'charts/documentdb-gateway/**'
               - 'server-go/internal/config/postgres_catalog.yaml'
@@ -128,7 +149,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Hardening, init, preflight and bootstrap
         run: |
-          for t in single-host edge-listener init-env preflight bootstrap host-firewall; do
+          for t in single-host edge-listener init-env subids preflight bootstrap host-firewall; do
             sh deploy/single-host/tests/$t.sh
           done
       - name: Host firewall gates provisioning and the edge (real Compose)
@@ -137,6 +158,29 @@ jobs:
         run: sh deploy/single-host/tests/sites-edge.sh docker
       - name: API upload size on the edge (real Caddy and Studio nginx)
         run: sh deploy/single-host/tests/api-upload-edge.sh docker
+
+  release-tags:
+    name: Release tag plan
+    needs: changes
+    if: needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Native tag plan
+        run: |
+          bash tests/release-native-tags-test.sh
+          bash tests/release-slim-tags-test.sh
+          bash tests/release-tags-test.sh
+
+      - name: CD tag plan
+        run: |
+          bash tests/cd-plan-test.sh
+          bash tests/cd-guard-test.sh
+
+      - name: Release gate
+        run: |
+          bash tests/cve-watch/gate-test.sh
+          bash tests/cve-watch/workflow-test.sh
 
   gateway-guard:
     name: DocumentDB gateway guard
@@ -196,65 +240,239 @@ jobs:
       - name: Deploy script (curl faked, nothing reaches Cloudflare)
         run: sh test/deploy.sh
 
-  single-host-boot:
-    name: Single-host boot (Docker)
+  # EXC-872: the boot checks ran one after another in one job (2h15m). The images are built
+  # once here and loaded into each shard; every shard is its own runner with fresh Docker state.
+  # An artifact (not a registry push) so a fork PR, which has no push secret, builds the same way.
+  single-host-boot-images:
+    name: Single-host boot images
     needs: changes
     if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-24.04
-    # Four fresh installs, each walking realtime too (EXC-612).
-    timeout-minutes: 145
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build provisioning and Studio from this checkout
         run: |
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
           docker build -q -t docker.io/excalibase/studio:ci frontend
+          docker save docker.io/excalibase/provisioning:ci docker.io/excalibase/studio:ci | gzip -1 > single-host-images.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: single-host-images
+          path: single-host-images.tar.gz
+          retention-days: 1
+          compression-level: 0
+      # EXC-880: each third-party image is pulled once here (with retries) and loaded by the
+      # shards, which used to pull them all again at the same moment and hit the rate limits.
+      - name: Pull the fence images once
+        run: sh deploy/ci/third-party-images.sh save single-host-fence third-party-single-host-fence.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: third-party-single-host-fence
+          path: third-party-single-host-fence.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - name: Pull the smoke images once
+        run: sh deploy/ci/third-party-images.sh save single-host-smoke third-party-single-host-smoke.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: third-party-single-host-smoke
+          path: third-party-single-host-smoke.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - name: Pull the gvisor images once
+        run: sh deploy/ci/third-party-images.sh save single-host-gvisor third-party-single-host-gvisor.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: third-party-single-host-gvisor
+          path: third-party-single-host-gvisor.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - name: Pull the mysql images once
+        run: sh deploy/ci/third-party-images.sh save single-host-mysql third-party-single-host-mysql.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: third-party-single-host-mysql
+          path: third-party-single-host-mysql.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+  # One fresh install per shard; the firewall and bridge checks are the first shard.
+  single-host-boot-shard:
+    name: Single-host boot shard (${{ matrix.name }})
+    needs: [changes, single-host-boot-images]
+    if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-24.04
+    # Each shard keeps the timeout of the work it holds; the longest ran 45 minutes in one job.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fence
+            script: fence
+          - name: backups
+            script: smoke
+            pg_backups: "1"
+            major_upgrade: "1"
+          - name: unseal
+            script: smoke
+            manual_unseal: "1"
+            host_metrics: "1"
+            host_logs: "1"
+            request_metrics: "1"
+            log_drains: "1"
+            # Trunk builds that bind the counters' address (EXC-673); bump with the engines.
+            graphql_image: docker.io/excalibase/excalibase-graphql:main-72a7b22
+            auth_image: docker.io/excalibase/excalibase-auth:main-8449290
+          - name: mysql
+            script: smoke
+            mysql: "1"
+          - name: gvisor
+            script: smoke
+            gvisor: "1"
+            apps: "1"
+            site_builds: "1"
+            app_sandbox: runsc
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Anonymous pulls hit Docker Hub's rate limit (EXC-752); fork PRs have no secret and
+      # pull anonymously. The login covers what the docker CLI pulls on the host: the dind
+      # images, `docker build` base images and the compose pulls. The Docker-in-Docker machines
+      # pull nothing themselves (their images are loaded from the host), so no credential
+      # goes into them.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Provisioning pulls through the daemon API without registry auth, so those pulls stay
+      # anonymous whatever the runner logged in as. The images job pulled them once; loaded here,
+      # the daemon finds them local (EXC-880).
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: matrix.script == 'fence'
+        with:
+          name: third-party-single-host-fence
+          path: ${{ runner.temp }}/third-party-fence
+      - name: Load the fence images
+        if: matrix.script == 'fence'
+        run: sh deploy/ci/third-party-images.sh load single-host-fence "$RUNNER_TEMP/third-party-fence/third-party-single-host-fence.tar.gz"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: matrix.script == 'smoke'
+        with:
+          name: third-party-single-host-smoke
+          path: ${{ runner.temp }}/third-party-smoke
+      - name: Load the smoke images
+        if: matrix.script == 'smoke'
+        run: sh deploy/ci/third-party-images.sh load single-host-smoke "$RUNNER_TEMP/third-party-smoke/third-party-single-host-smoke.tar.gz"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: matrix.gvisor == '1'
+        with:
+          name: third-party-single-host-gvisor
+          path: ${{ runner.temp }}/third-party-gvisor
+      - name: Load the gvisor images
+        if: matrix.gvisor == '1'
+        run: sh deploy/ci/third-party-images.sh load single-host-gvisor "$RUNNER_TEMP/third-party-gvisor/third-party-single-host-gvisor.tar.gz"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: matrix.mysql == '1'
+        with:
+          name: third-party-single-host-mysql
+          path: ${{ runner.temp }}/third-party-mysql
+      - name: Load the mysql images
+        if: matrix.mysql == '1'
+        run: sh deploy/ci/third-party-images.sh load single-host-mysql "$RUNNER_TEMP/third-party-mysql/third-party-single-host-mysql.tar.gz"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: single-host-images
+      - name: Load provisioning and Studio built from this checkout
+        run: gunzip -c single-host-images.tar.gz | docker load
       - name: Tenants wait for the host firewall across real reboots (Docker in Docker)
+        if: matrix.script == 'fence'
         run: sh deploy/single-host/tests/reboot-order.sh
       - name: Project bridges are fenced from an app's first instruction (Docker in Docker)
+        if: matrix.script == 'fence'
         run: |
           for version in 27 28 29; do
             DIND_IMAGE=docker.io/library/docker:$version-dind sh deploy/single-host/tests/project-bridge-fence.sh
           done
-      - name: Fresh install, project, GraphQL/REST, backups by default (WAL archive, point-in-time and in-place restore, purge), files
-        env:
-          PLATFORM_TAG: ci
-          PG_BACKUPS: "1"
-          MAJOR_UPGRADE: "1"
-        run: bash deploy/single-host/tests/boot-smoke.sh docker
-      - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring, stored log search, log drains, request charts and slow queries
-        env:
-          PLATFORM_TAG: ci
-          MANUAL_UNSEAL: "1"
-          HOST_METRICS: "1"
-          HOST_LOGS: "1"
-          REQUEST_METRICS: "1"
-          # Trunk builds that bind the counters' address (EXC-673); bump with the engines.
-          GRAPHQL_IMAGE: docker.io/excalibase/excalibase-graphql:main-72a7b22
-          AUTH_IMAGE: docker.io/excalibase/excalibase-auth:main-8449290
-          LOG_DRAINS: "1"
-        run: bash deploy/single-host/tests/boot-smoke.sh docker
-      - name: Fresh install with MySQL (TLS clients, backups, point-in-time and in-place restore, purge)
-        env:
-          PLATFORM_TAG: ci
-          MYSQL: "1"
-        run: bash deploy/single-host/tests/boot-smoke.sh docker
       # Containers on a single host (EXC-575) run under gVisor; the runner gets it from gVisor's apt repository.
       - name: Install gVisor (runsc) into Docker
-        run: |
-          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list >/dev/null
-          sudo apt-get update -qq && sudo apt-get install -y -qq runsc
-          # Apps reach their database by name through Docker's resolver, which gVisor's own network stack cannot reach.
-          sudo runsc install -- --network=host && sudo systemctl reload docker
-          docker info --format '{{json .Runtimes}}' | grep -q runsc
-      - name: Fresh install with apps and site git builds under gVisor (deploy, rollback, disk, isolation, domain; a pushed site built behind the egress proxy)
+        if: matrix.gvisor == '1'
+        run: sh deploy/single-host/tests/install-gvisor.sh
+      - name: Fresh install (${{ matrix.name }})
+        if: matrix.script == 'smoke'
+        # Ends the step itself, 10 minutes before the job's 90, so a hang is a red step with a log.
+        timeout-minutes: 80
         env:
           PLATFORM_TAG: ci
-          APPS: "1"
-          SITE_BUILDS: "1"
-          APP_SANDBOX: runsc
+          PG_BACKUPS: ${{ matrix.pg_backups }}
+          MAJOR_UPGRADE: ${{ matrix.major_upgrade }}
+          MANUAL_UNSEAL: ${{ matrix.manual_unseal }}
+          HOST_METRICS: ${{ matrix.host_metrics }}
+          HOST_LOGS: ${{ matrix.host_logs }}
+          REQUEST_METRICS: ${{ matrix.request_metrics }}
+          LOG_DRAINS: ${{ matrix.log_drains }}
+          GRAPHQL_IMAGE: ${{ matrix.graphql_image }}
+          AUTH_IMAGE: ${{ matrix.auth_image }}
+          MYSQL: ${{ matrix.mysql }}
+          APPS: ${{ matrix.apps }}
+          SITE_BUILDS: ${{ matrix.site_builds }}
+          APP_SANDBOX: ${{ matrix.app_sandbox }}
         run: bash deploy/single-host/tests/boot-smoke.sh docker
+
+  # The name the earlier single job carried: one check that holds every shard. It passes when the
+  # filter skipped them all, and fails when any shard failed, was cancelled or did not run.
+  single-host-boot:
+    name: Single-host boot (Docker)
+    needs: [changes, single-host-boot-images, single-host-boot-shard]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every shard passed, or the filter skipped them
+        env:
+          WANTED: ${{ needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true' }}
+          CHANGES: ${{ needs.changes.result }}
+          IMAGES: ${{ needs.single-host-boot-images.result }}
+          SHARDS: ${{ needs.single-host-boot-shard.result }}
+        run: |
+          echo "wanted=$WANTED changes=$CHANGES images=$IMAGES shards=$SHARDS"
+          [ "$CHANGES" = success ] || { echo "change detection did not succeed"; exit 1; }
+          if [ "$WANTED" = true ]; then
+            [ "$IMAGES" = success ] && [ "$SHARDS" = success ] || { echo "a boot job failed, was cancelled or did not run"; exit 1; }
+          else
+            [ "$IMAGES" = skipped ] && [ "$SHARDS" = skipped ] || { echo "boot jobs ran although the filter skipped them"; exit 1; }
+          fi
 
   go-lint:
     name: Go Lint
@@ -277,6 +495,9 @@ jobs:
       - run: go vet -tags=integration ./... && go vet -tags=live ./...
       - name: Integration shard scripts
         run: scripts/integration_shard_test.sh
+      - name: Integration test images are in the pre-pull list
+        working-directory: .
+        run: sh deploy/ci/third-party-images.sh check
       - run: go build ./...
       # The standalone HTTP vault is a sibling module that depends on
       # server-go via a replace directive; build it here so a pkg/vault
@@ -340,6 +561,8 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - name: Storage origin in the page policy
+        run: sh tests/storage-origin.test.sh
       # Unit tests only (vitest, no backend); the mocked Playwright suite runs in
       # frontend-e2e below.
       #
@@ -490,10 +713,49 @@ jobs:
         # tool advisory, Vitest, not shipped in the app bundle).
         run: cd frontend && npm ci && npm audit --audit-level=critical
 
+  # EXC-880: the shards' testcontainers images are pulled once here, not four times at once.
+  go-integration-images:
+    name: Go Integration images
+    runs-on: ubuntu-24.04
+    needs: [changes, go-lint]
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the testcontainers images once
+        run: sh deploy/ci/third-party-images.sh save go-integration third-party-go-integration.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: third-party-go-integration
+          path: third-party-go-integration.tar.gz
+          retention-days: 1
+          compression-level: 0
+
   go-integration-shard:
     name: Go Integration shard ${{ matrix.shard }}/4
     runs-on: ubuntu-24.04
-    needs: [changes, go-lint]
+    needs: [changes, go-lint, go-integration-images]
+    permissions:
+      contents: read
+      packages: read
     # Integration tests need a Docker daemon (testcontainers spins up
     # Postgres, NATS, LocalStack, and one-off postgres containers for
     # restore E2Es). ubuntu-24.04 has Docker available out of the box.
@@ -504,11 +766,35 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     defaults:
       run:
         working-directory: server-go
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Anonymous pulls hit Docker Hub's rate limit; fork PRs have no secret and
+      # pull anonymously.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: third-party-go-integration
+          path: ${{ runner.temp }}/third-party
+      - name: Load the testcontainers images
+        working-directory: .
+        run: sh deploy/ci/third-party-images.sh load go-integration "$RUNNER_TEMP/third-party/third-party-go-integration.tar.gz"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
@@ -686,7 +972,11 @@ jobs:
     # !cancelled(): a skipped upstream job (e.g. go-integration on a deno-only
     # PR) must not skip the scan; the coverage downloads below tolerate a
     # missing artifact.
-    if: ${{ !cancelled() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true') }}
+    # A push to a release branch is not scanned: its commits are cherry-picks of
+    # main commits already scanned there, and the plan has one analysed branch.
+    # The coverage gate (go-integration) still runs. Pull requests into a
+    # release branch are scanned.
+    if: ${{ !cancelled() && !startsWith(github.ref, 'refs/heads/release/') && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

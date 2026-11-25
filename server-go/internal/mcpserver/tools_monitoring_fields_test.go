@@ -15,6 +15,8 @@ type fieldCase struct {
 	setup    func(f *fakeRoutes)
 	// present are dotted paths that must reach the agent.
 	present []string
+	// absent are dotted paths that must not reach the agent.
+	absent []string
 }
 
 func lookup(value any, path string) bool {
@@ -58,14 +60,16 @@ func TestViewsKeepTheFieldsTheDescriptionsPromise(t *testing.T) {
 				f.on(http.MethodGet, projectsA+"/db-endpoint/", 200, `{"host":"h","port":1,"requireTls":true,"database":"d","username":"u","caCertificate":"CA",`+
 					`"connectionStrings":{"requireTls":"a","allowPlaintext":"b","mongoRequireTls":"m"},"internal":{"host":"i","port":1,"connectionString":"c"},"mongoPort":2,"mongoAvailable":true}`)
 			},
-			present: []string{"caCertificate", "internal.host", "internal.connectionString", "connectionStrings.requireTls", "connectionStrings.mongoRequireTls", "mongoPort", "mongoAvailable"},
+			present: []string{"caCertificate", "connectionStrings.requireTls", "connectionStrings.mongoRequireTls", "mongoPort", "mongoAvailable"},
+			absent:  []string{"internal", "internal.host"},
 		},
 		{
 			tool: "get_db_read_address", features: []features.Feature{features.DBReadAddress},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, projectsA+"/db-read-address/", 200, `{"replicas":2,"publicOpen":true,"enabled":true,"available":true,"host":"h","port":1,"connectionString":"c","username":"ro","readOnlyLogin":true,"internal":{"host":"i","port":1,"connectionString":"c"}}`)
 			},
-			present: []string{"publicOpen", "connectionString", "readOnlyLogin", "internal.connectionString", "replicas"},
+			present: []string{"publicOpen", "connectionString", "readOnlyLogin", "replicas"},
+			absent:  []string{"internal"},
 		},
 		{
 			tool: "get_auth_settings", features: []features.Feature{features.AuthOAuth},
@@ -88,6 +92,12 @@ func TestViewsKeepTheFieldsTheDescriptionsPromise(t *testing.T) {
 				if !lookup(out, path) {
 					raw, _ := json.Marshal(out)
 					t.Errorf("%s dropped %s: %s", tc.tool, path, raw)
+				}
+			}
+			for _, path := range tc.absent {
+				if lookup(out, path) {
+					raw, _ := json.Marshal(out)
+					t.Errorf("%s passes on %s, a cluster address an agent never needs (apps get DATABASE_URL): %s", tc.tool, path, raw)
 				}
 			}
 		})

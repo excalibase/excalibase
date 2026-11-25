@@ -14,9 +14,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// functionRouterWithRuntime serves Create against a runtime that refuses every
-// deploy once failDeploys is set.
-func functionRouterWithRuntime(t *testing.T, failDeploys *atomic.Bool) (chi.Router, edgefn.Store) {
+// functionRuntimeServer is a runtime that refuses every deploy once failDeploys is set.
+func functionRuntimeServer(t *testing.T, failDeploys *atomic.Bool) (*httptest.Server, edgefn.Store) {
 	t.Helper()
 	runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/deploy" && failDeploys.Load() {
@@ -28,16 +27,35 @@ func functionRouterWithRuntime(t *testing.T, failDeploys *atomic.Bool) (chi.Rout
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	t.Cleanup(runtime.Close)
+	return runtime, nil
+}
+
+// newFunctionHandlerFor serves proj_p1 of org "default" against the runtime at runtimeURL.
+func newFunctionHandlerFor(t *testing.T, runtimeURL string) (*FunctionHandler, storage.InstanceStore) {
+	t.Helper()
 	store := edgefn.NewFunctionStore(t.TempDir())
 	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
 		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
 	}}
 	var orgStore storage.OrgStore
-	h := NewFunctionHandler(store, edgefn.NewSecretsStore(newFakeVault()), edgefn.NewRuntimeClient(runtime.URL, ""),
+	h := NewFunctionHandler(store, edgefn.NewSecretsStore(newFakeVault()), edgefn.NewRuntimeClient(runtimeURL, ""),
 		instStore, orgStore, testAPIBase)
+	return h, instStore
+}
+
+func functionCreateRouter(h *FunctionHandler) chi.Router {
 	router := chi.NewRouter()
 	router.Post("/api/projects/{projectId}/functions", h.Create)
-	return router, store
+	return router
+}
+
+// functionRouterWithRuntime serves Create against a runtime that refuses every
+// deploy once failDeploys is set.
+func functionRouterWithRuntime(t *testing.T, failDeploys *atomic.Bool) (chi.Router, edgefn.Store) {
+	t.Helper()
+	runtime, _ := functionRuntimeServer(t, failDeploys)
+	h, _ := newFunctionHandlerFor(t, runtime.URL)
+	return functionCreateRouter(h), h.store
 }
 
 func deployFunction(router chi.Router, content string) *httptest.ResponseRecorder {

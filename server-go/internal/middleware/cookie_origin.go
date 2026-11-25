@@ -11,9 +11,9 @@ import (
 // TrustedOrigins are the pages allowed to act with the Studio session cookie:
 // Studio itself and any origin CORS names explicitly. The wildcard grants
 // cross-origin calls, never the cookie.
-func TrustedOrigins(studioURL string, corsOrigins []string) []string {
+func TrustedOrigins(studioURL string, corsOrigins []string, extra ...string) []string {
 	var origins []string
-	for _, o := range append([]string{studioURL}, corsOrigins...) {
+	for _, o := range append(append([]string{studioURL}, corsOrigins...), extra...) {
 		if o != "*" && o != "" {
 			origins = append(origins, strings.TrimRight(o, "/"))
 		}
@@ -54,8 +54,7 @@ func cookieAuthenticatedWrite(r *http.Request) bool {
 	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		return false
 	}
-	c, err := r.Cookie(auth.SessionCookieName)
-	return err == nil && c.Value != ""
+	return auth.HasCookie(r, auth.LegacySessionCookieName)
 }
 
 // requestOrigin is the Origin header, or the origin of the Referer when a

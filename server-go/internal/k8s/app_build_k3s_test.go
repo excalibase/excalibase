@@ -22,6 +22,9 @@ import (
 
 const appBuildWait = 20 * time.Minute
 
+// blockedTestHost never resolves in DNS, so a build of it can only reach loopback through the pod's hosts file.
+const blockedTestHost = "blocked.invalid"
+
 // TestK3sAppBuild runs git builds of apps (EXC-547) through the real Job under
 // gVisor, in a namespace held to PSA baseline: a Dockerfile with a secret
 // mount and a Buildpacks build each make an OCI image archive, a missing
@@ -41,7 +44,7 @@ func TestK3sAppBuild(t *testing.T) {
 		Namespace: namespace, SiteBuildNamespace: "excalibase-site-builds", RuntimeClass: gvisorRuntimeClass, Slots: 4, PrepareImage: config.DefaultSiteBuildPrepareImage,
 		ToolImage: sitebuilds.NodeImage("", "22"), BuildKitImage: config.DefaultAppBuildKitImage,
 		BuilderImage: config.DefaultAppBuilderImage, RunImage: config.DefaultAppRunImage, CraneImage: config.DefaultAppCraneImage,
-		CloneSchemes: []string{"git"},
+		CloneSchemes: []string{"git"}, ExtraBlockedHosts: []string{blockedTestHost},
 	})
 	spec := func(buildID string, builder appbuilds.Builder) appbuilds.RunSpec {
 		return appbuilds.RunSpec{
@@ -80,6 +83,18 @@ func TestK3sAppBuild(t *testing.T) {
 		status := runAppBuildToEnd(t, runner, build)
 		if status.Failure != sitebuilds.FailOutOfMemory {
 			t.Fatalf("status %+v\n%s", status, appBuildLogs(runner, build.BuildID))
+		}
+		removeAppBuild(t, runner, build.BuildID)
+	})
+
+	t.Run("a FROM of a pinned registry fails against loopback, not in DNS", func(t *testing.T) {
+		build := spec("blocked", appbuilds.BuilderDockerfile)
+		build.DockerfilePath = "blocked.Dockerfile"
+		status := runAppBuildToEnd(t, runner, build)
+		logs := appBuildLogs(runner, build.BuildID)
+		refused := strings.Contains(logs, "127.0.0.1") || strings.Contains(logs, "[::1]")
+		if status.Phase != sitebuilds.RunFailed || !refused || strings.Contains(logs, "no such host") {
+			t.Fatalf("status %+v; want a failure dialling loopback\n%s", status, logs)
 		}
 		removeAppBuild(t, runner, build.BuildID)
 	})

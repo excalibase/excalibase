@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -56,6 +57,8 @@ func TestRegister_FirstAdmin_WrongToken_RefusedOnRealStore(t *testing.T) {
 // what has to hold under real concurrency, not just the in-memory mock.
 func TestRegister_ConcurrentFirstRegistrations_ExactlyOneAdminOnRealStore(t *testing.T) {
 	r, store, setupToken := setupRegisterRouter(t)
+	// One slot so the racers really hit "busy" and must retry (EXC-734).
+	t.Cleanup(auth.ConfigurePasswordGate(1, time.Millisecond))
 
 	names := []string{"racer_a", "racer_b", "racer_c"}
 	var wg sync.WaitGroup
@@ -66,11 +69,13 @@ func TestRegister_ConcurrentFirstRegistrations_ExactlyOneAdminOnRealStore(t *tes
 			defer wg.Done()
 			body := fmt.Sprintf(`{"username":%q,"email":"%s@x.test","password":%q,"setupToken":%q}`,
 				name, name, testutil.FixturePassword("race-"+name), setupToken)
-			req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
-			req.Header.Set(sharedContentType, sharedMIMEJSON)
-			w := httptest.NewRecorder()
-			r.ServeHTTP(w, req)
-			codes[i] = w.Code
+			codes[i] = answeredAfterBusy(t, func() *httptest.ResponseRecorder {
+				req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
+				req.Header.Set(sharedContentType, sharedMIMEJSON)
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, req)
+				return w
+			}).Code
 		}(i, name)
 	}
 	wg.Wait()
@@ -93,6 +98,17 @@ func TestRegister_ConcurrentFirstRegistrations_ExactlyOneAdminOnRealStore(t *tes
 	}
 	if admins != 1 {
 		t.Fatalf("expected exactly 1 platform_admin after concurrent registration, got %d", admins)
+	}
+	// A 503 along the way must not have half-created anyone: only answered
+	// registrations (201) left a user behind.
+	created := 0
+	for _, code := range codes {
+		if code == http.StatusCreated {
+			created++
+		}
+	}
+	if created != len(users) {
+		t.Fatalf("%d registrations answered 201 but %d users exist", created, len(users))
 	}
 }
 

@@ -76,7 +76,7 @@ function renderPage({
     if (url.startsWith('/projects/proj-1/apps/app-1/deploys')) return answer([succeeded]);
     if (url === '/projects/proj-1/db-endpoint')
       return answer(
-        endpoint ?? { publicEnabled: false, available: false, host: '', port: 0, internal: {} },
+        endpoint ?? { publicEnabled: false, available: false, host: '', port: 0 },
       );
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
@@ -242,7 +242,6 @@ describe('ProjectOverviewPage', () => {
         available: true,
         host: 'proj-1.db.example.com',
         port: 30001,
-        internal: {},
       },
     });
     const access = await screen.findByTestId('service-database-access');

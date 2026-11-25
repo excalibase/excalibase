@@ -101,6 +101,9 @@ func appNetworkResponseFor(r *http.Request, view service.AppNetworkView) appNetw
 }
 
 func writeAppNetworkError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrAppNetworkProjectNotFound):
 		httpError(w, "project not found", http.StatusNotFound)

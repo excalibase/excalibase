@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/logsafe"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -89,6 +90,29 @@ func writeJSONStatus(w http.ResponseWriter, code int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// writeIfPoolBusy answers 503 with Retry-After when err says the platform
+// database could not give the operation a connection in time; the request was
+// not judged, so it is neither a conflict nor a server fault.
+func writeIfPoolBusy(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, storage.ErrPoolBusy) {
+		return false
+	}
+	w.Header().Set("Retry-After", "5")
+	httpError(w, "the platform is busy; retry shortly", http.StatusServiceUnavailable)
+	return true
+}
+
+// writeOrgGuardError answers a refusal from the suspended-owner check: 403 and
+// the plain message for a suspension, 503 when it could not be read.
+func writeOrgGuardError(w http.ResponseWriter, err error) {
+	if errors.Is(err, orgguard.ErrOrgSuspended) {
+		httpError(w, orgguard.Message, http.StatusForbidden)
+		return
+	}
+	log.Printf("ERROR: suspended-owner check: %v", err)
+	httpError(w, orgguard.ErrCheckUnavailable.Error(), http.StatusServiceUnavailable)
+}
+
 func httpError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(code)
@@ -100,7 +124,10 @@ func httpError(w http.ResponseWriter, msg string, code int) {
 
 // safeError returns a sanitized error message safe for client responses.
 // It strips PG internals and truncates to 200 chars.
-func safeError(err error) string {
+func safeError(err error) string { return safeErrorIn(err) }
+
+// safeErrorIn is safeError that also scrubs the namespaces the caller knows.
+func safeErrorIn(err error, namespaces ...string) string {
 	msg := err.Error()
 	// Strip common PG detail prefixes that leak schema info
 	// The driver prefix also appears after our own wrapping ("create table: pq: ...").
@@ -113,6 +140,8 @@ func safeError(err error) string {
 	if idx := strings.Index(msg, "\nHINT:"); idx >= 0 {
 		msg = msg[:idx]
 	}
+	// Scrub before truncating so a half-cut host cannot slip through; the raw error is in the log.
+	msg = domain.ScrubClusterText(msg, namespaces...)
 	if len(msg) > 200 {
 		msg = msg[:200]
 	}
@@ -132,10 +161,14 @@ const errBackupsUnavailable = "backups cannot be set up right now; try again lat
 func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 	var limitErr *service.OrgProjectLimitError
 	switch {
+	case orgguard.IsRefusal(err):
+		writeOrgGuardError(w, err)
 	case errors.As(err, &limitErr):
 		httpError(w, limitErr.Error(), http.StatusConflict)
 	case errors.Is(err, storagebudget.ErrExceeded):
 		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, service.ErrNoPodSlots):
+		httpError(w, service.ErrNoPodSlots.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, service.ErrDocumentDBNotInstalled):
 		httpError(w, service.ErrDocumentDBNotInstalled.Error(), http.StatusConflict)
 	case errors.Is(err, service.ErrProjectStoreUnavailable):

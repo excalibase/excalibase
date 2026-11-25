@@ -30,7 +30,7 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermManageOrgs: true,
 	},
 	"platform_operator": {
-		PermProvision: true, PermDelete: true, PermViewInstances: true,
+		PermProvision: true, PermViewInstances: true,
 		PermViewCredentials: true, PermManageBackups: true,
 		PermApplyMigrations: true, PermManageSnapshots: true,
 		PermManageFunctions: true, PermViewAny: true,
@@ -56,4 +56,11 @@ func HasPermission(role string, perm Permission) bool {
 func IsValidPlatformRole(role string) bool {
 	_, ok := rolePermissions[role]
 	return ok
+}
+
+// SeesRawProvisioningText reports whether a platform role reads a project's
+// raw failure text and rollback log, which name pods, volumes and namespaces.
+// Everyone else reads the plain failure kind instead (EXC-869).
+func SeesRawProvisioningText(role string) bool {
+	return role == "platform_admin" || role == "platform_operator"
 }

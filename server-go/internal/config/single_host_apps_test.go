@@ -38,8 +38,27 @@ func TestLoadSingleHostApps(t *testing.T) {
 	t.Setenv("APP_SANDBOX_RUNTIME", "")
 	t.Setenv("APP_EGRESS", "")
 	cfg = Load().SingleHostApps
-	if cfg.SandboxRuntime != "runsc" || cfg.Egress || cfg.ProbeBinary != defaultAppProbeBinary {
+	if cfg.SandboxRuntime != "runsc" || cfg.Egress || cfg.ProbeBinary != defaultAppProbeBinary || cfg.Userns != "auto" {
 		t.Fatalf("defaults %+v", cfg)
+	}
+}
+
+func TestAppUsernsIsReadAndOnlyThreeValuesPass(t *testing.T) {
+	t.Setenv("APP_USERNS", "per-app")
+	if got := Load().SingleHostApps.Userns; got != "per-app" {
+		t.Fatalf("APP_USERNS read as %q", got)
+	}
+	for _, ok := range []string{"auto", "per-app", "shared", ""} {
+		cfg := singleHostHosting()
+		cfg.SingleHostApps.Userns = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("APP_USERNS %q refused: %v", ok, err)
+		}
+	}
+	cfg := singleHostHosting()
+	cfg.SingleHostApps.Userns = "per_app"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "APP_USERNS") {
+		t.Fatalf("a misspelt APP_USERNS passed: %v", err)
 	}
 }
 

@@ -50,7 +50,7 @@ export function ConnectSnippets({ projectId }: ConnectSnippetsProps) {
         <Endpoint label="Project ID" value={projectId} />
         <p data-testid="connect-unavailable" className="text-sm text-text-secondary">
           This installation does not report its public API address, so no connection snippet can be shown. The
-          operator sets it with PUBLIC_BASE_URL.
+          administrator sets it with PUBLIC_BASE_URL.
         </p>
       </div>
     );

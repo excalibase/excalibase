@@ -28,11 +28,6 @@ const RESPONSE = {
     allowPlaintext: 'postgresql://app@proj-1.db.excalibase.io:26257/appdb?sslmode=prefer',
   },
   caCertificate: '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n',
-  internal: {
-    host: 'proj-1-postgres-rw.org-1.svc.cluster.local',
-    port: 5432,
-    connectionString: 'postgresql://app@proj-1-postgres-rw.org-1.svc.cluster.local:5432/appdb?sslmode=prefer',
-  },
 };
 
 describe('useProjectEndpoint', () => {
@@ -46,7 +41,7 @@ describe('useProjectEndpoint', () => {
 
     expect(api.get).toHaveBeenCalledWith('/projects/proj-1/db-endpoint');
     expect(result.current.data?.host).toBe('proj-1.db.excalibase.io');
-    expect(result.current.data?.internal.port).toBe(5432);
+    expect(result.current.data?.internal).toBeUndefined();
   });
 
   test('reads the Mongo half the control plane serves for a DocumentDB project', async () => {
@@ -55,30 +50,24 @@ describe('useProjectEndpoint', () => {
         ...RESPONSE,
         mongoPort: 30222,
         mongoAvailable: false,
-        internal: { ...RESPONSE.internal, mongoHost: 'proj-1-documentdb.org-1.svc.cluster.local', mongoPort: 10260, mongoConnectionString: 'mongodb://app@x:10260/' },
       },
     } as never);
 
     const { result } = renderHook(() => useProjectEndpoint('proj-1'), { wrapper: makeWrapper() });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data?.mongo).toEqual({
-      available: false,
-      port: 30222,
-      internal: { host: 'proj-1-documentdb.org-1.svc.cluster.local', port: 10260 },
-    });
+    expect(result.current.data?.mongo).toEqual({ available: false, port: 30222 });
   });
 
-  test('reports the internal Mongo address of a DocumentDB project that publishes nothing', async () => {
+  test('an admin response that carries the cluster address is not turned into a Mongo address', async () => {
     vi.mocked(api.get).mockResolvedValueOnce({
-      data: { ...RESPONSE, publicEnabled: false, available: false, port: 0, internal: { ...RESPONSE.internal, mongoHost: 'proj-1-documentdb.org-1.svc.cluster.local', mongoPort: 10260 } },
+      data: { ...RESPONSE, publicEnabled: false, available: false, port: 0, internal: { host: 'h', port: 5432, mongoHost: 'm', mongoPort: 10260 } },
     } as never);
 
     const { result } = renderHook(() => useProjectEndpoint('proj-1'), { wrapper: makeWrapper() });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data?.mongo?.port).toBeUndefined();
-    expect(result.current.data?.mongo?.internal).toEqual({ host: 'proj-1-documentdb.org-1.svc.cluster.local', port: 10260 });
+    expect(result.current.data?.mongo).toBeUndefined();
   });
 
   // Absent must stay absent rather than becoming a default a page would

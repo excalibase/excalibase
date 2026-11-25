@@ -26,6 +26,10 @@ func (h *FunctionHandler) NewReplayer(cfg edgefn.ReplayConfig) (*edgefn.Replayer
 // ReplayDeploys rebuilds the deploy request for every function of the project
 // from the store — exactly what Create sent the first time.
 func (h *FunctionHandler) ReplayDeploys(ctx context.Context, projectID string) ([]edgefn.DeployRequest, error) {
+	// A suspended owner's functions are not put back into a runtime that lost them (EXC-845).
+	if err := h.orgGuard.CheckServing(ctx, projectID); err != nil {
+		return nil, err
+	}
 	list, err := h.store.List(projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list functions: %w", err)
@@ -36,6 +40,14 @@ func (h *FunctionHandler) ReplayDeploys(ctx context.Context, projectID string) (
 	env, err := h.deployEnv(ctx, projectID)
 	if err != nil {
 		return nil, err
+	}
+	if h.k8sClient != nil {
+		// The code goes into the runtime the cluster has: bring it under the sandbox class first.
+		if namespace := h.namespaceFor(projectID); namespace != "" {
+			if err := h.ensureRuntime(ctx, projectID, namespace, h.runtimeWait.coldStart); err != nil {
+				return nil, err
+			}
+		}
 	}
 	shared := h.sharedFilesFor(projectID)
 	allowedHosts := h.workerEgressHosts(projectID)
@@ -55,7 +67,10 @@ func (h *FunctionHandler) ReplayDeploys(ctx context.Context, projectID string) (
 // runtime: a cached client, the shared client in single-runtime mode, or a
 // client for the project's namespace service. A project with no namespace
 // errors; an absent runtime surfaces as an unreachable Status.
-func (h *FunctionHandler) ReplayRuntimeFor(_ context.Context, projectID string) (edgefn.ReplayRuntime, error) {
+func (h *FunctionHandler) ReplayRuntimeFor(ctx context.Context, projectID string) (edgefn.ReplayRuntime, error) {
+	if err := h.orgGuard.CheckServing(ctx, projectID); err != nil {
+		return nil, err
+	}
 	if client, ok := h.cachedClient(projectID); ok {
 		return client, nil
 	}

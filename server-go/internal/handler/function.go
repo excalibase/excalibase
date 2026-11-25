@@ -22,8 +22,11 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
@@ -48,7 +51,9 @@ const sharedClientKey = "__shared__"
 //   - builds a per-project RuntimeClient pointing at the in-namespace service
 //   - caches clients per projectId
 type FunctionHandler struct {
-	store         edgefn.Store
+	store edgefn.Store
+	// orgGuard refuses deploys for an organisation whose owner is abuse-suspended (EXC-843).
+	orgGuard      *orgguard.Guard
 	secrets       *edgefn.SecretsStore
 	vault         vaultclient.VaultClient // optional, for reading DB_URL
 	instanceStore storage.InstanceStore
@@ -67,10 +72,14 @@ type FunctionHandler struct {
 	runtimeEdge k8s.EdgePeer
 	// runtimeCiliumFQDN fences each runtime by host name (EXC-558).
 	runtimeCiliumFQDN bool
-	runtimeURLFn      func(namespace string) string // tests override; nil → cluster DNS
-	clientMu          sync.Mutex
-	clients           map[string]*edgefn.RuntimeClient // keyed by projectId
-	runtimeWait       runtimeWait
+	// runtimeClass is the sandbox RuntimeClass the runtime pod runs under.
+	runtimeClass string
+	// sandbox caches the check of that class's handler.
+	sandbox      *sandboxGate
+	runtimeURLFn func(namespace string) string // tests override; nil → cluster DNS
+	clientMu     sync.Mutex
+	clients      map[string]*edgefn.RuntimeClient // keyed by projectId
+	runtimeWait  runtimeWait
 
 	// Rate limiting for the public invoke route. Token bucket per project.
 	limiterMu     sync.Mutex
@@ -114,7 +123,16 @@ type FunctionHandler struct {
 	// construction to fail closed; see SetAudienceRequirement.
 	requireAud bool
 	audPrefix  string
+
+	// flags are the dark-feature switches the handler consults.
+	flags features.Flags
 }
+
+// SetFeatures gives the handler the dark-feature switches it consults.
+// SetOrgGuard makes function deploys refuse a suspended owner's organisation.
+func (h *FunctionHandler) SetOrgGuard(guard *orgguard.Guard) { h.orgGuard = guard }
+
+func (h *FunctionHandler) SetFeatures(flags features.Flags) { h.flags = flags }
 
 // SetExpectedJWTIssuer configures the iss claim the function handler will
 // require on inbound JWTs. Empty (default) disables the check.
@@ -207,6 +225,7 @@ func NewFunctionHandler(
 		// SetAutoMigrate.
 		autoMigrate: true,
 		runtimeWait: defaultRuntimeWait(),
+		sandbox:     &sandboxGate{ttl: sandboxCheckTTL},
 	}
 	// Backwards-compat: if a single shared client is supplied, use it for all
 	// projects until k8sClient is set.
@@ -280,6 +299,15 @@ func (h *FunctionHandler) SetRuntimeURLFn(fn func(namespace string) string) {
 // project. In per-project mode it points at the in-namespace deno-runtime
 // service; in shared mode it returns the single client supplied at construction.
 func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string) (*edgefn.RuntimeClient, error) {
+	if err := h.requireSandbox(ctx); err != nil {
+		return nil, err
+	}
+	// Serving, not only starting: a client cached before the suspension, and
+	// the shared runtime of a single host, would otherwise keep running a
+	// suspended owner's functions (EXC-845). The guard answers from a short cache.
+	if err := h.orgGuard.CheckServingUnlessAdmin(ctx, projectID); err != nil {
+		return nil, err
+	}
 	h.clientMu.Lock()
 	if c, ok := h.clients[projectID]; ok {
 		h.clientMu.Unlock()
@@ -304,6 +332,10 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if h.k8sClient == nil {
 		return nil, fmt.Errorf("no runtime client available")
 	}
+	// Serving an org in good standing starts its runtime when there is none
+	// (after a restart). The creator rule of EXC-843 is for deploys, which
+	// check it themselves: a suspended member who merely created the project
+	// must not take its functions and cron down.
 	inst, err := h.instanceFor(projectID)
 	if err != nil {
 		return nil, err
@@ -312,13 +344,10 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if namespace == "" {
 		return nil, fmt.Errorf("no namespace for project %s", projectID)
 	}
-	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID)); err != nil {
-		return nil, fmt.Errorf("ensure deno runtime: %w", err)
-	}
 	// EnsureDenoRuntime may have just created the runtime or rolled its pod
 	// (EXC-569). Until the rollout finishes, the pod answering can be the old
 	// one, and whatever is deployed to it goes with it.
-	if err := h.waitForRollout(ctx, namespace, h.runtimeWait.coldStart); err != nil {
+	if err := h.ensureRuntime(ctx, projectID, namespace, h.runtimeWait.coldStart); err != nil {
 		return nil, err
 	}
 
@@ -483,11 +512,14 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) (str
 //   - URL          — function's public invoke base (for calling sibling fns)
 //   - PROJECT_ID   — the opaque project ref
 //   - ORG_SLUG     — the owning org's slug, omitted if not resolvable
-//   - DB_URL       — postgres DSN for the project's database as the customer's
-//     own role, from vault at projects/{projectId}/credentials/admin. The
-//     platform's roles log in by certificate only and are never handed to
-//     customer code (EXC-410).
-//     Absent if vault is sealed or the role doesn't exist.
+//   - DB_URL       — postgres DSN for the project's database as its runtime
+//     login (excalibase_runtime), from vault at
+//     projects/{projectId}/credentials/excalibase_runtime. It cannot create or
+//     change logins, which the owner's login can on Postgres 16 and later; the
+//     owner's login is handed out only while that login is switched off
+//     (EXC-765). The platform's roles log in by certificate only and are never
+//     handed to customer code (EXC-410).
+//     Absent if vault is sealed or the login isn't filed.
 //   - DB_CA_CERT   — a MySQL project's server CA (PEM), which a client of
 //     DB_URL (ssl-mode=VERIFY_IDENTITY) verifies the server with.
 //
@@ -515,15 +547,26 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[
 	return env
 }
 
-// injectedDBTarget is the owner login EXCALIBASE_DB_URL is built from, when a
-// function gets one: secrets are wired and vault holds a complete login.
+// injectedDBTarget is the login EXCALIBASE_DB_URL is built from, when a
+// function gets one: secrets are wired and vault holds a complete login. It is
+// the project's runtime login, which cannot create or change logins; the
+// owner's login only while the runtime login is switched off (EXC-765). A
+// project with no runtime login filed gets no URL, never the owner's.
 func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
 	if h.secrets == nil || h.vault == nil {
 		return dbTarget{}, false
 	}
-	path := fmt.Sprintf("projects/%s/credentials/admin", projectID)
+	role := "admin"
+	// Fail closed: a handler nobody gave the switches still keeps the owner's login from functions.
+	if h.flags == nil || features.Enabled(context.Background(), h.flags, features.AppRuntimeLogin) {
+		role = pgroles.RuntimeRole
+	}
+	path := fmt.Sprintf("projects/%s/credentials/%s", projectID, role)
 	creds, err := h.vault.Get(path)
 	if err != nil || creds == nil {
+		if role != "admin" {
+			log.Printf("WARN: functions of %s get no database URL: no runtime login is filed yet", projectID)
+		}
 		return dbTarget{}, false
 	}
 	target := dbTarget{
@@ -585,6 +628,10 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	if err := edgefn.ValidateProjectID(projectID); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
+		writeOrgGuardError(w, err)
 		return
 	}
 	tenant, _ := custommw.TenantIDFromContext(r.Context())
@@ -1294,6 +1341,9 @@ const (
 // Deno runtime via the RuntimeClient. The runtime's response is written back
 // to w with status, headers, and body intact.
 func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Request, fn *edgefn.Function, auth callerAuth) {
+	if refuseServiceWorkerScript(w, r) {
+		return
+	}
 	// Refuse oversized requests upfront via Content-Length before reading
 	// the body into memory. Protects against naive DoS via giant POSTs.
 	if cl := r.Header.Get("Content-Length"); cl != "" {
@@ -1339,29 +1389,7 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	writeRuntimeResponse(w, resp)
-}
-
-// writeRuntimeResponse forwards a runtime InvokeResponse back to the caller
-// with the handler's original status, headers, and body.
-func writeRuntimeResponse(w http.ResponseWriter, resp *edgefn.InvokeResponse) {
-	for k, v := range resp.Headers {
-		// Drop hop-by-hop headers.
-		lk := strings.ToLower(k)
-		if lk == "transfer-encoding" || lk == "connection" || lk == "content-length" {
-			continue
-		}
-		w.Header().Set(k, v)
-	}
-	// Set last so the function cannot clear it: Studio tells a function's own
-	// 401 from its session ending by this mark.
-	w.Header().Set(custommw.FunctionResponseHeader, "1")
-	status := resp.Status
-	if status == 0 {
-		status = 200
-	}
-	w.WriteHeader(status)
-	_, _ = io.WriteString(w, resp.Body)
+	writeRuntimeResponse(w, fn.ProjectID, resp, h.htmlGuardOn(r.Context()))
 }
 
 // --- Secrets ---
@@ -1426,6 +1454,10 @@ func (h *FunctionHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 // latest env (user secrets + builtins) is picked up. Errors are logged and
 // not surfaced — secret write succeeded, so the admin UI should still 200.
 func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
+	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
+		log.Printf("WARN: redeploy of %s skipped: %v", projectID, err)
+		return
+	}
 	list, err := h.store.List(projectID)
 	if err != nil || len(list) == 0 {
 		return

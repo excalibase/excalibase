@@ -91,7 +91,8 @@ func declarations(owner string) string {
 	return "owner_role CONSTANT text := " + textLiteral(owner) + ";\n" +
 		"  reserved_names CONSTANT text[] := " + textArray(reservedNames) + ";\n" +
 		"  reserved_prefixes CONSTANT text[] := " + textArray(reservedPrefixes) + ";\n" +
-		"  mongo_group CONSTANT text := " + quoteLiteral(config.DocumentDBMongoUsersGroup) + ";"
+		"  mongo_group CONSTANT text := " + quoteLiteral(config.DocumentDBMongoUsersGroup) + ";\n" +
+		"  call_stack text;"
 }
 
 // nameGuard refuses a name the platform holds or may one day hold.
@@ -145,6 +146,17 @@ DECLARE
   target text := role_name;
   parent text;
 BEGIN
+  IF session_user <> owner_role THEN
+    RAISE EXCEPTION 'only the project owner manages roles' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  -- Refuses a call from inside a trigger or another function. It does NOT stop a
+  -- view, RLS policy, rule, column default, CHECK or inlined SQL function a customer
+  -- planted: those add no frame and run as whoever reads them. So the owner login
+  -- must never read or write app-created objects.
+  GET DIAGNOSTICS call_stack = PG_CONTEXT;
+  IF pg_trigger_depth() > 0 OR array_length(string_to_array(btrim(call_stack, E'\n'), E'\n'), 1) > 1 THEN
+    RAISE EXCEPTION 'role management is not available from inside a trigger or function' USING ERRCODE = 'insufficient_privilege';
+  END IF;
   {{NAME_GUARD}}
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target) THEN
     RAISE EXCEPTION 'role "%" already exists', target USING ERRCODE = 'duplicate_object';
@@ -188,6 +200,15 @@ DECLARE
   {{DECLARE}}
   target text := role_name;
 BEGIN
+  IF session_user <> owner_role THEN
+    RAISE EXCEPTION 'only the project owner manages roles' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  -- Only a statement the owner typed: a trigger, default or function a customer
+  -- planted would run this as the owner's session, which this check cannot tell apart.
+  GET DIAGNOSTICS call_stack = PG_CONTEXT;
+  IF pg_trigger_depth() > 0 OR array_length(string_to_array(btrim(call_stack, E'\n'), E'\n'), 1) > 1 THEN
+    RAISE EXCEPTION 'role management is not available from inside a trigger or function' USING ERRCODE = 'insufficient_privilege';
+  END IF;
   {{CUSTOMER_GUARD_TARGET}}
   BEGIN
     EXECUTE format('ALTER ROLE %I PASSWORD %L', target, role_password);
@@ -210,6 +231,15 @@ DECLARE
   {{DECLARE}}
   target text := role_name;
 BEGIN
+  IF session_user <> owner_role THEN
+    RAISE EXCEPTION 'only the project owner manages roles' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  -- Only a statement the owner typed: a trigger, default or function a customer
+  -- planted would run this as the owner's session, which this check cannot tell apart.
+  GET DIAGNOSTICS call_stack = PG_CONTEXT;
+  IF pg_trigger_depth() > 0 OR array_length(string_to_array(btrim(call_stack, E'\n'), E'\n'), 1) > 1 THEN
+    RAISE EXCEPTION 'role management is not available from inside a trigger or function' USING ERRCODE = 'insufficient_privilege';
+  END IF;
   {{CUSTOMER_GUARD_TARGET}}
   EXECUTE format('DROP ROLE %I', target);
 END
@@ -221,9 +251,14 @@ DO $excalibase_grants$
 DECLARE
   owner_role CONSTANT text := {{OWNER}};
 BEGIN
-  EXECUTE format('GRANT EXECUTE ON FUNCTION {{CREATE}} TO %I, %I', owner_role, {{APP_ROLE}});
-  EXECUTE format('GRANT EXECUTE ON FUNCTION {{ALTER}} TO %I, %I', owner_role, {{APP_ROLE}});
-  EXECUTE format('GRANT EXECUTE ON FUNCTION {{DROP}} TO %I, %I', owner_role, {{APP_ROLE}});
+  -- Only the owner's login runs these: excalibase_app runs customer SQL, and a
+  -- role it could create would be a credential above the caller's (EXC-761).
+  EXECUTE format('GRANT EXECUTE ON FUNCTION {{CREATE}} TO %I', owner_role);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION {{ALTER}} TO %I', owner_role);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION {{DROP}} TO %I', owner_role);
+  EXECUTE format('REVOKE EXECUTE ON FUNCTION {{CREATE}} FROM %I', {{APP_ROLE}});
+  EXECUTE format('REVOKE EXECUTE ON FUNCTION {{ALTER}} FROM %I', {{APP_ROLE}});
+  EXECUTE format('REVOKE EXECUTE ON FUNCTION {{DROP}} FROM %I', {{APP_ROLE}});
 END
 $excalibase_grants$;
 `

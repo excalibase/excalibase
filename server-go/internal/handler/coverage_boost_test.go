@@ -173,6 +173,7 @@ func (acceptingRoleVerifier) VerifyRole(context.Context, *domain.DatabaseInstanc
 func TestRotateCredentials_Success(t *testing.T) {
 	r, store, mock := fullRouterWithOpsRoutes(t)
 	seedInstance(store, mock)
+	mock.Secrets["org1-test-db/test-db-postgres-app"] = map[string][]byte{"username": []byte("user"), "password": []byte("generated-at-create")}
 
 	w := doRequest(r, "POST", "/api/provision/test-db/credentials/rotate", "")
 	if w.Code != 200 {
@@ -870,6 +871,7 @@ func TestProvisioningHandlerRoutes_NewMethodsWired(t *testing.T) {
 	h := NewProvisioningHandler(svc, &adminOrgStore{})
 
 	r := chi.NewRouter()
+	r.Use(signedInAs("u1", "user"))
 	r.Route("/p", h.Routes)
 
 	// Routes() does not include GetLogs/RotateCredentials — just confirm it

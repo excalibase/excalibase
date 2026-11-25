@@ -136,7 +136,7 @@ Refuse with `FunctionError` so the caller gets `401`/`403`; any other thrown
 error answers a bare `500`.
 
 The request a function sees never carries a platform credential: the
-gateway removes the Studio cookies (`excali_session`, `excali_oauth_state`)
+gateway removes the Studio cookies (`__Host-excali_session`, `__Host-excali_oauth_state`, and their unprefixed forms)
 by name, an `Authorization: Bearer excb_…` platform token, and its own
 internal headers. Your app's own cookies and tokens pass through unchanged.
 

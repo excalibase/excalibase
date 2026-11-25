@@ -21,6 +21,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
@@ -38,6 +39,10 @@ const pendingCredentialState = "pending"
 // evidence the rotated password works. Refusing is the point — a rotation
 // that assumes either is the failure this guards against.
 var ErrCredentialRotationUnavailable = errors.New("credential rotation: vault and credential verifier are both required")
+
+// ErrResetUnfinished is a reset to a chosen password refused because an earlier
+// reset left a pending password that may be the only one the database accepts.
+var ErrResetUnfinished = errors.New("a previous password reset did not finish; reset again without choosing a password to complete it")
 
 // RoleCredentialVerifier proves a password opens a project's database as a
 // given role. Implemented by *TenantRoleVerifier; tests substitute their own.
@@ -63,13 +68,15 @@ type credentialRotationTarget struct {
 	// serverCA is a MySQL project's server CA, carried into the rotated
 	// record and used to verify the new password.
 	serverCA string
+	// password is the value the caller chose; empty has one generated.
+	password string
 }
 
 // RotateCredentials replaces the passwords of every platform role filed under
 // the project and returns the owner credential.
 //
 // Roles are rotated one at a time, in a fixed order: auth_admin, then
-// excalibase_app, then excalibase_scheduler, then excalibase_reader, then the owner. The owner is last because it is the value
+// excalibase_app, then excalibase_scheduler, then excalibase_reader, then excalibase_runtime, then the owner. The owner is last because it is the value
 // the caller is handed — a caller is only told a rotation succeeded once every
 // role behind it has been replaced and proved. cdc_watcher is deliberately not rotated: its password is baked
 // into the deployed watcher workload's configuration, so changing it without
@@ -79,6 +86,21 @@ type credentialRotationTarget struct {
 // the database requiring a value recorded nowhere. The lease is one key per project, so a rotation also
 // excludes — and is excluded by — pause, resume, restore and teardown.
 func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
+	return s.RotateCredentialsTo(ctx, projectID, "")
+}
+
+// RotateCredentialsTo is RotateCredentials with the owner's new password chosen
+// by the caller; empty has one generated. While OneTimeCredentials is on the
+// answer carries the owner's new password, this once, and never a reader's.
+func (s *ProvisioningService) RotateCredentialsTo(ctx context.Context, projectID, ownerPassword string) (*domain.CredentialsResponse, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
+	if ownerPassword != "" {
+		if err := ValidateDatabasePassword(ownerPassword); err != nil {
+			return nil, err
+		}
+	}
 	if s.vault == nil || s.credVerifier == nil {
 		return nil, ErrCredentialRotationUnavailable
 	}
@@ -98,31 +120,55 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 	if err != nil {
 		return nil, err
 	}
-	var rotated []string
-	var rotateErr error
-	for _, target := range rotationTargets(inst, filed) {
-		target.serverCA = serverCA
-		authenticatesByCertificate, err := s.authenticatesByCertificate(projectID, target.role)
-		if err != nil {
-			rotateErr = err
-			break
-		}
-		if authenticatesByCertificate {
-			continue
-		}
-		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
-			rotateErr = fmt.Errorf("rotate %s credential: %w", target.role, err)
-			break
-		}
-		rotated = append(rotated, target.username)
-	}
+	rotated, rotateErr := s.rotateTargets(ctx, inst, filed, serverCA, ownerPassword)
 	// Only once every password has changed, so a copy that cannot end its
 	// sessions never holds a role back on its old password; a later role
 	// failing still ends the sessions of those already rotated.
 	if err := errors.Join(rotateErr, s.endRotatedSessions(ctx, inst, rotated)); err != nil {
 		return nil, err
 	}
-	return s.GetCredentials(ctx, projectID)
+	return s.rotationAnswer(ctx, projectID)
+}
+
+// rotateTargets replaces each role's password in order and stops at the first
+// failure, returning the names of the roles it did change.
+func (s *ProvisioningService) rotateTargets(ctx context.Context, inst *domain.DatabaseInstance, filed map[string]bool,
+	serverCA, ownerPassword string) ([]string, error) {
+
+	var rotated []string
+	for _, target := range rotationTargets(inst, filed) {
+		target.serverCA = serverCA
+		if target.role == roleAdmin {
+			target.password = ownerPassword
+		}
+		authenticatesByCertificate, err := s.authenticatesByCertificate(inst.ProjectID, target.role)
+		if err != nil {
+			return rotated, err
+		}
+		if authenticatesByCertificate {
+			continue
+		}
+		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
+			return rotated, fmt.Errorf("rotate %s credential: %w", target.role, err)
+		}
+		rotated = append(rotated, target.username)
+	}
+	return rotated, nil
+}
+
+// rotationAnswer is what the caller of a rotation is told: the credentials,
+// with the owner's new password when passwords are shown once.
+func (s *ProvisioningService) rotationAnswer(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
+	if !s.oneTimeCredentials(ctx) {
+		return s.GetCredentials(ctx, projectID)
+	}
+	creds, err := s.storedCredentials(ctx, projectID, true)
+	if err != nil {
+		return nil, err
+	}
+	shown := withoutPasswords(creds)
+	shown.Password = creds.Password
+	return shown, nil
 }
 
 // endRotatedSessions ends the sessions opened with the rotated roles' old passwords.
@@ -157,7 +203,7 @@ func (s *ProvisioningService) authenticatesByCertificate(projectID, role string)
 // does not have would fail the whole rotation.
 func rotationTargets(inst *domain.DatabaseInstance, filed map[string]bool) []credentialRotationTarget {
 	targets := make([]credentialRotationTarget, 0, 4)
-	for _, role := range []string{roleAuthAdmin, roleApp, roleScheduler, roleReader} {
+	for _, role := range []string{roleAuthAdmin, roleApp, roleScheduler, roleReader, roleRuntime} {
 		if filed[vaultCredentialPath(inst.ProjectID, role)] {
 			targets = append(targets, credentialRotationTarget{role: role, username: role})
 		}
@@ -192,12 +238,22 @@ func (s *ProvisioningService) rotateRoleCredential(ctx context.Context, inst *do
 	target credentialRotationTarget, filed map[string]bool) error {
 
 	pendingPath := vaultPendingCredentialPath(inst.ProjectID, target.role)
-	password, err := s.resumePendingPassword(pendingPath, filed[pendingPath])
-	if err != nil {
-		return err
+	// A password the caller chose wins over one an interrupted attempt left.
+	if target.password != "" && filed[pendingPath] {
+		return ErrResetUnfinished
 	}
+	password := target.password
 	if password == "" {
-		password = generatePassword(rotatedPasswordLength)
+		resumed, err := s.resumePendingPassword(pendingPath, filed[pendingPath])
+		if err != nil {
+			return err
+		}
+		password = resumed
+	}
+	if password == "" || password == target.password {
+		if password == "" {
+			password = rotatedPassword(target.role)
+		}
 		record := roleCredentialRecord(inst, target.username, password, target.serverCA)
 		record["state"] = pendingCredentialState
 		if err := s.vault.Put(pendingPath, record); err != nil {
@@ -207,6 +263,11 @@ func (s *ProvisioningService) rotateRoleCredential(ctx context.Context, inst *do
 
 	if err := s.applyAndVerify(ctx, inst, target, password, pendingPath); err != nil {
 		return err
+	}
+	if target.role == roleAdmin {
+		if err := s.syncClusterOwnerSecret(ctx, inst, target.username, password); err != nil {
+			return err
+		}
 	}
 	return s.promoteCredential(ctx, inst, target, password, pendingPath)
 }
@@ -262,8 +323,14 @@ func (s *ProvisioningService) recordedCredentialStillOpensTheDatabase(ctx contex
 func (s *ProvisioningService) promoteCredential(ctx context.Context, inst *domain.DatabaseInstance,
 	target credentialRotationTarget, password, pendingPath string) error {
 
-	if err := s.vault.Put(vaultCredentialPath(inst.ProjectID, target.role),
-		roleCredentialRecord(inst, target.username, password, target.serverCA)); err != nil {
+	record := roleCredentialRecord(inst, target.username, password, target.serverCA)
+	// A rotation does not set the database's grants, so it keeps what the record said of them.
+	if current, err := s.vault.Get(vaultCredentialPath(inst.ProjectID, target.role)); err == nil {
+		if grants, ok := current[mysqlGrantsKey]; ok {
+			record[mysqlGrantsKey] = grants
+		}
+	}
+	if err := s.vault.Put(vaultCredentialPath(inst.ProjectID, target.role), record); err != nil {
 		return fmt.Errorf("promote credential: %w", err)
 	}
 	if err := s.vault.Delete(pendingPath); err != nil {
@@ -329,7 +396,11 @@ func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domai
 	case inst.DeploymentMode == domain.ModeDocker && s.dockerClient != nil:
 		_, err = s.dockerClient.ExecInContainerStdin(ctx, inst.Namespace, psql, sqlText)
 	case s.k8sClient != nil:
-		_, err = s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix, "postgres", psql, sqlText)
+		var primary string
+		if primary, err = clusterPrimary(ctx, s.k8sClient, inst); err != nil {
+			return err
+		}
+		_, err = s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, primary, "postgres", psql, sqlText)
 	default:
 		return ErrCredentialRotationUnavailable
 	}
@@ -454,4 +525,14 @@ func (v *TenantRoleVerifier) VerifyRole(ctx context.Context, inst *domain.Databa
 		return fmt.Errorf("rotated %s credential did not open the project database", username)
 	}
 	return nil
+}
+
+// rotatedPassword is a new password for a role. The owner's is shown to the
+// customer, so it is hex: it never starts with a character a spreadsheet or a
+// command line would misread.
+func rotatedPassword(role string) string {
+	if role == roleAdmin {
+		return provisioner.NewOwnerPassword()
+	}
+	return generatePassword(rotatedPasswordLength)
 }

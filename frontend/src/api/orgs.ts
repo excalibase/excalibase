@@ -37,6 +37,10 @@ export async function listMyOrgs(): Promise<Org[]> {
   return data;
 }
 
+export async function acceptInvite(token: string): Promise<void> {
+  await api.post('/orgs/invites/accept', { token });
+}
+
 export async function getOrg(orgId: string): Promise<Org> {
   const { data } = await api.get<Org>(`/orgs/${orgId}`);
   return data;

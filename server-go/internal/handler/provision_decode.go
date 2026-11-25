@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 )
 
@@ -20,6 +22,8 @@ const maxProvisionBodyBytes = 64 << 10
 type provisioningBody struct {
 	domain.ProvisioningRequest
 	Tier *string `json:"tier"`
+	// Password is the owner password the caller chooses; empty has one generated.
+	Password string `json:"password"`
 }
 
 // decodeProvisioningRequest decodes a create-project or add-database body,
@@ -43,6 +47,7 @@ func decodeProvisioningRequest(w http.ResponseWriter, r *http.Request, into *dom
 		return nil, false
 	}
 	*into = body.ProvisioningRequest
+	into.OwnerPassword = body.Password
 	if named := unimplementedProvisioningFields(*into); len(named) > 0 {
 		httpError(w, "not supported yet: "+strings.Join(named, ", "), http.StatusBadRequest)
 		return nil, false
@@ -89,4 +94,54 @@ func unimplementedProvisioningFields(req domain.ProvisioningRequest) []string {
 		named = append(named, "parameterGroupName")
 	}
 	return named
+}
+
+// settleOwnerPassword validates the owner password a body chose, or generates
+// one, so the create answer can show it once (EXC-759). It answers 400 itself.
+// A project without a database has no owner and takes none.
+func (h *ProvisioningHandler) settleOwnerPassword(w http.ResponseWriter, r *http.Request, req *domain.ProvisioningRequest) bool {
+	if req.OwnerPassword != "" && (req.NoDatabase || !h.svc.OneTimeCredentials(r.Context())) {
+		httpError(w, "a database password cannot be set at creation here", http.StatusBadRequest)
+		return false
+	}
+	if req.OwnerPassword != "" {
+		if err := service.ValidateDatabasePassword(req.OwnerPassword); err != nil {
+			httpError(w, safeError(err), http.StatusBadRequest)
+			return false
+		}
+		return true
+	}
+	if !req.NoDatabase && h.svc.OneTimeCredentials(r.Context()) {
+		req.OwnerPassword = provisioner.NewOwnerPassword()
+	}
+	return true
+}
+
+// createdProject is a create answer: the project, and the owner password this once.
+type createdProject struct {
+	*domain.ProvisioningResponse
+	Password string `json:"password,omitempty"`
+}
+
+// shownOnce adds the owner password to a create answer of a project that
+// exists; a failed build has no database for it to open.
+func shownOnce(ctx context.Context, resp *domain.ProvisioningResponse, password string) any {
+	resp = customerProvisioning(ctx, resp)
+	if resp == nil || password == "" || resp.Status == string(domain.StageFailed) {
+		return resp
+	}
+	return createdProject{ProvisioningResponse: resp, Password: password}
+}
+
+// customerProvisioning is a provisioning answer as the caller reads it: the
+// failure as a kind, and for a customer the cluster's names out of the step.
+func customerProvisioning(ctx context.Context, resp *domain.ProvisioningResponse) *domain.ProvisioningResponse {
+	if resp == nil {
+		return nil
+	}
+	shown := *resp
+	failure := failureForCaller(ctx, resp.FailureReason, resp.RollbackLog)
+	shown.FailureKind, shown.FailureMessage, shown.FailureReason, shown.RollbackLog = failure.Kind, failure.Message, failure.Reason, failure.RollbackLog
+	shown.FailureStep = domain.ScrubClusterText(resp.FailureStep, resp.Namespace)
+	return &shown
 }

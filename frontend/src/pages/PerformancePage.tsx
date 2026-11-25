@@ -92,7 +92,7 @@ export function PerformancePage() {
           <div className="space-y-2">
             <button
               onClick={() => enablePi.mutate(undefined, {
-                onSuccess: (r) => showToast(r.status ?? 'Enabled — cluster restart in progress (~30s)', true),
+                onSuccess: (r) => showToast(r.status ?? 'Enabled — database restart in progress (~30s)', true),
                 onError: (e: unknown) => showToast(extractErrorMessage(e) ?? 'Failed to enable', false),
               })}
               disabled={enablePi.isPending}
@@ -100,7 +100,7 @@ export function PerformancePage() {
             >
               {enablePi.isPending ? 'Enabling…' : 'Enable pg_stat_statements'}
             </button>
-            <p className="text-xs text-text-tertiary">Triggers a rolling cluster restart — takes ~30 seconds. No data loss.</p>
+            <p className="text-xs text-text-tertiary">Triggers a rolling database restart — takes ~30 seconds. No data loss.</p>
           </div>
         </div>
       )}

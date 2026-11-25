@@ -40,10 +40,14 @@ func (r *Runtime) CreateAppDisk(ctx context.Context, namespace string, app *apph
 	} else if !errdefs.IsNotFound(err) {
 		return fmt.Errorf("read disk %s: %w", name, err)
 	}
-	if err := r.createVolume(ctx, app, name, app.Disk.Generation); err != nil {
+	userns, err := r.appUserns(ctx, app.ProjectID, app.ID)
+	if err != nil {
 		return err
 	}
-	_, err := r.runTool(ctx, opts, diskOwner(app.ProjectID, app.ID), []string{"chmod", "0777", "/disk"},
+	if err := r.createVolume(ctx, app, name, app.Disk.Generation, userns); err != nil {
+		return err
+	}
+	_, err = r.runTool(ctx, opts, diskOwner(app.ProjectID, app.ID), userns, []string{"chmod", "0777", "/disk"},
 		mount.Mount{Type: mount.TypeVolume, Source: name, Target: "/disk"})
 	if err != nil {
 		return errors.Join(err, r.engine.VolumeRemove(ctx, name, false))
@@ -51,11 +55,11 @@ func (r *Runtime) CreateAppDisk(ctx context.Context, namespace string, app *apph
 	return nil
 }
 
-func (r *Runtime) createVolume(ctx context.Context, app *apphost.App, name string, generation int) error {
+func (r *Runtime) createVolume(ctx context.Context, app *apphost.App, name string, generation int, userns *usernsRange) error {
 	_, err := r.engine.VolumeCreate(ctx, volume.CreateOptions{
 		Name: name, Driver: "local",
-		Labels: map[string]string{labelManaged: "true", labelProject: app.ProjectID, labelApp: app.ID,
-			labelGeneration: strconv.Itoa(generation)},
+		Labels: withUsernsLabel(map[string]string{labelManaged: "true", labelProject: app.ProjectID, labelApp: app.ID,
+			labelGeneration: strconv.Itoa(generation)}, userns),
 	})
 	if err != nil {
 		return fmt.Errorf("create disk %s: %w", name, err)
@@ -94,7 +98,11 @@ func (r *Runtime) AppDiskUsage(ctx context.Context, namespace, appID string, dis
 	if err != nil {
 		return k8s.AppDiskUsage{}, fmt.Errorf("find the project of %s: %w", namespace, err)
 	}
-	output, err := r.runTool(ctx, opts, diskOwner(project, appID), []string{"du", "-sk", "/disk"},
+	userns, err := r.recordedUserns(project, appID)
+	if err != nil {
+		return k8s.AppDiskUsage{}, err
+	}
+	output, err := r.runTool(ctx, opts, diskOwner(project, appID), userns, []string{"du", "-sk", "/disk"},
 		mount.Mount{Type: mount.TypeVolume, Source: name, Target: "/disk", ReadOnly: true})
 	if err != nil {
 		return k8s.AppDiskUsage{}, err
@@ -122,14 +130,18 @@ func (r *Runtime) CopyAppDisk(ctx context.Context, namespace string, app *apphos
 	if err := r.requireVolume(ctx, from); err != nil {
 		return err
 	}
+	userns, err := r.recordedUserns(app.ProjectID, app.ID)
+	if err != nil {
+		return err
+	}
 	if err := r.requireVolume(ctx, target); errors.Is(err, k8s.ErrAppDiskNotCreated) {
-		if err := r.createVolume(ctx, app, target, to.Generation); err != nil {
+		if err := r.createVolume(ctx, app, target, to.Generation, userns); err != nil {
 			return err
 		}
 	} else if err != nil {
 		return err
 	}
-	_, err := r.runTool(ctx, opts, diskOwner(app.ProjectID, app.ID), []string{"sh", "-c", "cp -a /from/. /to/ && chmod 0777 /to"},
+	_, err = r.runTool(ctx, opts, diskOwner(app.ProjectID, app.ID), userns, []string{"sh", "-c", "cp -a /from/. /to/ && chmod 0777 /to"},
 		mount.Mount{Type: mount.TypeVolume, Source: from, Target: "/from", ReadOnly: true},
 		mount.Mount{Type: mount.TypeVolume, Source: target, Target: "/to"})
 	return err
@@ -182,9 +194,9 @@ func (r *Runtime) RepointAppDisk(ctx context.Context, _ string, appID, claim str
 // network, the sandbox, nothing mounted but the disks named. It answers stdout.
 // The tool carries the disks' owner, without which the engine proxy refuses
 // to mount them (EXC-682).
-func (r *Runtime) runTool(ctx context.Context, opts k8s.DiskJobOptions, owner map[string]string, cmd []string, mounts ...mount.Mount) (string, error) {
+func (r *Runtime) runTool(ctx context.Context, opts k8s.DiskJobOptions, owner map[string]string, userns *usernsRange, cmd []string, mounts ...mount.Mount) (string, error) {
 	name := "excalibase-app-disk-tool-" + shortHash(fmt.Sprint(time.Now().UnixNano(), cmd), 12)
-	return r.runToolOn(ctx, opts, toolContainer{name: name, network: "none", owner: owner}, cmd, mounts...)
+	return r.runToolOn(ctx, opts, toolContainer{name: name, network: "none", owner: owner, userns: userns}, cmd, mounts...)
 }
 
 // diskOwner is the labels an app's disk names its owner by.
@@ -197,6 +209,8 @@ func diskOwner(projectID, appID string) map[string]string {
 type toolContainer struct {
 	name, network string
 	owner         map[string]string
+	// userns is the range of the app whose files the tool reads: it sees no file of another.
+	userns *usernsRange
 }
 
 func (r *Runtime) runToolOn(ctx context.Context, opts k8s.DiskJobOptions, tool toolContainer, cmd []string, mounts ...mount.Mount) (string, error) {
@@ -243,6 +257,9 @@ func (r *Runtime) createTool(ctx context.Context, tool toolContainer, cmd []stri
 		// cp -a keeps the default capabilities: it must read and chown files the app's user owns.
 		SecurityOpt: []string{"no-new-privileges"}, CapDrop: []string{"NET_RAW"},
 		Resources: container.Resources{Memory: 64 << 20, MemorySwap: 64 << 20, NanoCPUs: 500_000_000, PidsLimit: &pids},
+	}
+	if tool.userns != nil {
+		host.UsernsMode = tool.userns.mode()
 	}
 	created, err := r.engine.ContainerCreate(ctx, config, host, &network.NetworkingConfig{}, nil, tool.name)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
@@ -34,6 +35,8 @@ func TestFunctionDBURL_CannotReadTheAuthTables(t *testing.T) {
 		&inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{wiringProjectID: {ProjectID: wiringProjectID, OrgID: "default"}}},
 		nil, testAPIBase)
 	h.SetVault(v)
+	// The owner's login is what this test reads the auth tables with, so the runtime login is off.
+	h.SetFeatures(features.NewStatic())
 	url := h.builtinEnv(context.Background(), wiringProjectID)["EXCALIBASE_DB_URL"]
 	if !strings.Contains(url, "tenant_owner:") {
 		t.Fatalf("the function's database URL is not the owner login: %q", url)

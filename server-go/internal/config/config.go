@@ -65,9 +65,20 @@ type AppConfig struct {
 	DeploymentMode              string // "selfhosted" (default) or "cloud"
 	PublicBaseURL               string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
 	MCPDataPlaneURL             string // where test_api_request reaches the data plane; empty turns it off
-	StudioURL                   string // Studio origin that emailed verification and reset links open
-	AuthInternalURL             string // excalibase-auth inside the platform network; SDK key management calls it
-	RegistrationMode            string // "open" (default) or "invite" — invite closes open studio signup
+	// AdminHost is the hostname the operator console is served at (EXC-757):
+	// /api/admin answers there and nowhere else. When the Access team and AUD
+	// are set too, every request on that host must carry a valid Cloudflare
+	// Access assertion, so a forged Host header sent straight to the origin
+	// gets nothing.
+	AdminHost             string
+	AdminAccessTeamDomain string
+	AdminAccessAud        string
+	StudioURL             string // Studio origin that emailed verification and reset links open
+	// InsecureCookies (STUDIO_INSECURE_COOKIES=true) drops the __Host- prefix and Secure flag
+	// from Studio's cookies so a plain-http install on a LAN address can sign in. Never on https.
+	InsecureCookies  bool
+	AuthInternalURL  string // excalibase-auth inside the platform network; SDK key management calls it
+	RegistrationMode string // "open" (default) or "invite" — invite closes open studio signup
 	// PublicPort serves the edge only; Port serves in-cluster callers and
 	// never believes X-Forwarded-For.
 	PublicPort string
@@ -103,6 +114,10 @@ type AppConfig struct {
 	// so per-deployment overrides don't require touching the secret.
 	EmailFromAddress string
 	EmailFromName    string
+	// SupportEmail is where a suspended account holder appeals; AcceptableUseURL
+	// is the policy page their mail links to, one anchor per rule (EXC-841).
+	SupportEmail     string
+	AcceptableUseURL string
 	EmailProductName string
 	EmailReplyTo     string
 	StoragePublicURL string
@@ -220,6 +235,10 @@ type AppConfig struct {
 	ProjectDBStatementTimeout time.Duration
 	ProjectDBLockTimeout      time.Duration
 
+	// WALArchiveAlertAfter is how long a database's WAL archiving may fail
+	// before the platform raises an alert (EXC-784).
+	WALArchiveAlertAfter time.Duration
+
 	// AutoMigrate applies a bundle's declared schema to the project database
 	// at deploy time. EXCALIBASE_AUTO_MIGRATE=false defers it to an explicit
 	// POST /api/projects/{projectId}/schema/apply.
@@ -282,6 +301,9 @@ type AppConfig struct {
 	// checked.
 	FnReplayEnabled      bool
 	FnReplayPollInterval time.Duration
+	// LoginAccountFailureCap is how many failed Studio sign-ins one account takes
+	// per 15 minutes, from all addresses together, before it refuses every attempt.
+	LoginAccountFailureCap int
 	// Public database endpoints (EXC-410). DBEndpointDomain is the suffix a
 	// customer's endpoint name hangs off — they dial
 	// <projectId>.<DBEndpointDomain>:<port> — and empty means the platform
@@ -332,6 +354,10 @@ type AppConfig struct {
 	// DarkFeatures are the features shipped dark that this install turned on
 	// (EXC-554); feature code asks Features(), never this list.
 	DarkFeatures []features.Feature
+	// SignupsPerHour is how many accounts one network (a /24, or an IPv6 /64) may open per hour (EXC-755).
+	SignupsPerHour int
+	// CrashLoop is the crash-loop guard's threshold and exemptions (EXC-839).
+	CrashLoop CrashLoopConfig
 	// LogRetention is how long Loki keeps each plan's project logs (EXC-659).
 	LogRetention LogRetention
 	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
@@ -512,6 +538,10 @@ func load() AppConfig {
 		DeploymentMode:                 deploymentMode,
 		PublicBaseURL:                  envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
 		MCPDataPlaneURL:                mcpDataPlaneURL(),
+		AdminHost:                      strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_HOST"))),
+		AdminAccessTeamDomain:          strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_ACCESS_TEAM_DOMAIN"))),
+		AdminAccessAud:                 strings.TrimSpace(os.Getenv("ADMIN_ACCESS_AUD")),
+		InsecureCookies:                os.Getenv("STUDIO_INSECURE_COOKIES") == "true",
 		StudioURL:                      strings.TrimRight(strings.TrimSpace(os.Getenv("STUDIO_URL")), "/"),
 		AuthInternalURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_INTERNAL_URL")), "/"),
 		KubeconfigPath:                 envOr("KUBECONFIG_PATH", ""),
@@ -524,6 +554,8 @@ func load() AppConfig {
 		PodNamespace:                   os.Getenv("POD_NAMESPACE"),
 		EmailFromAddress:               envOr("EMAIL_FROM", "noreply@excalibase.io"),
 		EmailFromName:                  envOr("EMAIL_FROM_NAME", "Excalibase"),
+		SupportEmail:                   envOr("SUPPORT_EMAIL", "hello@excalibase.io"),
+		AcceptableUseURL:               envOr("ACCEPTABLE_USE_URL", "https://excalibase.io/acceptable-use"),
 		EmailProductName:               envOr("EMAIL_PRODUCT_NAME", "Excalibase"),
 		EmailReplyTo:                   envOr("EMAIL_REPLY_TO", ""),
 		StoragePublicURL:               envOr("STORAGE_PUBLIC_URL", ""),
@@ -544,6 +576,7 @@ func load() AppConfig {
 		DockerTLSVerify:                envOr("DOCKER_TLS_VERIFY", "") != "",
 		RestoreReadyTimeout:            envDuration("EXCALIBASE_RESTORE_READY_TIMEOUT", defaultRestoreReadyTimeout),
 		PauseTimeout:                   envDuration("EXCALIBASE_PAUSE_TIMEOUT", defaultPauseTimeout),
+		WALArchiveAlertAfter:           envDuration("EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER", defaultWALArchiveAlertAfter),
 		DeployWait:                     envDuration("EXCALIBASE_DEPLOY_WAIT", defaultDeployWait),
 		PlatformDBMaxConns:             envPlatformDBMaxConns(),
 		SchedulerEnabled:               envBool("EXCALIBASE_SCHEDULER_ENABLED", true),
@@ -590,11 +623,14 @@ func load() AppConfig {
 		BackupCredentialsRenewInterval: envDuration("BACKUP_CREDENTIALS_RENEW_INTERVAL", defaultBackupCredentialsRenewInterval),
 		BackupRegion:                   envOr("BACKUP_DEFAULT_REGION", "auto"),
 		FnReplayEnabled:                envBool("EXCALIBASE_FN_REPLAY_ENABLED", true),
+		LoginAccountFailureCap:         envLoginAccountFailureCap("LOGIN_ACCOUNT_FAILURE_CAP"),
 		FnReplayPollInterval:           envMillis("EXCALIBASE_FN_REPLAY_POLL_MS", defaultReplayPoll),
 		AppHostingEnabled:              envOr("APP_HOSTING_ENABLED", "") == "true",
 		SitesEnabled:                   os.Getenv("SITES_ENABLED") == "true",
 		Sites:                          loadSites(),
 		DarkFeatures:                   loadDarkFeatures(),
+		SignupsPerHour:                 envInt("SIGNUPS_PER_NETWORK_PER_HOUR", 10),
+		CrashLoop:                      loadCrashLoop(),
 		LogRetention:                   loadLogRetention(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
 		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",
@@ -692,6 +728,7 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "DOCKER_TLS_VERIFY", Field: "DockerTLSVerify", Enabled: c.DockerTLSVerify},
 		{Env: "APP_HOSTING_ENABLED", Field: "AppHostingEnabled", Enabled: c.AppHostingEnabled},
 		{Env: "SITES_ENABLED", Field: "SitesEnabled", Enabled: c.SitesEnabled},
+		{Env: "STUDIO_INSECURE_COOKIES", Field: "InsecureCookies", Enabled: c.InsecureCookies},
 		{Env: "SITES_GIT_BUILDS_ENABLED", Field: "SitesGitBuildsEnabled", Enabled: c.SitesGitBuildsEnabled},
 		{Env: "APP_WILDCARD_TLS", Field: "AppWildcardTLS", Enabled: c.AppWildcardTLS},
 		{Env: "DOCUMENTDB_ENABLED", Field: "DocumentDBEnabled", Enabled: c.DocumentDBEnabled},
@@ -739,6 +776,53 @@ func (c AppConfig) CheckPublicListener() error {
 		return errors.New("TRUSTED_PROXY_CIDRS must name the edge: the public listener believes X-Forwarded-For only from it")
 	}
 	return nil
+}
+
+// CheckAdminHost refuses an admin-console fence that cannot work, and a cloud
+// install whose host is not behind Access. A cloud install with no ADMIN_HOST
+// boots with the console off (AdminConsoleDisabled). It refuses: a host that
+// is not a bare hostname, Access settings without a host to fence, or half of
+// the Access pair, which would silently leave the console behind the host
+// header alone.
+func (c AppConfig) CheckAdminHost() error {
+	for name, value := range map[string]string{"ADMIN_HOST": c.AdminHost, "ADMIN_ACCESS_TEAM_DOMAIN": c.AdminAccessTeamDomain} {
+		if strings.ContainsAny(value, "/@ ") || strings.Contains(value, "://") {
+			return fmt.Errorf("%s %q must be a bare hostname such as admin.example.com", name, value)
+		}
+	}
+	// A cloud install with a host must put it behind Access: a host alone is
+	// only a header an attacker can send straight to the origin.
+	if c.IsCloud() && c.AdminHost != "" && (c.AdminAccessTeamDomain == "" || c.AdminAccessAud == "") {
+		return errors.New("ADMIN_HOST on a cloud install needs ADMIN_ACCESS_TEAM_DOMAIN and ADMIN_ACCESS_AUD: the admin console must sit behind Cloudflare Access")
+	}
+	if (c.AdminAccessTeamDomain == "") != (c.AdminAccessAud == "") {
+		return errors.New("ADMIN_ACCESS_TEAM_DOMAIN and ADMIN_ACCESS_AUD must be set together")
+	}
+	if c.AdminAccessTeamDomain != "" && c.AdminHost == "" {
+		return errors.New("ADMIN_ACCESS_TEAM_DOMAIN needs ADMIN_HOST: there is no admin host to put behind Access")
+	}
+	return nil
+}
+
+// AdminConsoleDisabled is whether the operator console is off: a cloud install
+// with no ADMIN_HOST serves no /api/admin route at all, on any host, except the
+// service-account routes. Self-hosted keeps serving it.
+func (c AppConfig) AdminConsoleDisabled() bool {
+	return c.IsCloud() && c.AdminHost == ""
+}
+
+// AdminOrigin is the page origin of the admin console, derived from ADMIN_HOST,
+// or "" when none is set. The Studio session cookie is trusted from it.
+func (c AppConfig) AdminOrigin() string {
+	if c.AdminHost == "" {
+		return ""
+	}
+	return "https://" + c.AdminHost
+}
+
+// AdminAccessEnabled is whether the admin host demands a Cloudflare Access assertion.
+func (c AppConfig) AdminAccessEnabled() bool {
+	return c.AdminHost != "" && c.AdminAccessTeamDomain != "" && c.AdminAccessAud != ""
 }
 
 // CheckDenoProvisioningURL refuses a k8s install that runs functions without
@@ -795,6 +879,10 @@ const (
 // observed ready. Restores replay WAL, so the budget is generous.
 const defaultRestoreReadyTimeout = 15 * time.Minute
 
+// defaultWALArchiveAlertAfter is long enough that a restart or a brief store
+// outage clears first, and short next to the hours a credential or a disk lasts.
+const defaultWALArchiveAlertAfter = 30 * time.Minute
+
 // defaultPauseTimeout bounds each observed wait inside a pause. Stopping a
 // busy database takes minutes: the pre-pause backup has to finish and
 // postgres has to shut down cleanly.
@@ -819,10 +907,9 @@ func stuckRetryAfter(pauseTimeout time.Duration) time.Duration {
 const DefaultPlatformDBMaxConns = 20
 
 // MinPlatformDBMaxConns is the smallest pool that can do any work at all:
-// five standing leadership claims (backup scheduler, idle pause, storage
-// reap, restore sweep, and the function scheduler's cron half) pin one
-// connection each, plus one for a lifecycle operation in flight and one for
-// a query. Tenant databases are reached through their own pools and cost
+// every standing leadership claim (backup scheduler, idle pause, storage
+// reap and the other sweepers) shares one pinned session, plus one for a
+// query. Project lifecycle locks use a pool of their own (LifecycleLock). Tenant databases are reached through their own pools and cost
 // nothing here.
 const MinPlatformDBMaxConns = 7
 
@@ -841,7 +928,7 @@ func parsePlatformDBMaxConns(raw string) (int, error) {
 	}
 	if n < MinPlatformDBMaxConns {
 		return 0, fmt.Errorf(
-			"%d is below the minimum of %d: the control plane holds 5 standing leadership claims, plus one connection per lifecycle operation in flight and one for a query",
+			"%d is below the minimum of %d: the control plane's standing leadership claims share one connection, and it needs more for queries",
 			n, MinPlatformDBMaxConns)
 	}
 	return n, nil
@@ -937,6 +1024,29 @@ func envPositiveInt(key string, fallback int) int {
 		log.Fatalf("%s: %v", key, err)
 	}
 	return n
+}
+
+// minLoginAccountFailureCap sits above the 20 attempts an account takes before
+// sign-in starts to wait, so the cap is always a real backstop.
+const minLoginAccountFailureCap = 100
+
+func envLoginAccountFailureCap(key string) int {
+	limit, err := parseLoginAccountFailureCap(os.Getenv(key))
+	if err != nil {
+		log.Fatalf("%s: %v", key, err)
+	}
+	return limit
+}
+
+func parseLoginAccountFailureCap(raw string) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 1000, nil
+	}
+	limit, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || limit < minLoginAccountFailureCap {
+		return 0, fmt.Errorf("%q is not a whole number of at least %d", raw, minLoginAccountFailureCap)
+	}
+	return limit, nil
 }
 
 func envInt(key string, fallback int) int {

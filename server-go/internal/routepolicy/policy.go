@@ -154,6 +154,11 @@ type Row struct {
 	// Capability is the capability a platform service token may call this
 	// route with, or "" when no capability token may reach it.
 	Capability string
+	// Bootstrap marks a route the platform-bootstrap Job's capability token
+	// (svc-bootstrap) calls: it creates service principals, mints and rotates
+	// their tokens and initialises the vault. Other capability tokens are
+	// refused here; the handler binds the token to the principals it manages.
+	Bootstrap bool
 	// ServiceOnly marks a route that ONLY a capability token may call, so a
 	// studio session or an ordinary PAT is refused.
 	ServiceOnly bool
