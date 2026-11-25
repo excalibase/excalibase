@@ -274,7 +274,7 @@ jobs:
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
           docker build -q -t docker.io/excalibase/studio:ci frontend
           docker save docker.io/excalibase/provisioning:ci docker.io/excalibase/studio:ci | gzip -1 > single-host-images.tar.gz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: single-host-images
           path: single-host-images.tar.gz
@@ -284,7 +284,7 @@ jobs:
       # shards, which used to pull them all again at the same moment and hit the rate limits.
       - name: Pull the fence images once
         run: sh deploy/ci/third-party-images.sh save single-host-fence third-party-single-host-fence.tar.gz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: third-party-single-host-fence
           path: third-party-single-host-fence.tar.gz
@@ -292,7 +292,7 @@ jobs:
           compression-level: 0
       - name: Pull the smoke images once
         run: sh deploy/ci/third-party-images.sh save single-host-smoke third-party-single-host-smoke.tar.gz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: third-party-single-host-smoke
           path: third-party-single-host-smoke.tar.gz
@@ -300,7 +300,7 @@ jobs:
           compression-level: 0
       - name: Pull the gvisor images once
         run: sh deploy/ci/third-party-images.sh save single-host-gvisor third-party-single-host-gvisor.tar.gz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: third-party-single-host-gvisor
           path: third-party-single-host-gvisor.tar.gz
@@ -308,7 +308,7 @@ jobs:
           compression-level: 0
       - name: Pull the mysql images once
         run: sh deploy/ci/third-party-images.sh save single-host-mysql third-party-single-host-mysql.tar.gz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: third-party-single-host-mysql
           path: third-party-single-host-mysql.tar.gz
@@ -570,7 +570,7 @@ jobs:
       # TypeScript (sonar.javascript.lcov.reportPaths), and without it every
       # changed .ts/.tsx line counts as uncovered against the new-code gate.
       - run: npm run test:coverage
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: frontend-coverage
@@ -598,7 +598,7 @@ jobs:
       - run: npx playwright test
         env:
           CI: '1'
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: playwright-report
@@ -662,7 +662,7 @@ jobs:
       # as a project runtime has none by default (EXC-518).
       - name: Runtime image runs functions offline
         run: sh deno-server/scripts/image-offline-test.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deno-coverage
           path: deno-server/coverage/lcov.info
@@ -742,7 +742,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull the testcontainers images once
         run: sh deploy/ci/third-party-images.sh save go-integration third-party-go-integration.tar.gz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: third-party-go-integration
           path: third-party-go-integration.tar.gz
@@ -809,7 +809,7 @@ jobs:
           go test -tags=integration ./internal/... ./pkg/... -race -cover
           -coverprofile=coverage-${{ matrix.shard }}.out -timeout 12m
           -run "$(scripts/integration-shard.sh ${{ matrix.shard }} 4)"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: go-coverage-shard-${{ matrix.shard }}
@@ -850,7 +850,7 @@ jobs:
             echo "Coverage ${total}% is below 70% threshold"
             exit 1
           fi
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: go-coverage
