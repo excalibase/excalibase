@@ -45,7 +45,7 @@ func NewRetryEscalator(alerts *AlertingService, notifier AlertNotifier, after in
 
 // Failed records that attempts have failed so far; at the limit it raises the
 // alert, once, and keeps it open until Reconcile closes it.
-func (e *RetryEscalator) Failed(ctx context.Context, prefix, projectID, what string, attempts int, cause error) {
+func (e *RetryEscalator) Failed(ctx context.Context, prefix, projectID, what string, attempts int) {
 	if e == nil || attempts < e.after {
 		return
 	}
@@ -53,7 +53,7 @@ func (e *RetryEscalator) Failed(ctx context.Context, prefix, projectID, what str
 	change := e.alerts.Track("", prefix+projectID, true, func() domain.Alert {
 		return domain.Alert{
 			ID: fmt.Sprintf("%s%s-%d", prefix, projectID, now.UnixNano()), Severity: "CRITICAL",
-			Message:   fmt.Sprintf("The automatic %s of project %s has failed %d times: %v. It keeps retrying; it needs a person", what, projectID, attempts, cause),
+			Message:   fmt.Sprintf("The automatic %s of project %s has failed %d times. It keeps retrying; it needs a person. The cause is in the server log", what, projectID, attempts),
 			Timestamp: &domain.FlexTime{Time: now},
 		}
 	})

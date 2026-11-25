@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 
@@ -40,7 +39,7 @@ func TestRetryEscalator_StaysQuietBelowTheLimit(t *testing.T) {
 	notifier := &mailCountingNotifier{}
 	escalator := NewRetryEscalator(alerts, notifier, 3)
 
-	escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p1", "pause", 2, errors.New("boom"))
+	escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p1", "pause", 2)
 
 	if open := openPlatformAlerts(t, alerts); len(open) != 0 || notifier.raised != 0 {
 		t.Fatalf("alert raised after 2 of 3 attempts: %v, mails %d", open, notifier.raised)
@@ -53,7 +52,7 @@ func TestRetryEscalator_RaisesOnceAtTheLimitAndNamesTheProject(t *testing.T) {
 	escalator := NewRetryEscalator(alerts, notifier, 3)
 
 	for attempts := 3; attempts <= 6; attempts++ {
-		escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p1", "pause", attempts, errors.New("boom"))
+		escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p1", "pause", attempts)
 	}
 
 	if open := openPlatformAlerts(t, alerts); !open[StuckRetryMetricPrefix+"p1"] || len(open) != 1 {
@@ -72,8 +71,8 @@ func TestRetryEscalator_ReconcileClosesOnlyWhatStoppedFailing(t *testing.T) {
 	alerts := NewAlertingService(t.TempDir())
 	notifier := &mailCountingNotifier{}
 	escalator := NewRetryEscalator(alerts, notifier, 1)
-	escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p1", "pause", 1, errors.New("x"))
-	escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p2", "resume", 1, errors.New("x"))
+	escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p1", "pause", 1)
+	escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p2", "resume", 1)
 	alerts.Track("", "wal.archiving:ns/p9", true, func() domain.Alert { return domain.Alert{ID: "w", Severity: "CRITICAL"} })
 
 	escalator.Reconcile(context.Background(), StuckRetryMetricPrefix, map[string]bool{"p2": true})
@@ -89,7 +88,7 @@ func TestRetryEscalator_ReconcileClosesOnlyWhatStoppedFailing(t *testing.T) {
 
 func TestRetryEscalator_NilIsOff(t *testing.T) {
 	var escalator *RetryEscalator
-	escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p1", "pause", 99, errors.New("x"))
+	escalator.Failed(context.Background(), StuckRetryMetricPrefix, "p1", "pause", 99)
 	escalator.Reconcile(context.Background(), StuckRetryMetricPrefix, nil)
 	if NewRetryEscalator(nil, nil, 3) != nil {
 		t.Fatal("no alert service must give no escalator")

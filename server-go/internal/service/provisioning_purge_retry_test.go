@@ -134,7 +134,6 @@ func TestPurgeRetry_AlertsStaffAfterTheLimitAndClosesOnSuccess(t *testing.T) {
 	lab.deleter.deleteErr = nil
 	lab.later()
 	lab.pass()
-	lab.pass()
 	if open := openPlatformAlerts(t, alerts); len(open) != 0 || notifier.cleared != 1 {
 		t.Fatalf("after success: open %v, resolved mails %d", open, notifier.cleared)
 	}

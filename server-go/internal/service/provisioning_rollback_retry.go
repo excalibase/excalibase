@@ -267,7 +267,7 @@ func (s *ProvisioningService) retryProjectRollback(ctx context.Context, projectI
 	default:
 		log.Printf("ERROR: retry the failed rollback of %s: %v", projectID, err)
 		attempts := s.rollbackRetries.failed(projectID)
-		s.retryEscalator.Failed(ctx, RollbackRetryMetricPrefix, projectID, kind.what(), attempts, err)
+		s.retryEscalator.Failed(ctx, RollbackRetryMetricPrefix, projectID, kind.what(), attempts)
 		return false
 	}
 }
