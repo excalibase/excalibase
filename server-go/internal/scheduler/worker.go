@@ -40,6 +40,10 @@ type WorkerConfig struct {
 	// Global, when set, caps them platform-wide across every project.
 	MaxConcurrent int
 	Global        *Semaphore
+	// Local, when set, is the project's limiter and replaces MaxConcurrent.
+	// The sweep passes the same one every tick, because a function can
+	// outlive the tick that started it.
+	Local *Semaphore
 	// Logger is optional; defaults to the std log package.
 	Logger *log.Logger
 }
@@ -93,6 +97,10 @@ func NewWorker(c WorkerConfig) *Worker {
 	if lease <= 0 {
 		lease = DefaultClaimLease
 	}
+	local := c.Local
+	if local == nil {
+		local = NewSemaphore(concurrent)
+	}
 	return &Worker{
 		db:           c.DB,
 		projectID:    c.ProjectID,
@@ -103,7 +111,7 @@ func NewWorker(c WorkerConfig) *Worker {
 		maxAttempts:  maxAttempts,
 		maxArgsBytes: maxArgs,
 		claimLease:   lease,
-		local:        NewSemaphore(concurrent),
+		local:        local,
 		global:       c.Global,
 		logger:       logger,
 	}
@@ -171,8 +179,13 @@ func (w *Worker) Tick(ctx context.Context) error {
 	return w.drain(ctx, &wg, launched)
 }
 
-// outcomeTimeout bounds one write that records a task's outcome.
-const outcomeTimeout = 10 * time.Second
+// OutcomeTimeout bounds one write that records a task's outcome.
+const OutcomeTimeout = 10 * time.Second
+
+// InvokeTimeout bounds one scheduled invocation. The runtime stops a worker
+// at 30s and the runtime client gives up at 35s, so anything beyond this is a
+// runtime that stopped answering rather than a slow function.
+const InvokeTimeout = 40 * time.Second
 
 // drain waits for the batch's invocations. A function already running is not
 // ours to cancel: the project deadline would kill it, or let it finish and
@@ -201,7 +214,7 @@ func (w *Worker) drain(ctx context.Context, wg *sync.WaitGroup, launched int) er
 // outcome recorded whatever the sweep did, and has its own bound so a
 // tenant database that hangs cannot hold the goroutine forever.
 func outcomeContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), outcomeTimeout)
+	return context.WithTimeout(context.WithoutCancel(ctx), OutcomeTimeout)
 }
 
 // acquire takes a slot in the per-project pool and, when one is wired, the

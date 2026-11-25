@@ -16,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
+	"github.com/excalibase/provisioning-poc/internal/scheduler"
 )
 
 var errDockerCloudUnsupported = errors.New(
@@ -478,7 +479,27 @@ func (c AppConfig) Validate() error {
 	if err := c.validateSiteGit(); err != nil {
 		return err
 	}
+	if err := c.validateScheduler(); err != nil {
+		return err
+	}
 	return c.validateAppRoute()
+}
+
+// validateScheduler refuses a claim lease that can expire while a healthy
+// task is still running or being recorded: the sweep would take the row back
+// and run it a second time. The floor is the longest one task can take, a
+// sweep deadline, an invocation and the write that records it.
+func (c AppConfig) validateScheduler() error {
+	if !c.SchedulerEnabled {
+		return nil
+	}
+	floor := c.SchedulerProjectTimeout + scheduler.InvokeTimeout + scheduler.OutcomeTimeout
+	if c.SchedulerClaimLease <= floor {
+		return fmt.Errorf(
+			"EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS %v must exceed %v: the project timeout, the invocation timeout and the outcome write",
+			c.SchedulerClaimLease, floor)
+	}
+	return nil
 }
 
 func Load() AppConfig {

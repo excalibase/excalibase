@@ -81,8 +81,9 @@ is never echoed back into the row or into a log line as a format.
 | `EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS` | 300000 | how long a claimed task may stay `running` before it is taken back |
 
 Worst case per tenant per minute, at the defaults: 12 task ticks × 32 rows =
-**384 dispatch attempts**, never more than **4 at once**, each bounded by the
-40s invocation timeout; plus **1 cron walk of at most 100 rows**, which can
+**384 dispatch attempts**, never more than **4 at once** (the limit is kept per
+project across sweeps, so a function still running from an earlier sweep keeps
+its slot), each bounded by the 40s invocation timeout; plus **1 cron walk of at most 100 rows**, which can
 enqueue at most 100 tasks that then pass through the same task limits. Per
 replica, no more than **32 invocations are ever in flight** across all
 tenants. Database load per tenant is one claim transaction per tick, one
@@ -99,6 +100,23 @@ every tenant connection carries a server-side `statement_timeout` and
 running there; and a sweep that hits its deadline counts as a failure, which
 puts the project into the existing per-project backoff (5s doubling to 5
 minutes) instead of costing a full timeout on every tick.
+
+The deadline bounds the sweep's own work: finding the project's database, the
+claim queries, and how long the sweep waits. It does not cancel a function
+that is already running. That function is bounded by the 40s invocation
+timeout and outlives the sweep that started it. When it ends, its outcome
+(completed, rescheduled or failed) is written under its own 10s bound,
+independent of the sweep deadline, so a function that ran is always recorded.
+
+Delivery is at-least-once. If the outcome write itself fails, or the replica
+dies or the process stops while a function is running, the row stays
+`running` and is taken back after the claim lease, which runs the function
+again; the failed write is logged. Stopping the platform does not wait for
+running invocations, for the same reason. Make scheduled functions idempotent.
+The platform refuses to start if `EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS` is not
+longer than the project timeout plus the invocation timeout plus the outcome
+write bound (80s at the defaults), because a shorter lease would reclaim
+healthy tasks.
 
 ## Dispatch
 

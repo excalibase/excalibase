@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,5 +131,95 @@ func TestFanout_RunningFunctionDoesNotHoldTheSweepPastTheDeadline(t *testing.T) 
 	}
 	if err := settled(t, p); err != nil {
 		t.Fatalf("the function released later was not recorded: %v", err)
+	}
+}
+
+// A function the sweep stopped waiting on still holds its project's slot, so
+// the next sweep may not hand the project a fresh set of slots: that would
+// run more of one tenant's functions at once than its limit allows.
+func TestFanout_ProjectConcurrencyHoldsAcrossTicks(t *testing.T) {
+	var now atomic.Int64
+	var inFlight, peak atomic.Int32
+	release := make(chan struct{})
+	inv := bodyInvoker(func(context.Context) error {
+		n := inFlight.Add(1)
+		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		}
+		select {
+		case <-release:
+		case <-time.After(settleWithin):
+		}
+		inFlight.Add(-1)
+		return nil
+	})
+	f, p := oneDueTask(t, inv)
+	expectOneDueRow(p.mock)
+	p.mock.ExpectExec(completedSQL).WillReturnResult(sqlmock.NewResult(0, 1))
+	p.mock.ExpectExec(completedSQL).WillReturnResult(sqlmock.NewResult(0, 1))
+	f.limits.ProjectConcurrency = 1
+	start := time.Now()
+	f.now = func() time.Time { return start.Add(time.Duration(now.Load())) }
+
+	_ = f.TaskTick(context.Background())
+	now.Store(int64(time.Hour)) // past the backoff the first deadline caused
+	_ = f.TaskTick(context.Background())
+	close(release)
+	_ = settled(t, p)
+
+	if got := peak.Load(); got != 1 {
+		t.Fatalf("%d invocations of one project in flight at once, limit is 1", got)
+	}
+}
+
+func oneRunOfAnotherProject(t *testing.T) (*Fanout, *projectMock) {
+	t.Helper()
+	p := newProjectMock(t)
+	p.expectSchedulerTables(true)
+	expectOneDueRow(p.mock)
+	p.mock.ExpectExec(completedSQL).WillReturnResult(sqlmock.NewResult(0, 1))
+	f := fanoutOver(map[string]*projectMock{"proj_a": p}, &recordingInvoker{}, alwaysLeader{})
+	return f, p
+}
+
+// The slots are kept per project, so a project that is deleted must not
+// leave one behind for ever, and must not lose one that is still held.
+func TestFanout_ProjectSlotsAreDroppedWhenTheProjectIsGone(t *testing.T) {
+	f, _ := oneRunOfAnotherProject(t)
+	if err := f.TaskTick(context.Background()); err != nil {
+		t.Fatalf("TaskTick: %v", err)
+	}
+	if f.projectSlotCount() != 1 {
+		t.Fatalf("slots after a sweep: got %d, want 1", f.projectSlotCount())
+	}
+	held := f.projectSlots("proj_a")
+	if err := held.Acquire(context.Background()); err != nil {
+		t.Fatalf("hold a slot: %v", err)
+	}
+	f.projects = func(context.Context) ([]string, error) { return nil, nil }
+
+	_ = f.TaskTick(context.Background())
+	if f.projectSlotCount() != 1 {
+		t.Fatal("a project's slots were dropped while a function still held one")
+	}
+	held.Release()
+	_ = f.TaskTick(context.Background())
+	if f.projectSlotCount() != 0 {
+		t.Fatalf("slots of a deleted project: got %d, want 0", f.projectSlotCount())
+	}
+}
+
+// The panic path records through the same detached context: a function that
+// panics after the sweep deadline must still be closed, not left running.
+func TestFanout_PanicAfterTheDeadlineIsStillRecorded(t *testing.T) {
+	f, p := oneDueTask(t, bodyInvoker(func(context.Context) error {
+		time.Sleep(pastDeadline)
+		panic("boom")
+	}))
+	p.mock.ExpectExec("SET status = 'failed'").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	_ = f.TaskTick(context.Background())
+
+	if err := settled(t, p); err != nil {
+		t.Fatalf("the panicked function was not recorded: %v", err)
 	}
 }
