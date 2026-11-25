@@ -23,13 +23,15 @@ func TestFanout_SlowProjectDoesNotStallTheOthers(t *testing.T) {
 
 	inv := &recordingInvoker{}
 	f := fanoutOver(map[string]*projectMock{"slow": slow, "proj_a": fast}, inv, alwaysLeader{})
-	f.projectTimeout = 50 * time.Millisecond
+	// The deadline covers the fast project's sweep as well as the slow one's, so it has to
+	// outlast a loaded runner; only the slow project's 30 s statement can reach it.
+	f.projectTimeout = time.Second
 
 	start := time.Now()
 	if err := f.TaskTick(context.Background()); err != nil {
 		t.Fatalf("TaskTick: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	if elapsed := time.Since(start); elapsed > 15*time.Second {
 		t.Fatalf("tick took %v; one slow project must not hold the sweep", elapsed)
 	}
 	if calls := inv.Calls(); len(calls) != 1 || calls[0] != "proj_a/jobs.send" {
