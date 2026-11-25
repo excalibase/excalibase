@@ -155,7 +155,6 @@ func TestFanout_ProjectConcurrencyHoldsAcrossTicks(t *testing.T) {
 	f, p := oneDueTask(t, inv)
 	expectOneDueRow(p.mock)
 	p.mock.ExpectExec(completedSQL).WillReturnResult(sqlmock.NewResult(0, 1))
-	p.mock.ExpectExec(completedSQL).WillReturnResult(sqlmock.NewResult(0, 1))
 	f.limits.ProjectConcurrency = 1
 	start := time.Now()
 	f.now = func() time.Time { return start.Add(time.Duration(now.Load())) }
@@ -164,7 +163,10 @@ func TestFanout_ProjectConcurrencyHoldsAcrossTicks(t *testing.T) {
 	now.Store(int64(time.Hour)) // past the backoff the first deadline caused
 	_ = f.TaskTick(context.Background())
 	close(release)
-	_ = settled(t, p)
+	// Only the first row ever starts; the second finds the project's slot taken.
+	if err := settled(t, p); err != nil {
+		t.Fatalf("expected exactly one completion: %v", err)
+	}
 
 	if got := peak.Load(); got != 1 {
 		t.Fatalf("%d invocations of one project in flight at once, limit is 1", got)
@@ -221,5 +223,22 @@ func TestFanout_PanicAfterTheDeadlineIsStillRecorded(t *testing.T) {
 
 	if err := settled(t, p); err != nil {
 		t.Fatalf("the panicked function was not recorded: %v", err)
+	}
+}
+
+// A Fanout built without limits gets the platform's default per-project
+// limit, not a single slot.
+func TestNewFanout_ProjectSlotsDefaultToTheProjectConcurrency(t *testing.T) {
+	f := NewFanout(FanoutConfig{})
+	sem := f.projectSlots("proj_a")
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	for i := 0; i < DefaultProjectConcurrency; i++ {
+		if err := sem.Acquire(ctx); err != nil {
+			t.Fatalf("slot %d of %d: %v", i+1, DefaultProjectConcurrency, err)
+		}
+	}
+	if got := sem.InUse(); got != DefaultProjectConcurrency {
+		t.Fatalf("slots: got %d, want %d", got, DefaultProjectConcurrency)
 	}
 }

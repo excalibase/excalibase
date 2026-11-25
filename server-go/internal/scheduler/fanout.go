@@ -162,6 +162,9 @@ func NewFanout(c FanoutConfig) *Fanout {
 	if limits.GlobalConcurrency <= 0 {
 		limits.GlobalConcurrency = DefaultGlobalConcurrency
 	}
+	if limits.ProjectConcurrency <= 0 {
+		limits.ProjectConcurrency = DefaultProjectConcurrency
+	}
 	if limits.ProjectTimeout <= 0 {
 		limits.ProjectTimeout = DefaultProjectTimeout
 	}
