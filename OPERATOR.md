@@ -1458,3 +1458,14 @@ EXC-843's start rule still applies to starting compute: resuming an idle-paused
 project and the background app start refuse a project created by a suspended
 member, so an org in good standing cannot resume such a project until that
 member is unsuspended or the project is recreated.
+
+## Self-healing failed operations
+
+Off until `FEATURE_SELFHEAL=true` (Helm `env.FEATURE_SELFHEAL`, or `.env` on a single host; same on both). On, a failed operation retries itself and staff are told when it cannot:
+
+- A teardown whose backup purge failed (`BACKUPS_PENDING_DELETE`) is purged again by the rollback sweep, every 5 minutes at first and doubling to an hour, under the project lease. The admin `POST /backups/purge` still works.
+- A project stuck in `PAUSING` or `RESUMING` is retried on every plan, and also with `EXCALIBASE_AUTOPAUSE_ENABLED=false`; the sweep then judges no project idle. The wait between tries is kept on the project row, as before.
+- After `EXCALIBASE_SELFHEAL_ALERT_AFTER` failed attempts (default 5) a CRITICAL platform alert is raised, `selfheal.stuck:<project>` or `selfheal.retry:<project>`, and mailed to the platform admins like the backup-credential alert. It closes when the project recovers or is gone. Retries go on at the ceiling after the alert.
+- A pause or resume that did not settle tells the customer "we are retrying automatically" instead of asking them to retry.
+
+The purge retry's attempt count lives in the process, so a restart or a new leader delays the alert by at most its limit and never raises a false one.

@@ -194,6 +194,8 @@ var darkWork = map[features.Feature]string{
 	features.CrashLoopGuard: "TestCrashGuard_WantedOnlyWithHostingAndTheFlag",
 	// Off, a suspension sends no mail (internal/adminconsole).
 	features.SuspensionEmails: "TestSuspendSendsNothingWhileTheFlagIsOff",
+	// Off, no retry sweep, no extra alert and the old "retry to continue" text (cmd/server, internal/service).
+	features.SelfHeal: "TestSelfHeal_WantedOnlyWithItsFlag",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }

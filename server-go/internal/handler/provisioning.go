@@ -882,7 +882,7 @@ const lifecycleUnexpected = "the operation could not be completed; try again, an
 // lifecycleSentinels are the pause and resume outcomes whose own words are
 // meant for the caller.
 var lifecycleSentinels = []error{
-	service.ErrProjectOperationRunning, service.ErrPauseNotObserved, service.ErrPauseBackupNotCompleted, service.ErrResumeNotObserved,
+	service.ErrProjectOperationRunning, service.ErrPauseRetrying, service.ErrResumeRetrying, service.ErrPauseNotObserved, service.ErrPauseBackupNotCompleted, service.ErrResumeNotObserved,
 	storage.ErrProjectBusy, storage.ErrProjectStatusChanged,
 }
 

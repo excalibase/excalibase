@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -75,6 +76,8 @@ type PauseService struct {
 	endpoints PublicEndpointReconciler
 	// runInBackground starts a StartPause or StartResume run; nil uses a goroutine.
 	runInBackground func(func())
+	// flags are the dark-feature switches; nil reads as all off.
+	flags features.Flags
 	// podSlots reads the cluster's pod slots so a resume that would leave the
 	// database pods Pending is refused (EXC-747); nil on a single host.
 	podSlots PodSlotReader
@@ -193,6 +196,34 @@ var ErrPauseNotObserved = errors.New("pause did not complete: the project's data
 // a fully working project. The project stays in RESUMING and a retry
 // converges.
 var ErrResumeNotObserved = errors.New("resume did not complete: the project was not confirmed running; retry to continue")
+
+// ErrPauseRetrying and ErrResumeRetrying are the same outcomes, worded for a
+// platform that retries them itself (EXC-873): the customer is told so instead
+// of being asked to retry. They unwrap to the sentinels above.
+var (
+	ErrPauseRetrying  error = &automaticRetry{ErrPauseNotObserved, "pause did not complete: the project's database was not confirmed stopped; we are retrying automatically"}
+	ErrResumeRetrying error = &automaticRetry{ErrResumeNotObserved, "resume did not complete: the project was not confirmed running; we are retrying automatically"}
+)
+
+type automaticRetry struct {
+	base error
+	text string
+}
+
+func (e *automaticRetry) Error() string { return e.text }
+func (e *automaticRetry) Unwrap() error { return e.base }
+
+// SetFeatures gives the service the dark-feature switches; nil reads as all off.
+func (s *PauseService) SetFeatures(flags features.Flags) { s.flags = flags }
+
+// notObserved is the sentence for a pause or resume that did not settle: the
+// retrying one while the platform retries it, else the one asking the caller to.
+func (s *PauseService) notObserved(asked, retrying error) error {
+	if features.Enabled(context.Background(), s.flags, features.SelfHeal) {
+		return retrying
+	}
+	return asked
+}
 
 // hold takes the project's lifecycle lease for the length of one operation.
 // The returned release is safe to defer: it runs on every path out,
@@ -519,7 +550,7 @@ func (s *PauseService) failPause(inst *domain.DatabaseInstance, step string, cau
 	if errors.Is(cause, storage.ErrProjectDeleting) {
 		return cause
 	}
-	clientErr := ErrPauseNotObserved
+	clientErr := s.notObserved(ErrPauseNotObserved, ErrPauseRetrying)
 	if step == pauseStepBackup {
 		clientErr = ErrPauseBackupNotCompleted
 		inst.Status = "ACTIVE"
@@ -672,11 +703,12 @@ func (s *PauseService) failResume(inst *domain.DatabaseInstance, step string, ca
 	}
 	log.Printf("resume %s stopped at %s: %v", inst.ProjectID, step, cause)
 	inst.CurrentStep = step
-	inst.FailureReason = ErrResumeNotObserved.Error()
+	clientErr := s.notObserved(ErrResumeNotObserved, ErrResumeRetrying)
+	inst.FailureReason = clientErr.Error()
 	if err := s.persistFrom(inst, string(domain.StatusResuming)); err != nil {
 		return err
 	}
-	return ErrResumeNotObserved
+	return clientErr
 }
 
 // persist writes the row unconditionally. Used for the first write of an

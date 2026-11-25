@@ -53,6 +53,8 @@ type ProvisioningService struct {
 	// imagePullTimeout overrides defaultImagePullTimeout; zero keeps the default.
 	imagePullTimeout time.Duration
 	rollbackRetries  rollbackRetrySchedule
+	// retryEscalator alerts staff when an automatic retry keeps failing; nil is off.
+	retryEscalator *RetryEscalator
 	// storageBudget holds every database volume to the platform's share of its storage.
 	storageBudget *storagebudget.Budget
 	store         storage.InstanceStore
@@ -1643,16 +1645,36 @@ func (s *ProvisioningService) PurgeBackups(ctx context.Context, projectID string
 	if s.backupPurger == nil {
 		return 0, ErrBackupPurgeNotConfigured
 	}
+	return s.purgePendingBackups(ctx, inst)
+}
+
+// purgePendingBackups deletes the backups of a row in BACKUPS_PENDING_DELETE
+// and removes the row once the prefix is clean. A failure is recorded on the
+// row, which stays the retry marker. Idempotent: a prefix already clear
+// purges nothing and succeeds.
+func (s *ProvisioningService) purgePendingBackups(ctx context.Context, inst *domain.DatabaseInstance) (int, error) {
 	deleted, err := s.backupPurger.Purge(ctx, inst)
 	if err != nil {
-		if rerr := s.store.RecordDeletionFailure(projectID, domain.StatusBackupsPendingDelete,
+		if rerr := s.store.RecordDeletionFailure(inst.ProjectID, domain.StatusBackupsPendingDelete,
 			domain.DeletionStepDeleteBackups, "backup purge failed: "+err.Error()); rerr != nil {
 			log.Printf(warnPersistFmt, rerr)
 		}
 		return deleted, err
 	}
-	log.Printf("backup purge retry for %s deleted %d objects", projectID, deleted)
-	return deleted, s.store.Delete(projectID)
+	log.Printf("backup purge retry for %s deleted %d objects", inst.ProjectID, deleted)
+	return deleted, s.store.Delete(inst.ProjectID)
+}
+
+// retryBackupPurge is the sweep's retry of a pending purge. A mode with no
+// platform backups has nothing to purge, so its marker is simply removed, as
+// the teardown itself would have skipped it.
+func (s *ProvisioningService) retryBackupPurge(ctx context.Context, inst *domain.DatabaseInstance) error {
+	_, err := s.purgePendingBackups(ctx, inst)
+	if errors.Is(err, ErrNoBackupsForMode) {
+		log.Printf("backup purge skipped for %s: %v", inst.ProjectID, err)
+		return s.store.Delete(inst.ProjectID)
+	}
+	return err
 }
 
 // deleteVaultCredentials removes every secret filed under the project and
