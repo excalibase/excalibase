@@ -10,7 +10,7 @@ import { Button } from '../components/Button';
 import { engineIcon, engineLabel } from '../utils/engine';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { LayoutLoading } from '../components/layout/v2/LayoutLoading';
-import { parseInstant } from '../utils/instant';
+import { formatInstant } from '../utils/instant';
 
 const HomePage = lazy(() => import('./home/HomePage').then((m) => ({ default: m.HomePage })));
 
@@ -91,7 +91,7 @@ function LegacyDashboardPage() {
                     <span className="px-2 py-0.5 rounded text-xs bg-bg-tertiary text-text-secondary border border-border-primary">{inst.tier}</span>
                   </td>
                   <td className="px-6 py-3"><StatusBadge status={inst.status} stage={inst.currentStage} deletionDueAt={inst.deletionDueAt} /></td>
-                  <td className="px-6 py-3 text-text-tertiary">{new Date(parseInstant(inst.createdAt)).toLocaleDateString()}</td>
+                  <td className="px-6 py-3 text-text-tertiary">{formatInstant(inst.createdAt, 'date')}</td>
                 </tr>
               ))}
             </tbody>

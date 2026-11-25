@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { apiErrorMessage } from '../../api/apps';
-import { parseInstant } from '../../utils/instant';
+import { formatInstant } from '../../utils/instant';
 
 export interface AppLogLine {
   pod: string;
@@ -71,7 +71,7 @@ export function AppLogs({
             key={`${line.pod}-${line.time}-${line.text}`}
             className="whitespace-pre-wrap break-all"
           >
-            <span className="text-text-tertiary">{new Date(parseInstant(line.time)).toLocaleTimeString()} </span>
+            <span className="text-text-tertiary">{formatInstant(line.time, 'time')} </span>
             <span className="text-purple-400">{line.pod} </span>
             <span className="text-text-primary">{line.text}</span>
           </div>

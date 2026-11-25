@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { parseInstant } from './instant';
+import { formatInstant, parseInstant } from './instant';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -23,5 +23,24 @@ describe('parseInstant', () => {
     expect(Number.isNaN(parseInstant(''))).toBe(true);
     expect(Number.isNaN(parseInstant(undefined))).toBe(true);
     expect(Number.isNaN(parseInstant('nope'))).toBe(true);
+  });
+});
+
+describe('formatInstant', () => {
+  test('shows a refused time as unknown and warns once per value', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const zoneless = '2026-11-25T03:00:00.5';
+    expect(formatInstant(zoneless)).toBe('unknown');
+    expect(formatInstant(zoneless, 'date')).toBe('unknown');
+    expect(formatInstant(zoneless, 'time')).toBe('unknown');
+    expect(formatInstant(undefined)).toBe('unknown');
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  test('shows a zoned time in the viewer zone', () => {
+    const at = new Date('2026-11-25T02:30:00Z');
+    expect(formatInstant('2026-11-25T02:30:00Z')).toBe(at.toLocaleString());
+    expect(formatInstant('2026-11-25T02:30:00Z', 'date')).toBe(at.toLocaleDateString());
+    expect(formatInstant('2026-11-25T02:30:00Z', 'time')).toBe(at.toLocaleTimeString());
   });
 });

@@ -45,7 +45,9 @@ const KIND_ORDER: AttentionKind[] = ['project-failed', 'app-failed', 'token-expi
 const nameOf = (project: Pick<DatabaseInstance, 'projectId' | 'projectName'>): string => project.projectName?.trim() || project.projectId;
 
 function formatDate(value: string | number): string {
-  return new Date(parseInstant(value)).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const at = new Date(parseInstant(value));
+  if (Number.isNaN(at.getTime())) return 'unknown';
+  return at.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function expiryOf(token: TokenInfo): number | null {

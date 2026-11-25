@@ -10,7 +10,7 @@ import { containsLabel, lastUsedAt, projectStatus, relativeTime, rowAction, serv
 import { ResumeButton } from './ResumeButton';
 import { useProjectServices, type LoadedServices } from './useHomeData';
 import type { DatabaseInstance } from '../../types';
-import { parseInstant } from '../../utils/instant';
+import { formatInstant, parseInstant } from '../../utils/instant';
 
 interface ProjectRow {
   project: DatabaseInstance;
@@ -52,7 +52,7 @@ function columns(now: Date): Column<ProjectRow>[] {
       id: 'status', header: 'Status', sortValue: (row) => row.status.label,
       cell: (row) => <span className={cn('font-medium', TONE[row.status.tone])}>{row.status.label}</span>,
     },
-    { id: 'created', header: 'Created', sortValue: (row) => parseInstant(row.project.createdAt), cell: (row) => <span className="text-text-secondary">{new Date(parseInstant(row.project.createdAt)).toLocaleDateString()}</span> },
+    { id: 'created', header: 'Created', sortValue: (row) => parseInstant(row.project.createdAt), cell: (row) => <span className="text-text-secondary">{formatInstant(row.project.createdAt, 'date')}</span> },
     {
       id: 'used', header: 'Last used', sortValue: (row) => row.lastUsed,
       cell: (row) => <span className="text-text-secondary">{row.lastUsed === null ? '—' : relativeTime(row.lastUsed, now)}</span>,

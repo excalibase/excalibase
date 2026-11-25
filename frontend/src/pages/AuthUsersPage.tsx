@@ -5,7 +5,7 @@ import { useAuthUsers, useUpdateAuthUser, useDeleteAuthUser } from '../hooks/use
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { EndUserRoles } from '../components/endusers/EndUserRoles';
 import { serverErrorMessage } from '../utils/serverError';
-import { parseInstant } from '../utils/instant';
+import { formatInstant } from '../utils/instant';
 
 export function AuthUsersPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -113,10 +113,10 @@ export function AuthUsersPage() {
                   </button>
                 </td>
                 <td className="px-4 py-3 text-text-tertiary text-xs">
-                  {user.last_login_at ? new Date(parseInstant(user.last_login_at)).toLocaleString() : 'Never'}
+                  {user.last_login_at ? formatInstant(user.last_login_at) : 'Never'}
                 </td>
                 <td className="px-4 py-3 text-text-tertiary text-xs">
-                  {new Date(parseInstant(user.created_at)).toLocaleDateString()}
+                  {formatInstant(user.created_at, 'date')}
                 </td>
                 <td className="px-4 py-3 text-right">
                   <button onClick={() => setDeleteTarget({ id: user.id, email: user.email })}

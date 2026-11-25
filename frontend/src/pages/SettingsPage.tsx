@@ -24,7 +24,7 @@ import { serverErrorMessage } from '../utils/serverError';
 import { engineLabel, isMySQLProject } from '../utils/engine';
 import { describeBackupSchedule } from '../utils/backupSchedule';
 import { projectOperationMessage } from '../hooks/projectFollow';
-import { parseInstant } from '../utils/instant';
+import { formatInstant } from '../utils/instant';
 
 interface RollbackResult {
   name: string;
@@ -41,8 +41,8 @@ function projectInfo(project: DatabaseInstance) {
       ? { icon: Database, label: 'MySQL Version', value: project.mysqlVersion || '-' }
       : { icon: Database, label: 'PostgreSQL Version', value: project.postgresVersion || '-' },
     { icon: Database, label: 'Database Name', value: project.databaseName || '-' },
-    { icon: Clock, label: 'Created', value: project.createdAt ? new Date(parseInstant(project.createdAt)).toLocaleString() : '-' },
-    { icon: Clock, label: 'Updated', value: project.updatedAt ? new Date(parseInstant(project.updatedAt)).toLocaleString() : '-' },
+    { icon: Clock, label: 'Created', value: project.createdAt ? formatInstant(project.createdAt) : '-' },
+    { icon: Clock, label: 'Updated', value: project.updatedAt ? formatInstant(project.updatedAt) : '-' },
   ];
 }
 
@@ -246,7 +246,7 @@ function LifecycleSection({ project }: { readonly project: DatabaseInstance }) {
           <p className="text-xs text-text-secondary mb-3">
             This project is paused {project.pauseReason ? `(${project.pauseReason})` : ''}. Click Resume to bring it back online.
             {project.lastActiveAt && (
-              <> Last active: {new Date(parseInstant(project.lastActiveAt)).toLocaleString()}.</>
+              <> Last active: {formatInstant(project.lastActiveAt)}.</>
             )}
           </p>
           <button
@@ -308,7 +308,7 @@ export function DangerZone({ project, protectedFromDeletion, onDelete, deleting,
         <div data-testid="deletion-scheduled">
           <p className="text-xs text-text-secondary mb-3">
             This project is scheduled for deletion on{' '}
-            {project.deletionDueAt ? new Date(parseInstant(project.deletionDueAt)).toLocaleString() : 'its due date'}.{' '}
+            {project.deletionDueAt ? formatInstant(project.deletionDueAt) : 'its due date'}.{' '}
             {project.noDatabase === true
               ? 'Its containers are stopped and its files kept until then. An org owner can cancel; resume each container afterwards.'
               : 'Its database and containers are stopped and its data kept until then. An org owner can cancel; the project is then left paused, and each container is resumed on its own.'}

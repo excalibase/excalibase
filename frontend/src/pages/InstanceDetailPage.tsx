@@ -16,7 +16,7 @@ import { engineLabel } from '../utils/engine';
 import { describeBackupSchedule } from '../utils/backupSchedule';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import { NOT_REACHABLE, publicTarget } from '../components/ConnectionParts';
-import { parseInstant } from '../utils/instant';
+import { formatInstant } from '../utils/instant';
 
 type Tab = 'overview' | 'credentials' | 'backups' | 'logs';
 
@@ -145,8 +145,8 @@ export function InstanceDetailPage() {
                 ['Connection',    publicAddress ?? NOT_REACHABLE],
                 ['Database Name', instance.databaseName ?? '—'],
                 ['Backup',        instance.backupEnabled ? describeBackupSchedule(instance.backupSchedule) : 'Disabled'],
-                ['Created',       new Date(parseInstant(instance.createdAt)).toLocaleString()],
-                ['Updated',       new Date(parseInstant(instance.updatedAt)).toLocaleString()],
+                ['Created',       formatInstant(instance.createdAt)],
+                ['Updated',       formatInstant(instance.updatedAt)],
               ].map(([label, value]) => (
                 <div key={label as string}>
                   <p className="text-text-tertiary mb-1">{label}</p>
@@ -227,7 +227,7 @@ export function InstanceDetailPage() {
                     {backups.map((b) => (
                       <tr key={b.id} className="border-b border-border-primary last:border-0">
                         <td className="py-3 font-mono text-xs text-text-primary">{b.id}</td>
-                        <td className="py-3 text-text-secondary">{new Date(parseInstant(b.timestamp)).toLocaleString()}</td>
+                        <td className="py-3 text-text-secondary">{formatInstant(b.timestamp)}</td>
                         <td className="py-3 text-text-secondary">{formatBytes(b.sizeBytes ?? 0)}</td>
                         <td className="py-3"><StatusBadge status={b.status} /></td>
                       </tr>

@@ -9,7 +9,7 @@ import { Spinner, ToneBadge } from '../../containers/ContainerBits';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { MetricsTrend, type TrendPoint } from './MetricsTrend';
 import { Fact, Notice, Section } from './sections';
-import { parseInstant } from '../../../utils/instant';
+import { formatInstant } from '../../../utils/instant';
 
 const NOT_AVAILABLE = 'Not available';
 const HISTORY_POINTS = 30;
@@ -89,7 +89,7 @@ function trendOf(history: MetricsHistory | undefined): TrendPoint[] {
   const round = (value: number | null) => (value == null ? null : Math.round(value));
   return (history?.metrics ?? [])
     .filter((m) => m.metricsAvailable)
-    .map((m) => ({ time: new Date(parseInstant(m.timestamp)).toLocaleTimeString(), cpu: round(m.cpuUsagePercent), memory: round(m.memoryUsagePercent) }));
+    .map((m) => ({ time: formatInstant(m.timestamp, 'time'), cpu: round(m.cpuUsagePercent), memory: round(m.memoryUsagePercent) }));
 }
 
 const hasUsage = (points: readonly TrendPoint[]) => points.length > 1 && points.some((p) => (p.cpu ?? 0) > 0 || (p.memory ?? 0) > 0);

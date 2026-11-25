@@ -13,7 +13,7 @@ import { BulkDialog, BulkOutcomeNotice, type BulkOutcome, type BulkRequest } fro
 import { refreshAdmin } from './adminRows';
 import { ORG_SORTS } from './listQuery';
 import { useServerList } from './useServerList';
-import { parseInstant } from '../../../utils/instant';
+import { formatInstant } from '../../../utils/instant';
 
 const serverSorted = () => '';
 const anyRow = () => true;
@@ -45,7 +45,7 @@ export function orgColumns(): Column<ConsoleOrg>[] {
       id: 'usage', header: 'Usage',
       cell: (org) => (org.cpuCores || org.memoryMb ? `${org.cpuCores.toFixed(2)} cores · ${Math.round(org.memoryMb)} MiB` : '—'),
     },
-    { id: 'created', header: 'Created', sortValue: serverSorted, defaultHidden: true, cell: (org) => (org.createdAt ? new Date(parseInstant(org.createdAt)).toLocaleDateString() : '—') },
+    { id: 'created', header: 'Created', sortValue: serverSorted, defaultHidden: true, cell: (org) => (org.createdAt ? formatInstant(org.createdAt, 'date') : '—') },
   ];
 }
 

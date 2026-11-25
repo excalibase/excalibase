@@ -9,7 +9,7 @@ import { HostCards } from '../components/monitoring/HostCards';
 import { HostCharts } from '../components/monitoring/HostCharts';
 import { ContainersTable } from '../components/monitoring/ContainersTable';
 import { AlertSettingsCard } from '../components/monitoring/AlertSettingsCard';
-import { parseInstant } from '../utils/instant';
+import { formatInstant } from '../utils/instant';
 
 const PLATFORM_ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
 
@@ -66,7 +66,7 @@ function ContainersSection({ range }: { readonly range: MonitoringRange }) {
         <h2 className="text-lg font-semibold">Containers</h2>
         {data?.timestamp && (
           <span className="text-xs text-text-tertiary">
-            sampled {new Date(parseInstant(data.timestamp)).toLocaleTimeString()}
+            sampled {formatInstant(data.timestamp, 'time')}
           </span>
         )}
       </div>

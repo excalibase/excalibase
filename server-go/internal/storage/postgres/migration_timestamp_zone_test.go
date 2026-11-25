@@ -28,7 +28,9 @@ func TestNoMigrationDeclaresAZonelessTimestampColumn(t *testing.T) {
 			if strings.Contains(strings.ToUpper(code), "INDEX") {
 				continue
 			}
-			if zonelessColumnType.MatchString(code) && !strings.Contains(strings.ToLower(code), "timestamptz") {
+			// timestamptz is one word, so the type pattern never matches it:
+			// each column is judged on its own, not the whole line.
+			if zonelessColumnType.MatchString(code) {
 				t.Errorf("%s:%d declares a zoneless time column: %s", file, number+1, strings.TrimSpace(line))
 			}
 		}

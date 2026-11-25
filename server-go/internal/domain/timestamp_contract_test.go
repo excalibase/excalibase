@@ -14,7 +14,7 @@ import (
 
 var (
 	isoDateTime    = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}`)
-	zonelessLayout = regexp.MustCompile(`"2006-01-02T15:04:05[^"]*"`)
+	zonelessLayout = regexp.MustCompile(`"2006-01-02[ T]15:04:05[^"]*"|\btime\.DateTime\b`)
 	zonedTime      = regexp.MustCompile(`(Z|[+-]\d{2}:\d{2})$`)
 	flexType       = reflect.TypeOf(FlexTime{})
 	utcType        = reflect.TypeOf(UTCTime{})
@@ -75,7 +75,7 @@ func collectTimestampStrings(value any, path string, out map[string]string) {
 	}
 }
 
-func TestEveryTimeFieldInAResponseCarriesItsZone(t *testing.T) {
+func TestEveryTimeFieldInTheListedResponseTypesCarriesItsZone(t *testing.T) {
 	responses := map[string]any{
 		"DatabaseInstance":     &DatabaseInstance{},
 		"ProvisioningResponse": &ProvisioningResponse{},
@@ -121,7 +121,9 @@ func TestEveryTimeFieldInAResponseCarriesItsZone(t *testing.T) {
 // Only the readers may spell a zoneless layout; a writer using one would put
 // a bare clock time on the wire again.
 func TestNoWriterEmitsAZonelessLayout(t *testing.T) {
-	readers := map[string]bool{"internal/domain/instance.go": true, "internal/domain/utctime.go": true, "internal/tableimport/types.go": true}
+	readers := map[string]bool{"internal/domain/instance.go": true, "internal/domain/utctime.go": true, "internal/tableimport/types.go": true,
+		// Not API output: a mysqlbinlog argument and a recovery directive that appends +00.
+		"internal/service/host_mysql_restore.go": true, "internal/service/backup_adapter_docker_restore.go": true}
 	root := filepath.Join("..", "..")
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {

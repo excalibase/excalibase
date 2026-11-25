@@ -1,7 +1,7 @@
 import { useParams } from 'react-router-dom';
 import { Loader2, KeyRound, Clock, AlertCircle } from 'lucide-react';
 import { useAuthSessions } from '../hooks/useAuthUsers';
-import { parseInstant } from '../utils/instant';
+import { formatInstant } from '../utils/instant';
 
 export function AuthSessionsPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -38,10 +38,10 @@ export function AuthSessionsPage() {
                     <KeyRound className="w-3.5 h-3.5 text-green-400" />
                     {s.email}
                   </td>
-                  <td className="px-4 py-2 text-text-tertiary text-xs">{new Date(parseInstant(s.created_at)).toLocaleString()}</td>
+                  <td className="px-4 py-2 text-text-tertiary text-xs">{formatInstant(s.created_at)}</td>
                   <td className="px-4 py-2 text-text-tertiary text-xs flex items-center gap-1">
                     <Clock className="w-3 h-3" />
-                    {new Date(parseInstant(s.expiry_date)).toLocaleString()}
+                    {formatInstant(s.expiry_date)}
                   </td>
                 </tr>
               ))}
@@ -74,7 +74,7 @@ export function AuthSessionsPage() {
                       {s.email}
                     </td>
                     <td className="px-4 py-2 text-xs">{s.revoked ? <span className="text-red-400">Revoked</span> : <span className="text-text-tertiary">Expired</span>}</td>
-                    <td className="px-4 py-2 text-text-tertiary text-xs">{new Date(parseInstant(s.expiry_date)).toLocaleString()}</td>
+                    <td className="px-4 py-2 text-text-tertiary text-xs">{formatInstant(s.expiry_date)}</td>
                   </tr>
                 ))}
               </tbody>

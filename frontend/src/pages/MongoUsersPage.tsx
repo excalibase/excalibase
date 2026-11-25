@@ -17,7 +17,7 @@ import {
   type MongoUserCredential,
   type MongoUserRole,
 } from '../api/mongoUsers';
-import { parseInstant } from '../utils/instant';
+import { formatInstant } from '../utils/instant';
 
 function errorText(err: unknown, fallback: string): string {
   const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -272,7 +272,7 @@ export function MongoUsersPage() {
                   <code className="text-xs">{user.username}</code>
                 </td>
                 <td>{ROLE_LABELS[user.role] ?? user.role}</td>
-                <td>{user.createdAt ? new Date(parseInstant(user.createdAt)).toLocaleString() : '—'}</td>
+                <td>{user.createdAt ? formatInstant(user.createdAt) : '—'}</td>
                 <td className="text-right space-x-3">
                   <button
                     type="button"
