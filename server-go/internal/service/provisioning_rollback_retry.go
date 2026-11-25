@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 )
 
@@ -59,7 +60,16 @@ const (
 	leftoverRestore
 	leftoverRestoreDeletion
 	leftoverAddedDatabaseAwaitingDeletion
+	leftoverBackupPurge
 )
+
+// what names the leftover in an alert to staff.
+func (l leftover) what() string {
+	if l == leftoverBackupPurge {
+		return "backup purge"
+	}
+	return "rollback cleanup"
+}
 
 // errRollbackInProgress is a retry that has nothing to do yet: no failure, so no
 // backoff. The next pass looks again.
@@ -70,6 +80,9 @@ var errRollbackInProgress = errors.New("the rollback is waiting")
 // namespace, so the sweep touches a row only while it still reports the very
 // failure whose rollback fell short, in its own namespace, and is not protected.
 func (s *ProvisioningService) leftoverOf(inst *domain.DatabaseInstance) leftover {
+	if inst.Status == string(domain.StatusBackupsPendingDelete) {
+		return s.purgeLeftoverOf()
+	}
 	failed := inst.Status == string(domain.StageFailed)
 	switch inst.DeploymentMode {
 	case domain.ModeDocker:
@@ -80,6 +93,16 @@ func (s *ProvisioningService) leftoverOf(inst *domain.DatabaseInstance) leftover
 		return s.clusterLeftoverOf(inst)
 	}
 	return noLeftover
+}
+
+// purgeLeftoverOf is a teardown's backup purge that failed after its resources
+// were gone. Only the admin purge route retried it until EXC-873, so the sweep
+// takes it only while the SelfHeal flag is on.
+func (s *ProvisioningService) purgeLeftoverOf() leftover {
+	if s.backupPurger == nil || !features.Enabled(context.Background(), s.flags, features.SelfHeal) {
+		return noLeftover
+	}
+	return leftoverBackupPurge
 }
 
 func (s *ProvisioningService) clusterLeftoverOf(inst *domain.DatabaseInstance) leftover {
@@ -195,15 +218,21 @@ func (s *ProvisioningService) RetryFailedRollbacks(ctx context.Context) []string
 		running  sync.WaitGroup
 	)
 	slots := make(chan struct{}, rollbackRetryParallelism)
+	failing := map[string]bool{}
 	for _, inst := range all {
-		if s.leftoverOf(inst) == noLeftover || !s.rollbackRetries.due(inst.ProjectID) {
+		kind := s.leftoverOf(inst)
+		if kind == noLeftover {
+			continue
+		}
+		failing[inst.ProjectID] = true
+		if !s.rollbackRetries.due(inst.ProjectID) {
 			continue
 		}
 		projectID := inst.ProjectID
 		slots <- struct{}{}
 		running.Go(func() {
 			defer func() { <-slots }()
-			if s.retryProjectRollback(ctx, projectID) {
+			if s.retryProjectRollback(ctx, projectID, kind) {
 				mu.Lock()
 				defer mu.Unlock()
 				finished = append(finished, projectID)
@@ -211,11 +240,15 @@ func (s *ProvisioningService) RetryFailedRollbacks(ctx context.Context) []string
 		})
 	}
 	running.Wait()
+	for _, projectID := range finished {
+		delete(failing, projectID)
+	}
+	s.retryEscalator.Reconcile(ctx, RollbackRetryMetricPrefix, failing)
 	return finished
 }
 
 // retryProjectRollback runs one project's attempt and schedules the next.
-func (s *ProvisioningService) retryProjectRollback(ctx context.Context, projectID string) (done bool) {
+func (s *ProvisioningService) retryProjectRollback(ctx context.Context, projectID string, kind leftover) (done bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("ERROR: retry the failed rollback of %s panicked: %v\n%s", projectID, r, debug.Stack())
@@ -233,7 +266,8 @@ func (s *ProvisioningService) retryProjectRollback(ctx context.Context, projectI
 		return false
 	default:
 		log.Printf("ERROR: retry the failed rollback of %s: %v", projectID, err)
-		s.rollbackRetries.failed(projectID)
+		attempts := s.rollbackRetries.failed(projectID)
+		s.retryEscalator.Failed(ctx, RollbackRetryMetricPrefix, projectID, kind.what(), attempts)
 		return false
 	}
 }
@@ -278,6 +312,8 @@ func (s *ProvisioningService) retryUnderLease(ctx context.Context, projectID str
 		return s.retryRestoreNamespace(attemptCtx, inst)
 	case leftoverRestoreDeletion:
 		return true, nil
+	case leftoverBackupPurge:
+		return false, s.retryBackupPurge(attemptCtx, inst)
 	default:
 		return false, nil
 	}
@@ -389,8 +425,9 @@ type rollbackRetrySchedule struct {
 }
 
 type retryBackoff struct {
-	delay time.Duration
-	at    time.Time
+	delay    time.Duration
+	at       time.Time
+	attempts int
 }
 
 func (r *rollbackRetrySchedule) clock() time.Time {
@@ -414,17 +451,21 @@ func (r *rollbackRetrySchedule) due(projectID string) bool {
 	return !waiting || !r.clock().Before(entry.at)
 }
 
-func (r *rollbackRetrySchedule) failed(projectID string) {
+// failed schedules the next attempt and answers how many have failed so far.
+// The count lives in the process, like the wait: a new leader starts at one, so
+// a restart can only delay an alert, never raise a false one.
+func (r *rollbackRetrySchedule) failed(projectID string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.next == nil {
 		r.next = map[string]retryBackoff{}
 	}
-	delay := RollbackRetryInterval
+	delay, attempts := RollbackRetryInterval, 1
 	if entry, waiting := r.next[projectID]; waiting {
-		delay = min(2*entry.delay, rollbackRetryMaxDelay)
+		delay, attempts = min(2*entry.delay, rollbackRetryMaxDelay), entry.attempts+1
 	}
-	r.next[projectID] = retryBackoff{delay: delay, at: r.clock().Add(delay - r.limit() - rollbackRetrySlack)}
+	r.next[projectID] = retryBackoff{delay: delay, at: r.clock().Add(delay - r.limit() - rollbackRetrySlack), attempts: attempts}
+	return attempts
 }
 
 func (r *rollbackRetrySchedule) succeeded(projectID string) {
@@ -454,4 +495,10 @@ func (s *ProvisioningService) StartRollbackRetrySweeper(ctx context.Context, lea
 		}
 	}()
 	return cancel
+}
+
+// SetRetryEscalator has the sweep alert staff once a project's retries keep
+// failing (EXC-873).
+func (s *ProvisioningService) SetRetryEscalator(escalator *RetryEscalator) {
+	s.retryEscalator = escalator
 }

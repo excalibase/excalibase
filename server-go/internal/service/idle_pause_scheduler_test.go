@@ -24,6 +24,20 @@ type fakeIdlePauser struct {
 	err       error
 	// tried counts every attempt, including the ones that failed.
 	tried int
+	// stuckErr answers PauseStuck without running it (busy, or no longer stuck).
+	stuckErr error
+}
+
+// PauseStuck is what the real service does once it holds the lease: count the
+// attempt, then pause.
+func (f *fakeIdlePauser) PauseStuck(ctx context.Context, projectID, reason string, admitted func() error) error {
+	if f.stuckErr != nil {
+		return f.stuckErr
+	}
+	if err := admitted(); err != nil {
+		return err
+	}
+	return f.Pause(ctx, projectID, reason)
 }
 
 func (f *fakeIdlePauser) attempts() int {
@@ -98,6 +112,17 @@ type fakeIdleResumer struct {
 	instances storage.InstanceStore
 	calls     []string
 	err       error
+	stuckErr  error
+}
+
+func (f *fakeIdleResumer) ResumeStuck(ctx context.Context, projectID string, admitted func() error) error {
+	if f.stuckErr != nil {
+		return f.stuckErr
+	}
+	if err := admitted(); err != nil {
+		return err
+	}
+	return f.Resume(ctx, projectID)
 }
 
 func (f *fakeIdleResumer) Resume(_ context.Context, projectID string) error {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -75,6 +76,8 @@ type PauseService struct {
 	endpoints PublicEndpointReconciler
 	// runInBackground starts a StartPause or StartResume run; nil uses a goroutine.
 	runInBackground func(func())
+	// flags are the dark-feature switches; nil reads as all off.
+	flags features.Flags
 	// podSlots reads the cluster's pod slots so a resume that would leave the
 	// database pods Pending is refused (EXC-747); nil on a single host.
 	podSlots PodSlotReader
@@ -194,6 +197,34 @@ var ErrPauseNotObserved = errors.New("pause did not complete: the project's data
 // converges.
 var ErrResumeNotObserved = errors.New("resume did not complete: the project was not confirmed running; retry to continue")
 
+// ErrPauseRetrying and ErrResumeRetrying are the same outcomes, worded for a
+// platform that retries them itself (EXC-873): the customer is told so instead
+// of being asked to retry. They unwrap to the sentinels above.
+var (
+	ErrPauseRetrying  error = &automaticRetry{ErrPauseNotObserved, "pause did not complete: the project's database was not confirmed stopped; we are retrying automatically"}
+	ErrResumeRetrying error = &automaticRetry{ErrResumeNotObserved, "resume did not complete: the project was not confirmed running; we are retrying automatically"}
+)
+
+type automaticRetry struct {
+	base error
+	text string
+}
+
+func (e *automaticRetry) Error() string { return e.text }
+func (e *automaticRetry) Unwrap() error { return e.base }
+
+// SetFeatures gives the service the dark-feature switches; nil reads as all off.
+func (s *PauseService) SetFeatures(flags features.Flags) { s.flags = flags }
+
+// notObserved is the sentence for a pause or resume that did not settle: the
+// retrying one while the platform retries it, else the one asking the caller to.
+func (s *PauseService) notObserved(asked, retrying error) error {
+	if features.Enabled(context.Background(), s.flags, features.SelfHeal) {
+		return retrying
+	}
+	return asked
+}
+
 // hold takes the project's lifecycle lease for the length of one operation.
 // The returned release is safe to defer: it runs on every path out,
 // including a panic, so a crashed step cannot leave a project unusable.
@@ -247,11 +278,49 @@ func (s *PauseService) resumable(ctx context.Context, pauser provisioner.Pauser,
 // is PAUSED recorded. Idempotent for an already-PAUSED project; a project
 // left in PAUSING by a previous attempt is retried from the top.
 func (s *PauseService) Pause(ctx context.Context, projectID, reason string) error {
+	return s.pause(ctx, projectID, reason, nil)
+}
+
+// ErrNoLongerStuck is a stuck retry finding the project settled, or moved on
+// to something else, once it held the lease. The retry did nothing: that is a
+// project healed, not a failure.
+var ErrNoLongerStuck = errors.New("the project is no longer stuck")
+
+// stuckRetry is a retry of a pause or resume the sweep found stuck. It may act
+// only while the row still has the status the sweep saw, checked under the
+// lease; admitted then runs once, just before the work, to count the attempt.
+type stuckRetry struct {
+	expect   domain.ProvisioningStage
+	admitted func() error
+}
+
+// confirm reads the row under the lease. A nil retry is an ordinary caller.
+func (r *stuckRetry) confirm(instances storage.InstanceStore, projectID string) error {
+	if r == nil {
+		return nil
+	}
+	inst, err := instances.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return fmt.Errorf("project not found: %s", projectID)
+	}
+	if inst.Status != string(r.expect) {
+		return fmt.Errorf("%w: %s is %s", ErrNoLongerStuck, projectID, inst.Status)
+	}
+	return r.admitted()
+}
+
+// PauseStuck finishes a pause the sweep found stuck in PAUSING. It never starts
+// a pause of a project that has since been resumed or settled.
+func (s *PauseService) PauseStuck(ctx context.Context, projectID, reason string, admitted func() error) error {
+	return s.pause(ctx, projectID, reason, &stuckRetry{expect: domain.StatusPausing, admitted: admitted})
+}
+
+func (s *PauseService) pause(ctx context.Context, projectID, reason string, retry *stuckRetry) error {
 	// A caller hanging up must not leave the project half paused; the waits bound themselves.
 	ctx = context.WithoutCancel(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	run, err := s.beginPause(ctx, projectID, reason)
+	run, err := s.beginPause(ctx, projectID, reason, retry)
 	if err != nil || run == nil {
 		return err
 	}
@@ -265,7 +334,7 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 // which is also on the project.
 func (s *PauseService) StartPause(ctx context.Context, projectID, reason string, done func(error)) (bool, error) {
 	ctx = context.WithoutCancel(ctx)
-	run, err := s.beginPause(ctx, projectID, reason)
+	run, err := s.beginPause(ctx, projectID, reason, nil)
 	if err != nil || run == nil {
 		return false, err
 	}
@@ -275,9 +344,13 @@ func (s *PauseService) StartPause(ctx context.Context, projectID, reason string,
 
 // beginPause takes the lease, admits the pause and records PAUSING. The
 // returned run finishes it and releases the lease; nil means nothing to do.
-func (s *PauseService) beginPause(ctx context.Context, projectID, reason string) (func() error, error) {
+func (s *PauseService) beginPause(ctx context.Context, projectID, reason string, retry *stuckRetry) (func() error, error) {
 	release, err := s.hold(ctx, projectID, OperationPause)
 	if err != nil {
+		return nil, err
+	}
+	if err := retry.confirm(s.instances, projectID); err != nil {
+		release()
 		return nil, err
 	}
 	run, err := s.admitPause(ctx, projectID, reason)
@@ -519,7 +592,7 @@ func (s *PauseService) failPause(inst *domain.DatabaseInstance, step string, cau
 	if errors.Is(cause, storage.ErrProjectDeleting) {
 		return cause
 	}
-	clientErr := ErrPauseNotObserved
+	clientErr := s.notObserved(ErrPauseNotObserved, ErrPauseRetrying)
 	if step == pauseStepBackup {
 		clientErr = ErrPauseBackupNotCompleted
 		inst.Status = "ACTIVE"
@@ -559,10 +632,20 @@ func clearPauseRetryBackoff(inst *domain.DatabaseInstance) {
 // waited out by the provisioner, then replication is restarted. Idempotent
 // for any project that is not PAUSED.
 func (s *PauseService) Resume(ctx context.Context, projectID string) error {
+	return s.resume(ctx, projectID, nil)
+}
+
+// ResumeStuck finishes a resume the sweep found stuck in RESUMING. It never
+// starts the database of a project that has since been paused or settled.
+func (s *PauseService) ResumeStuck(ctx context.Context, projectID string, admitted func() error) error {
+	return s.resume(ctx, projectID, &stuckRetry{expect: domain.StatusResuming, admitted: admitted})
+}
+
+func (s *PauseService) resume(ctx context.Context, projectID string, retry *stuckRetry) error {
 	ctx = context.WithoutCancel(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	run, err := s.beginResume(ctx, projectID)
+	run, err := s.beginResume(ctx, projectID, retry)
 	if err != nil || run == nil {
 		return err
 	}
@@ -573,7 +656,7 @@ func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 // detached from the request, as StartPause does.
 func (s *PauseService) StartResume(ctx context.Context, projectID string, done func(error)) (bool, error) {
 	ctx = context.WithoutCancel(ctx)
-	run, err := s.beginResume(ctx, projectID)
+	run, err := s.beginResume(ctx, projectID, nil)
 	if err != nil || run == nil {
 		return false, err
 	}
@@ -584,12 +667,16 @@ func (s *PauseService) StartResume(ctx context.Context, projectID string, done f
 // SetOrgGuard makes a resume refuse an organisation whose owner is suspended.
 func (s *PauseService) SetOrgGuard(guard *orgguard.Guard) { s.orgGuard = guard }
 
-func (s *PauseService) beginResume(ctx context.Context, projectID string) (func() error, error) {
+func (s *PauseService) beginResume(ctx context.Context, projectID string, retry *stuckRetry) (func() error, error) {
 	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
 		return nil, err
 	}
 	release, err := s.hold(ctx, projectID, OperationResume)
 	if err != nil {
+		return nil, err
+	}
+	if err := retry.confirm(s.instances, projectID); err != nil {
+		release()
 		return nil, err
 	}
 	run, err := s.admitResume(ctx, projectID)
@@ -672,11 +759,12 @@ func (s *PauseService) failResume(inst *domain.DatabaseInstance, step string, ca
 	}
 	log.Printf("resume %s stopped at %s: %v", inst.ProjectID, step, cause)
 	inst.CurrentStep = step
-	inst.FailureReason = ErrResumeNotObserved.Error()
+	clientErr := s.notObserved(ErrResumeNotObserved, ErrResumeRetrying)
+	inst.FailureReason = clientErr.Error()
 	if err := s.persistFrom(inst, string(domain.StatusResuming)); err != nil {
 		return err
 	}
-	return ErrResumeNotObserved
+	return clientErr
 }
 
 // persist writes the row unconditionally. Used for the first write of an

@@ -17,6 +17,8 @@ var customerSafeFailures = []string{
 	service.ErrPauseBackupNotCompleted.Error(),
 	service.ErrPauseNotObserved.Error(),
 	service.ErrResumeNotObserved.Error(),
+	service.ErrPauseRetrying.Error(),
+	service.ErrResumeRetrying.Error(),
 	service.AddInterruptedReason,
 }
 

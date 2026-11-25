@@ -310,6 +310,7 @@ func runServer(cfg config.AppConfig) {
 		pauseSvc.AddStatusObserver(projectDB)
 		pauseSvc.AddStatusObserver(deps.schemaHandler)
 		pauseSvc.SetOrgGuard(newOrgGuard(store, sqlStore))
+		pauseSvc.SetFeatures(cfg.Features())
 		deps.provHandler.SetPauseService(pauseSvc)
 		deps.provHandler.SetInstanceStore(store)
 		// DELETE stops a project with the same pause before its grace period.
@@ -317,9 +318,12 @@ func runServer(cfg config.AppConfig) {
 	}
 	stopDeletionSweep := startDeletionSweeper(cfg, sqlStore, provSvc, deps.backupHandler.Service())
 	defer stopDeletionSweep()
+	// A retry that keeps failing is handed to the platform admins (EXC-873).
+	retryEscalator := newRetryEscalator(cfg, cfg.Features(), deps.alerts, adminAlertNotifier(cfg, sqlStore, deps.emailSender, deps.alerts))
+	provSvc.SetRetryEscalator(retryEscalator)
 	stopRollbackRetry := startRollbackRetrySweeper(cfg, sqlStore, provSvc)
 	defer stopRollbackRetry()
-	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender)
+	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender, retryEscalator)
 	defer stopIdlePause()
 
 	_, stopStorageReap := startStorageReaper(cfg, sqlStore, deps.storageSvc)
@@ -920,20 +924,22 @@ func startIdlePauseScheduler(
 	provSvc *service.ProvisioningService,
 	pauseSvc *service.PauseService,
 	sender email.Sender,
+	escalator *service.RetryEscalator,
 ) func() {
 	noop := func() {
 		// nothing started, nothing to stop
 	}
-	if !cfg.AutoPauseEnabled {
+	run, judgesIdle := idleSweepModes(cfg, cfg.Features())
+	if !run {
 		log.Println("Idle auto-pause disabled (EXCALIBASE_AUTOPAUSE_ENABLED)")
 		return noop
 	}
-	if pauseSvc == nil || sqlStore == nil {
+	if pauseSvc == nil || (judgesIdle && sqlStore == nil) {
 		log.Println("WARN: idle auto-pause enabled but no pause service is wired — sweep not started")
 		return noop
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
-	if cfg.IsCloud() {
+	if cfg.IsCloud() && sqlStore != nil {
 		lock = standingLock(sqlStore, idlePauseLockID)
 	}
 	scheduler := service.NewIdlePauseScheduler(service.IdlePauseSchedulerConfig{
@@ -949,6 +955,10 @@ func startIdlePauseScheduler(
 		Interval: cfg.AutoPauseInterval,
 		// A pause or resume still running is not retried underneath itself (EXC-590).
 		StuckRetryAfter: cfg.StuckRetryAfter,
+		// Self-heal reaches every plan and runs with auto-pause off (EXC-873).
+		SelfHeal:     selfHealOn(cfg, cfg.Features()),
+		IdleDisabled: !judgesIdle,
+		Escalator:    escalator,
 		Notifier: service.NewIdleWarnEmail(service.IdleWarnEmailConfig{
 			Users:        sqlStore,
 			Sender:       sender,

@@ -332,6 +332,9 @@ services:
       FEATURE_STUDIO_V2: ${FEATURE_STUDIO_V2:-false}
       # MCP invoke_function, off until chosen. Not a safeguard: deployed function code can already read the project's function secrets; this only removes one way of running it (EXC-684).
       FEATURE_FUNCTIONINVOKE: ${FEATURE_FUNCTIONINVOKE:-false}
+      # Failed purges, pauses and resumes retry themselves and alert the admins when they keep failing (EXC-873); off until chosen.
+      FEATURE_SELFHEAL: ${FEATURE_SELFHEAL:-false}
+      EXCALIBASE_SELFHEAL_ALERT_AFTER: ${EXCALIBASE_SELFHEAL_ALERT_AFTER:-5}
       HOST_METRICS_CONTAINERS: *platform_containers
       HOST_METRICS_NET_DEV: /host/proc-net-dev
       # Stored project log search in the bundled Loki (EXC-672; init.sh --host-logs).

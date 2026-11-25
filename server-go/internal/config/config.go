@@ -330,6 +330,10 @@ type AppConfig struct {
 	// row unwritten, before the sweep retries the operation
 	// (EXCALIBASE_STUCK_RETRY_AFTER, default twice the pause timeout, EXC-590).
 	StuckRetryAfter time.Duration
+	// SelfHealAlertAfter is how many failed automatic attempts of one
+	// operation alert the platform admins (EXCALIBASE_SELFHEAL_ALERT_AFTER,
+	// default 5, EXC-873).
+	SelfHealAlertAfter int
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -484,6 +488,7 @@ func (c AppConfig) Validate() error {
 func Load() AppConfig {
 	cfg := load()
 	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
+	cfg.SelfHealAlertAfter = envInt("EXCALIBASE_SELFHEAL_ALERT_AFTER", 5)
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"
