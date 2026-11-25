@@ -134,17 +134,17 @@ const (
 )
 
 // writeSecretsUnavailable answers a vault failure with a 503 that names no
-// vault address; the cause goes to the log.
-func writeSecretsUnavailable(w http.ResponseWriter, action string, err error) {
-	log.Printf("ERROR: %s: %v", action, err)
+// vault address; the cause goes to the log. Nothing the caller sent is logged.
+func writeSecretsUnavailable(w http.ResponseWriter, err error) {
+	log.Printf("ERROR: function secrets unavailable: %v", err)
 	httpError(w, msgSecretsUnavailable, http.StatusServiceUnavailable)
 }
 
 // writeSecretWriteFailure separates a vault failure (503) from a secret the
 // store refused (400, its message is meant for the customer).
-func writeSecretWriteFailure(w http.ResponseWriter, action string, err error) {
+func writeSecretWriteFailure(w http.ResponseWriter, err error) {
 	if errors.Is(err, edgefn.ErrSecretsUnavailable) {
-		writeSecretsUnavailable(w, action, err)
+		writeSecretsUnavailable(w, err)
 		return
 	}
 	httpError(w, safeError(err), http.StatusBadRequest)

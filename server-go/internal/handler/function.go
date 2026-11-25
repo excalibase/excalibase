@@ -702,7 +702,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if envErr != nil {
 		_ = rollbackCronSync(cronTx)
 		rollback()
-		writeSecretsUnavailable(w, "deploy "+fn.RuntimeID(), envErr)
+		writeSecretsUnavailable(w, envErr)
 		return
 	}
 
@@ -1398,7 +1398,7 @@ func (h *FunctionHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	keys, err := h.secrets.ListKeys(projectID)
 	if err != nil {
-		writeSecretsUnavailable(w, "list secrets", err)
+		writeSecretsUnavailable(w, err)
 		return
 	}
 	out := make([]map[string]string, 0, len(keys))
@@ -1425,7 +1425,7 @@ func (h *FunctionHandler) SetSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.secrets.Set(projectID, body.Key, body.Value); err != nil {
-		writeSecretWriteFailure(w, "set secret "+body.Key, err)
+		writeSecretWriteFailure(w, err)
 		return
 	}
 	if err := h.redeployAll(r, projectID); err != nil {
@@ -1440,7 +1440,7 @@ func (h *FunctionHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	key := chi.URLParam(r, "key")
 	if err := h.secrets.Delete(projectID, key); err != nil {
-		writeSecretWriteFailure(w, "delete secret "+key, err)
+		writeSecretWriteFailure(w, err)
 		return
 	}
 	if err := h.redeployAll(r, projectID); err != nil {
