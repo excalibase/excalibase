@@ -15,6 +15,7 @@ const (
 	// appSandboxOptOut runs apps without a sandbox, an operator's explicit choice (ADR 0039).
 	appSandboxOptOut      = "none"
 	defaultAppProbeBinary = "/usr/local/bin/excalibase-app-probe"
+	defaultAppUserns      = "auto"
 )
 
 // SingleHostAppsConfig is how apps run on a single Docker or Podman host (EXC-575).
@@ -26,7 +27,10 @@ type SingleHostAppsConfig struct {
 	// AcceptUnguardedEgress is APP_EGRESS_UNGUARDED=accept: egress where no firewall can guard it (rootless Podman).
 	AcceptUnguardedEgress bool
 	// EgressInvalid keeps an APP_EGRESS value that is neither, for Validate to name.
-	EgressInvalid               string
+	EgressInvalid string
+	// Userns is APP_USERNS (auto, per-app or shared): whether unsandboxed apps on rootless
+	// Podman each get their own user range (EXC-682). Validate refuses any other value.
+	Userns                      string
 	NetworkPrefix, VolumePrefix string
 	EdgeContainer               string
 	EdgeRoutesDir               string
@@ -56,6 +60,7 @@ func loadSingleHostApps() SingleHostAppsConfig {
 		EdgeCAURL:      strings.TrimSpace(os.Getenv("APP_EDGE_CA_URL")),
 		EdgeAliases:    splitTrimmed(os.Getenv("APP_EDGE_ALIASES")),
 		ProbeBinary:    envOr("APP_PROBE_BINARY", defaultAppProbeBinary),
+		Userns:         envOr("APP_USERNS", defaultAppUserns),
 	}
 	if cfg.SandboxRuntime == appSandboxOptOut {
 		cfg.SandboxRuntime = ""
@@ -77,6 +82,11 @@ func (c AppConfig) validateSingleHostApps() error {
 	apps := c.SingleHostApps
 	if apps.EgressInvalid != "" {
 		return fmt.Errorf("APP_EGRESS %q must be none or internet", apps.EgressInvalid)
+	}
+	switch apps.Userns {
+	case "", "auto", "per-app", "shared":
+	default:
+		return fmt.Errorf("APP_USERNS %q must be auto, per-app or shared", apps.Userns)
 	}
 	required := []struct{ env, value string }{
 		{"APP_DOMAIN", c.AppDomain}, {"APP_NETWORK_PREFIX", apps.NetworkPrefix}, {"APP_VOLUME_PREFIX", apps.VolumePrefix},

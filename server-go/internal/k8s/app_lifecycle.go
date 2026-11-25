@@ -26,6 +26,8 @@ var (
 	ErrAppNotDeployed = errors.New("the app has no workload in the cluster")
 	ErrAppNotPaused   = errors.New("the app is not paused")
 	ErrAppPodsRemain  = errors.New("the app's workload is still running")
+	// ErrAppImageUnreadable is a paused workload whose image cannot be read, so it cannot be checked.
+	ErrAppImageUnreadable = errors.New("the paused workload's image cannot be read, so it was not resumed; redeploy the app to bring it back")
 )
 
 // appOwnedSelector matches everything the platform rendered for one app, whatever it was named at the time.
@@ -82,15 +84,9 @@ func (c *Client) ResumeAppWorkload(ctx context.Context, namespace, appID, appNam
 
 // PausedAppReplicas reads the replica count a resume would restore, so it can be admitted first.
 func (c *Client) PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error) {
-	if _, err := c.appDeploymentNames(ctx, namespace, appID); err != nil {
-		return 0, err
-	}
-	dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, AppObjectName(appName), metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return 0, ErrAppNotDeployed
-	}
+	dep, err := c.pausedDeployment(ctx, namespace, appID, appName)
 	if err != nil {
-		return 0, fmt.Errorf("read app deployment: %w", err)
+		return 0, err
 	}
 	replicas, err := pausedReplicas(dep)
 	return int(replicas), err
@@ -116,6 +112,7 @@ func (c *Client) resumeDeployment(ctx context.Context, namespace, name string, r
 	}
 	return c.updateAppDeployment(ctx, namespace, name, func(dep *appsv1.Deployment) error {
 		delete(dep.Annotations, appPausedReplicasAnnotation)
+		clearSuspension(dep)
 		return nil
 	})
 }

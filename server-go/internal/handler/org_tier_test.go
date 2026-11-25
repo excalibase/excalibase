@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -39,10 +42,91 @@ func TestUpdateOrgTier_RefusedForTheOrgsOwnOwner(t *testing.T) {
 	}
 }
 
-func TestUpdateOrgTier_AllowedForThePlatform(t *testing.T) {
-	admin := &domain.User{ID: "admin-1", Role: "platform_admin", Active: true}
-	w := patchOrgAs(t, admin, `{"tier":"ENTERPRISE"}`)
+func consoleTier(t *testing.T, nodes *fakeNodes, user *domain.User, orgID, body string) (*httptest.ResponseRecorder, *captureAudit) {
+	t.Helper()
+	orgs := fakestore.NewOrgs()
+	orgs.AddOrg("org-plan", domain.Free)
+	h := NewOrgHandler(orgs, nil)
+	if nodes != nil {
+		h.SetNodePlacement(nodes)
+	}
+	audit := &captureAudit{}
+	h.SetAudit(audit)
+	r := chi.NewRouter()
+	r.Patch("/orgs/{orgId}/tier", h.SetOrgTier)
+	req := httptest.NewRequest("PATCH", "/orgs/"+orgID+"/tier", strings.NewReader(body))
+	req = req.WithContext(auth.SetUser(req.Context(), user))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w, audit
+}
+
+var consoleAdmin = &domain.User{ID: "admin-1", Role: "platform_admin", Active: true}
+
+// The platform sets a plan on an org it does not belong to through the
+// console: a written reason is required and the change is audited.
+func TestSetOrgTier_ByThePlatformWithAReasonIsAudited(t *testing.T) {
+	w, audit := consoleTier(t, &fakeNodes{nodes: 5}, consoleAdmin, "org-plan", `{"tier":"ENTERPRISE","reason":"agreed upgrade, invoice 42"}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"tier":"ENTERPRISE"`) {
-		t.Fatalf("platform tier change: got %d %s", w.Code, w.Body.String())
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 || audit.entries[0].Action != "admin.set_org_tier" || !strings.Contains(audit.entries[0].Details, "agreed upgrade, invoice 42") {
+		t.Fatalf("audit = %+v", audit.entries)
+	}
+}
+
+func TestSetOrgTier_RefusesWithoutAReasonOrWithAnInvalidTier(t *testing.T) {
+	for _, body := range []string{`{"tier":"ENTERPRISE"}`, `{"tier":"ENTERPRISE","reason":"  "}`, `{"tier":"SUPER_PLAN","reason":"because"}`} {
+		if w, _ := consoleTier(t, &fakeNodes{nodes: 5}, consoleAdmin, "org-plan", body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: got %d, want 400", body, w.Code)
+		}
+	}
+	if w, _ := consoleTier(t, &fakeNodes{nodes: 5}, consoleAdmin, "ghost", `{"tier":"ENTERPRISE","reason":"because"}`); w.Code != http.StatusNotFound {
+		t.Errorf("unknown org: got %d, want 404", w.Code)
+	}
+}
+
+// A foreign platform admin cannot change a plan through the org route.
+func TestUpdateOrgTier_NotForAForeignPlatformAdmin(t *testing.T) {
+	if w := patchOrgAs(t, consoleAdmin, `{"tier":"ENTERPRISE"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404; body %s", w.Code, w.Body.String())
+	}
+}
+
+// A failed audit write is logged, and the change it describes still stands.
+func TestSetOrgTier_ALostAuditWriteIsLoggedNotSwallowed(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+
+	orgs := fakestore.NewOrgs()
+	orgs.AddOrg("org-plan", domain.Free)
+	h := NewOrgHandler(orgs, nil)
+	h.SetNodePlacement(&fakeNodes{nodes: 5})
+	h.SetAudit(failingAudit{})
+	r := chi.NewRouter()
+	r.Patch("/orgs/{orgId}/tier", h.SetOrgTier)
+	req := httptest.NewRequest("PATCH", "/orgs/org-plan/tier", strings.NewReader(`{"tier":"STANDARD","reason":"agreed upgrade"}`))
+	req = req.WithContext(auth.SetUser(req.Context(), consoleAdmin))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+	if !strings.Contains(logged.String(), "audit admin.set_org_tier") || !strings.Contains(logged.String(), "audit store down") {
+		t.Fatalf("the failed audit write was not logged: %q", logged.String())
+	}
+}
+
+func TestSetOrgTier_RefusesAnUnreadableBodyAndSurfacesStoreFailures(t *testing.T) {
+	if w, _ := consoleTier(t, &fakeNodes{nodes: 5}, consoleAdmin, "org-plan", `not json`); w.Code != http.StatusBadRequest {
+		t.Errorf("a malformed body: got %d, want 400", w.Code)
+	}
+	if w, _ := consoleTier(t, &fakeNodes{nodes: 5}, consoleAdmin, "org-plan", `{"tier":"ENTERPRISE","reason":"`+strings.Repeat("x", 501)+`"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("a reason over the limit: got %d, want 400", w.Code)
+	}
+	// No node check wired: the plan change is refused, not guessed at.
+	if w, _ := consoleTier(t, nil, consoleAdmin, "org-plan", `{"tier":"STANDARD","reason":"agreed upgrade"}`); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("without a node check: got %d, want 503", w.Code)
 	}
 }

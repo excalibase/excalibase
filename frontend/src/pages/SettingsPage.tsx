@@ -1,3 +1,5 @@
+import { failureHeadline } from '../utils/stageLabels';
+import { ProvisionFailure } from '../components/shared/ProvisionFailure';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Server, Database, Shield, Clock, Trash2, Check, AlertTriangle, PauseCircle, PlayCircle } from 'lucide-react';
@@ -20,6 +22,7 @@ import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { serverErrorMessage } from '../utils/serverError';
 import { engineLabel, isMySQLProject } from '../utils/engine';
+import { describeBackupSchedule } from '../utils/backupSchedule';
 import { projectOperationMessage } from '../hooks/projectFollow';
 
 interface RollbackResult {
@@ -36,9 +39,6 @@ function projectInfo(project: DatabaseInstance) {
     isMySQLProject(project)
       ? { icon: Database, label: 'MySQL Version', value: project.mysqlVersion || '-' }
       : { icon: Database, label: 'PostgreSQL Version', value: project.postgresVersion || '-' },
-    { icon: Server, label: 'Namespace', value: project.namespace },
-    { icon: Server, label: 'Host', value: project.host || '-' },
-    { icon: Server, label: 'Port', value: project.port || '-' },
     { icon: Database, label: 'Database Name', value: project.databaseName || '-' },
     { icon: Clock, label: 'Created', value: project.createdAt ? new Date(project.createdAt).toLocaleString() : '-' },
     { icon: Clock, label: 'Updated', value: project.updatedAt ? new Date(project.updatedAt).toLocaleString() : '-' },
@@ -164,7 +164,7 @@ export function SettingsPage() {
           </div>
           <div>
             <span className="text-text-tertiary block text-xs">Schedule</span>
-            <span className="text-text-primary font-mono text-xs">{project.backupSchedule || '-'}</span>
+            <span className="text-text-primary text-xs">{project.backupSchedule ? describeBackupSchedule(project.backupSchedule) : '-'}</span>
           </div>
           <div>
             <span className="text-text-tertiary block text-xs">Retention</span>
@@ -287,7 +287,7 @@ interface DangerZoneProps {
 }
 
 // Deletion protection, deletion and its 7-day grace.
-function DangerZone({ project, protectedFromDeletion, onDelete, deleting, deleteError }: DangerZoneProps) {
+export function DangerZone({ project, protectedFromDeletion, onDelete, deleting, deleteError }: DangerZoneProps) {
   const setProtection = useSetDeletionProtection();
   const cancelDeletion = useCancelDeletion();
   return (
@@ -390,37 +390,35 @@ function ProvisionFailedBanner({ project }: { readonly project: DatabaseInstance
         <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-red-400 mb-1">
-            Provisioning failed at stage {project.failureStage ?? project.currentStage}
-            {project.failureStep ? ` (${project.failureStep})` : ''}
+            {failureHeadline(project.failureStage ?? project.currentStage)}
           </div>
-          {project.failureReason && (
-            <div className="text-xs text-text-secondary font-mono break-words">
-              {project.failureReason}
-            </div>
-          )}
-          {rollbackResults.length > 0 && (
-            <details className="mt-3">
-              <summary className="text-xs text-text-tertiary cursor-pointer hover:text-text-secondary">
-                Rollback log ({rollbackResults.length} action{rollbackResults.length === 1 ? '' : 's'})
-              </summary>
-              <ul className="mt-2 space-y-1">
-                {rollbackResults.map((r, i) => (
-                  <li key={`${r.name}-${i}`} className="text-xs font-mono flex items-center gap-2">
-                    {r.ok ? (
-                      <Check className="w-3 h-3 text-green-400 flex-shrink-0" />
-                    ) : (
-                      <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />
-                    )}
-                    <span className={r.ok ? 'text-text-secondary' : 'text-red-400'}>
-                      {r.name}{r.error ? `: ${r.error}` : ''}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
+          <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} detail={rollbackResults.length > 0 ? <RollbackLog results={rollbackResults} /> : undefined} />
         </div>
       </div>
+    </div>
+  );
+}
+
+function RollbackLog({ results }: { readonly results: RollbackResult[] }) {
+  return (
+    <div className="mt-2">
+      <p className="text-xs text-text-tertiary">
+        Rollback log ({results.length} action{results.length === 1 ? '' : 's'})
+      </p>
+      <ul className="mt-2 space-y-1">
+        {results.map((r, i) => (
+          <li key={`${r.name}-${i}`} className="text-xs font-mono flex items-center gap-2">
+            {r.ok ? (
+              <Check className="w-3 h-3 text-green-400 flex-shrink-0" />
+            ) : (
+              <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />
+            )}
+            <span className={r.ok ? 'text-text-secondary' : 'text-red-400'}>
+              {r.name}{r.error ? `: ${r.error}` : ''}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

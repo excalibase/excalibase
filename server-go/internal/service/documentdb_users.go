@@ -134,6 +134,9 @@ func (s *ProvisioningService) ListMongoUsers(_ context.Context, projectID string
 // CreateMongoUser creates the role, files its credential and returns the
 // password, which is never shown again.
 func (s *ProvisioningService) CreateMongoUser(ctx context.Context, projectID, username string, role MongoUserRole) (*MongoUserCredential, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	if err := ValidateMongoUsername(username); err != nil {
 		return nil, err
 	}

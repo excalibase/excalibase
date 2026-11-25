@@ -12,6 +12,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/pkg/kmsseal"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -30,6 +32,8 @@ type VaultHandler struct {
 	// the read, so every project secret is refused rather than served.
 	instances storage.InstanceStore
 	orgs      storage.OrgStore
+	// servingGuard withholds a suspended owner's project credentials (EXC-845); nil allows all.
+	servingGuard *orgguard.Guard
 	// kms, when set, wraps the unseal share at init so the plaintext never
 	// leaves this process (EXC-485).
 	kms      kmsseal.Encrypter
@@ -87,6 +91,10 @@ func NewVaultHandler(v *vault.Vault) *VaultHandler {
 // handing out a project's credentials.
 func (h *VaultHandler) SetInstanceStore(s storage.InstanceStore) { h.instances = s }
 
+// SetServingGuard makes the secret route withhold a suspended owner's project
+// credentials, so the engine and the auth service cannot open its database (EXC-845).
+func (h *VaultHandler) SetServingGuard(guard *orgguard.Guard) { h.servingGuard = guard }
+
 // SetUnsealKMS makes init return the unseal share only as a KMS ciphertext
 // under keyID, and refuses rekey, whose plaintext shares would orphan the
 // stored ciphertext.
@@ -142,13 +150,14 @@ func projectIDForSecretPrefix(prefix string) string {
 // are not the database's.
 func isDatabaseLogin(path, projectID string) bool {
 	switch strings.TrimPrefix(path, "projects/"+projectID+"/credentials/") {
-	case "admin", "auth_admin", "excalibase_app", "cdc_watcher", "excalibase_scheduler":
+	case "admin", "auth_admin", "excalibase_app", "cdc_watcher", "excalibase_scheduler",
+		pgroles.RuntimeRole, pgroles.ReaderRole:
 		return true
 	}
 	return false
 }
 
-func (h *VaultHandler) refuseSecretOfUnservableProject(w http.ResponseWriter, path string) bool {
+func (h *VaultHandler) refuseSecretOfUnservableProject(ctx context.Context, w http.ResponseWriter, path string) bool {
 	if h.instances == nil {
 		return false
 	}
@@ -163,6 +172,15 @@ func (h *VaultHandler) refuseSecretOfUnservableProject(w http.ResponseWriter, pa
 	}
 	if inst == nil || domain.IsNotServable(inst.Status) {
 		httpError(w, errSecretNotFound, http.StatusNotFound)
+		return true
+	}
+	if err := h.servingGuard.CheckServing(ctx, projectID); err != nil {
+		if errors.Is(err, orgguard.ErrOrgSuspended) {
+			httpError(w, errSecretNotFound, http.StatusNotFound)
+		} else {
+			log.Printf("ERROR: suspension check for secret of %s: %v", projectID, err)
+			httpError(w, "project standing unavailable", http.StatusServiceUnavailable)
+		}
 		return true
 	}
 	// A project created without a database has no database credentials
@@ -490,7 +508,7 @@ func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeSecretRead(w, r, path) {
 		return
 	}
-	if h.refuseSecretOfUnservableProject(w, path) {
+	if h.refuseSecretOfUnservableProject(r.Context(), w, path) {
 		return
 	}
 	data, err := h.v.Get(path)

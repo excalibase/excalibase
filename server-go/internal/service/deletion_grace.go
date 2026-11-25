@@ -414,6 +414,9 @@ func (s *ProvisioningService) updatePendingChoice(ctx context.Context, inst *dom
 // starts again; its apps stay paused, each resumed (or redeployed) on its own.
 // A deleted project gave its plan slot up, so restoring it needs a free one.
 func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID string) error {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
 	if inst, err := s.store.FindByProjectID(projectID); err != nil || inst == nil {
 		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
 	}
@@ -435,6 +438,16 @@ func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID stri
 			return fmt.Errorf("restart the project's function runtime: %w", err)
 		}
 	}
+	s.clearScheduledDeletion(inst)
+	limit, err := s.orgProjectLimitFor(ctx, inst.OrgID)
+	if err != nil {
+		return err
+	}
+	return s.writeCancelledDeletion(ctx, inst, limit)
+}
+
+// clearScheduledDeletion puts the project back to what it was before the schedule.
+func (s *ProvisioningService) clearScheduledDeletion(inst *domain.DatabaseInstance) {
 	inst.Status = cancelledStatus(inst)
 	inst.CurrentStage = domain.ProvisioningStage(inst.Status)
 	if inst.NoDatabase {
@@ -445,22 +458,23 @@ func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID stri
 	inst.DeletionDeleteBackups = false
 	inst.DeletionProtection = boolPtr(true)
 	inst.UpdatedAt = &domain.FlexTime{Time: s.deletionClock()}
-	limit, err := s.orgProjectLimitFor(ctx, inst.OrgID)
-	if err != nil {
-		return err
-	}
+}
+
+// writeCancelledDeletion serves the sites again, then records the cancel, so a
+// failed cancel can be retried.
+func (s *ProvisioningService) writeCancelledDeletion(ctx context.Context, inst *domain.DatabaseInstance, limit int) error {
 	// Before the write, like the runtime, so a failed cancel can be retried.
-	if err := s.routeSites(ctx, projectID); err != nil {
+	if err := s.routeSites(ctx, inst.ProjectID); err != nil {
 		return err
 	}
 	if err := s.store.UpdateIfStatusWithinOrgLimit(inst, string(domain.StatusPendingDeletion), limit); err != nil {
-		s.unrouteSitesAfterFailedCancel(ctx, projectID)
+		s.unrouteSitesAfterFailedCancel(ctx, inst.ProjectID)
 		if errors.Is(err, storage.ErrOrgProjectLimitReached) {
 			return &RestoreProjectLimitError{Limit: limit}
 		}
 		return err
 	}
-	log.Printf("action=cancel_deletion project=%s", projectID)
+	log.Printf("action=cancel_deletion project=%s", inst.ProjectID)
 	return nil
 }
 

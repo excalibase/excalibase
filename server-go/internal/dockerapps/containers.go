@@ -95,7 +95,7 @@ func (r *Runtime) appLabels(spec containerSpec, replica int) map[string]string {
 	if spec.DiskClaim != "" {
 		labels[labelDisk], labels[labelDiskMount] = spec.DiskClaim, spec.DiskMountPath
 	}
-	return labels
+	return withUsernsLabel(labels, spec.Userns)
 }
 
 // unsandboxedCapabilities: gosu, su-exec and setpriv need these to drop from root
@@ -124,6 +124,9 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 		host.CapDrop = []string{"NET_RAW"}
 	} else {
 		host.CapDrop, host.CapAdd = []string{"ALL"}, slices.Clone(unsandboxedCapabilities)
+	}
+	if spec.Userns != nil {
+		host.UsernsMode = spec.Userns.mode()
 	}
 	if spec.DiskClaim != "" {
 		host.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: r.volumeName(spec.DiskClaim), Target: spec.DiskMountPath}}

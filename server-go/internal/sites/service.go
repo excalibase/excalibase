@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/google/uuid"
 )
 
@@ -74,6 +75,9 @@ type Options struct {
 	// PreviewsDark refuses new previews (the flag is off) while the held ones are still removed
 	// with their site, unrouted with their project and swept, so none is left on Cloudflare.
 	PreviewsDark bool
+	// OrgGuard refuses deploys and rollbacks of an organisation whose owner is
+	// abuse-suspended (EXC-843); nil allows all.
+	OrgGuard *orgguard.Guard
 	// MaxPreviews caps live previews across the install, each one Worker script; 0 is DefaultMaxPreviews.
 	MaxPreviews int
 }

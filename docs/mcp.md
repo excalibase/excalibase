@@ -42,6 +42,35 @@ providers (it can read sign-in settings and providers, never their secrets), bac
 `create_publishable_key` makes only publishable SDK keys, which ship inside client
 apps and grant what the anon role grants.
 
+## Destructive tools ask twice
+
+Six tools destroy something that cannot be brought back: `delete_app`, `delete_function`,
+`delete_site`, `delete_function_secret`, `revoke_publishable_key` and `revoke_s3_key`. Each
+takes an optional `confirmation_token`.
+
+1. A call without it deletes nothing. It reads the target (so a target that is not there is refused here) and answers `confirmationRequired: true`, `wouldDelete` (what
+   would be destroyed), `confirmationToken` and `expiresInSeconds` (300).
+2. The same call with that token destroys it.
+
+A token is random and kept in the platform's memory as a hash. It is bound to the caller (the user and
+the personal access token of the connection), the tool and the exact target (project and object id),
+works once, and expires after five minutes. A token presented for another target, tool or project, or a
+second time, or after it expired, is refused and is spent; one presented by another caller is refused and
+left alone for its owner. Each user may hold 30 waiting tokens (10,000 in all); expired ones are dropped on every new request. A restart of the platform drops every token: ask again. The audit entry of the
+first call says `confirmation: requested`, the second `confirmed`; Studio's AI activity shows the first
+as "Waiting for confirmation".
+
+`FEATURE_MCPCONFIRM` is **on unless set to `false`**. Off, the six
+tools delete on the first call as before. The call still has to pass the route's own authorization
+(Developer, and the token's write scope) on the call that deletes.
+
+Not covered: `execute_sql` and `apply_migration` (a statement can drop a table; telling a destructive
+statement from a safe one is not reliable), `test_api_request` with `DELETE` (it deletes rows of the project's
+data API as the caller's end user), and tools that remove something a push, a deploy or a single call puts
+back (`remove_cors_origin`, `remove_app_domain`, `remove_site_domain`, `remove_site_preview`,
+`disconnect_app_repo`, `disconnect_site_repo`, `set_permission` with `remove`, `set_realtime`). Keep a client on
+`read_only=true` to stop the first group.
+
 ## Tools
 
 | Tool | Route |
@@ -59,12 +88,12 @@ apps and grant what the anon role grants.
 | `list_functions` / `deploy_function` / `set_function_secret` | `GET`/`POST /api/projects/{id}/functions/`, `POST .../functions/secrets` |
 | `list_apps` / `deploy_app` / `get_deploy_status` | `GET /api/projects/{id}/apps/` (+ `.../apps/{app}/deploys?limit=1` to report `NOT_DEPLOYED`); `POST .../apps/{app}/deploy` (a private-registry image needs its credential saved in Studio: a refusal names the registry and where to add it; where the pipeline flag is off, the image is stored with `PATCH` and the app deployed bodyless) with `{image, commitSha}` or empty to run the app's own image, pinned to its digest either way when the registry is public (the result's `unpinned` says when it is not); `GET .../apps/{app}/` + `.../deploys` or `.../deploys/{deployId}`; `state` is "rolling out" during a rollout and "succeeded" only once the app URL answers an HTTP probe (3 s), else "running, URL not answering yet" with the reason |
 | `create_app` | `POST /api/projects/{id}/apps/` (Studio's plan limits apply), then `GET`/`PUT /api/projects/{id}/cors/` to allow the app's own origin; deleting the app removes that origin again |
-| `update_app` / `delete_app` | `GET` then `PATCH /api/projects/{id}/apps/{app}/` at the version read (`If-Match`; env is merged by name, secrets kept as stored); `PUT /api/projects/{id}/app-network/` for the private-network switch (admin); `DELETE .../apps/{app}/` removes only that app and its CORS origin; an app with a disk is refused |
+| `update_app` / `delete_app` | `GET` then `PATCH /api/projects/{id}/apps/{app}/` at the version read (`If-Match`; env is merged by name, secrets kept as stored); `PUT /api/projects/{id}/app-network/` for the private-network switch (admin); `DELETE .../apps/{app}/` removes only that app and its CORS origin; an app with a disk is refused; asks twice (see above) |
 | `test_auth_flow` | `GET /api/projects/{id}/info/`, then one register or password sign-in against the project's own auth API with a test account the caller gives; reports status, outcome and the userId and role claims, never the password or a token; with `origin` the CORS preflight is checked first |
 | `get_logs` | database: `GET /api/provision/{id}/logs` (optional `query`, and `since` 1h/6h/24h/7d); app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs`. A log backend that does not answer gives "not available", never its address |
 | `get_slow_queries` | `GET /api/provision/{id}/slow-queries/?sort=total\|mean&limit=N`: the project's own normalized statements; the tool is offered only while `FEATURE_SLOWQUERIES` is on. Reset and turning statistics on stay in Studio |
 | `get_request_metrics` | `GET /api/provision/{id}/requests?range=`: request, error and latency charts; offered only while `FEATURE_REQUESTMETRICS` is on |
-| `get_metrics` | `GET .../metrics/current` and, with `history`, `.../metrics/history?limit=N` |
+| `get_metrics` | `GET .../metrics/current` and, with `history`, `.../metrics/history?limit=N`; while `FEATURE_HOSTMETRICS` is on also `GET /api/projects/{id}/containers/metrics` (the project's own containers on a single host: state, health, CPU, memory, network; samples over `container_range`). A platform that does not report them leaves a `containersNote` and the database answer whole. A project with no database (409 or 404 from the database route) still gets its containers, with a `databaseNote` |
 | `list_alerts` | `GET /api/alerts/project/{id}/` |
 | `get_database_info` | `GET /api/provision/{id}/cluster`: disk, size, plan, settings (Postgres on Kubernetes only; MySQL and single host are refused) |
 | `get_db_endpoint` | `GET /api/projects/{id}/db-endpoint/`: host, port, CA and connection strings without the password; opening the port stays in Studio |
@@ -78,6 +107,15 @@ apps and grant what the anon role grants.
 | `list_site_domains` / `add_site_domain` / `check_site_domain` / `remove_site_domain` | `GET`/`POST .../sites/{site}/domains`, `POST .../sites/{site}/domains/{domain}/refresh`, `DELETE .../sites/{site}/domains/{domain}`. Adding only claims the name and answers the DNS records to add: a CNAME to the zone's target and a TXT record at `_excalibase-challenge.<host>` proving control (plus Cloudflare's TXT records with `txt` validation). The first check that sees the TXT record creates the domain on the user-content zone through Cloudflare for SaaS; it serves once Cloudflare reports it and its certificate active. Serving domains are checked again hourly and taken off when the TXT record, the CNAME or the certificate is gone. Adds and removes are limited to 6 an hour per project, and the zone holds at most `SITES_MAX_ZONE_HOSTNAMES` (default 90). The zone itself (fallback origin, routes) is never reachable through MCP |
 | `connect_site_repo` / `list_site_builds` | `PUT .../sites/{site}/git` (left without `build_env`, the current build variables are read with `GET .../sites/{site}/git` and kept); refused for want of a GitHub sign-in, it tells the user to sign in from the site in Studio (the sign-in is bound to the browser that starts it, so MCP never starts one). `GET .../sites/{site}/builds`, or `.../builds/{build}` with the log (Developer and above). Git builds (EXC-354) are behind `SITES_GIT_BUILDS_ENABLED`; off, both answer not available and point to `deploy_site` or CI; single-host answers why |
 | `disconnect_site_repo` / `rebuild_site` / `list_site_build_secrets` | `DELETE .../sites/{site}/git` (stops git builds, cancels queued builds, removes previews); `POST .../sites/{site}/builds` queues a build of the branch head (counts toward deploys per hour; the answer shows state and commit, not settings or log); `GET .../sites/build-secrets` lists secret names and whether builds read them, never values. Developer and above; same flag and single-host answers as the git tools above |
+| `set_app_secret` | `PUT .../apps/{app}/secrets/{name}` with `{"value"}`: stored in the project's vault, the variable points at it, the app reads it after its next deploy. No tool returns a value and the answer never echoes it, but an image that prints its environment can write it to the app's logs. The value passes through the conversation, so the description asks for Studio first. It reads the app first: a secret of that name is replaced (`replaced: true`), a literal or database-reference variable of that name is refused until `update_app` removes it. That guard stops accidents, not a misled agent: `update_app set_env` replaces a variable in one call. A reconnect of the same repository with `connect_app_repo` keeps the root directory, Dockerfile path and build arguments the call leaves out (`""` keeps, `"."` clears, `{}` clears the arguments); a different repository starts clean |
+| `redeploy_app` | `POST .../apps/{app}/deploys/{deploy}/redeploy`: rolls an earlier deploy's frozen config out as a new deploy; the answer shows state and image, not the spec |
+| `list_app_domains` / `add_app_domain` / `verify_app_domain` / `remove_app_domain` | `.../apps/{app}/domains/`: the CNAME target to add, then a check that routes the domain once it points at the app. Mounted only where `APP_DOMAIN_ISSUER` is set; otherwise the tools say so |
+| `connect_app_repo` / `disconnect_app_repo` / `rebuild_app` / `list_app_builds` | `.../apps/{app}/git` and `.../builds`, `disconnect_app_repo` always (the route stays open with the flag off so a connection can be removed); the rest only while `FEATURE_APPGITBUILDS` is on. Build arguments are named, never echoed (their values can appear in build logs); the GitHub sign-in starts in Studio, never through MCP. Developer and above to change, build log Developer and above |
+| `revoke_publishable_key` | `GET .../sdk-keys/` to find the key, then `DELETE .../sdk-keys/{id}`; refuses any key that is not a listed publishable one, so a secret key is only ever revoked in Studio; asks twice (see above) |
+| `list_templates` | `GET .../app-templates/`: id, summary, apps, and the fit against the project's plan with refusals. Deploying one is not a tool, because its answer carries generated credentials readable once |
+| `invoke_function` | Only while `FEATURE_FUNCTIONINVOKE` is on (off by default). `POST .../functions/{fn}/invoke`: one real run with an optional JSON body and no Authorization or Cookie header; returns the function's own status and text answer (shortened at 64 KiB on a character boundary). The flag is not a safeguard: code deployed with `deploy_function` can already read the project's function secrets and `EXCALIBASE_DB_URL` from its environment and return them through its error text or `get_logs`, so anyone who may deploy a function can read them; the flag only removes one convenient way of running that code. Paced like the probes (10 at once, then one every 2 seconds). A platform refusal is an error |
+| `list_function_secrets` / `delete_function_secret` | `GET .../functions/secrets` (names only) and `DELETE .../functions/secrets/{key}`; the platform redeploys the functions but logs a failed redeploy without reporting it, so the answer also reads `.../functions/runtime/status` and warns when the runtime is not healthy. Setting one is `set_function_secret`. No secret-listing tool returns a value; deployed function code can read them (see `invoke_function`) |
+| `list_storage_buckets` / `list_storage_objects` / `create_storage_bucket` / `set_bucket_access` | `GET/POST .../storage/buckets`, `GET .../storage/buckets/{bucket}/objects` (key, size, type; names are data), and `PUT .../buckets/{bucket}/access` while `FEATURE_APPSTORAGE` is on. Buckets are created private. `set_bucket_access` refuses the `anon` and `guest` roles in any case or with spaces (a publishable key or a visitor would reach private files) and notes that a rule for `authenticated`, a scope and not a role, grants nobody and an empty rule set (it would remove all access); `own` is the folder `<userId>/`. Making a bucket public, uploads, downloads, deleting files and dropping a bucket stay in Studio |
 | `get_ci_snippet` | `kind: app` (default): `GET .../apps/{app}/` for the app's image; renders the same GitHub Actions, GitLab CI, Jenkins or curl pipeline as Studio's pipeline page. `kind: site`: `GET .../sites/{site}/` when a site is named; the pipeline runs `npm ci` and `npm run build` in `context`, packs `output` (default `dist`) with `tar czf` and uploads it with one curl using the `EXCALIBASE_DEPLOY_TOKEN` CI secret: the site's deploy token, made by a Developer in Studio under the site's Deploy tokens and able to deploy only that site (EXC-620). MCP's own `deploy_site` keeps using the caller's personal access token |
 
 Site writes need Developer or above, as on the HTTP routes. Where Sites is off (no Cloudflare

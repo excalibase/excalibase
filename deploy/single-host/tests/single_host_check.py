@@ -252,6 +252,22 @@ if waits.get("condition") != "service_completed_successfully":
 if penv.get("FEATURE_SITEPREVIEWS") != "false":
     failures.append(f"FEATURE_SITEPREVIEWS={penv.get('FEATURE_SITEPREVIEWS')!r} by default, want false")
 
+# EXC-759: database passwords are shown once and never read back, on by default.
+if penv.get("FEATURE_ONETIMECREDENTIALS") != "true":
+    failures.append(f"FEATURE_ONETIMECREDENTIALS={penv.get('FEATURE_ONETIMECREDENTIALS')!r} by default, want true")
+
+# EXC-684: MCP invoke_function is off by default.
+if penv.get("FEATURE_FUNCTIONINVOKE") != "false":
+    failures.append(f"FEATURE_FUNCTIONINVOKE={penv.get('FEATURE_FUNCTIONINVOKE')!r} by default, want false")
+
+# MCP's destructive tools ask twice, on by default.
+if penv.get("FEATURE_MCPCONFIRM") != "true":
+    failures.append(f"FEATURE_MCPCONFIRM={penv.get('FEATURE_MCPCONFIRM')!r} by default, want true")
+
+# EXC-762: the cloud-console layout of Studio is off by default.
+if penv.get("FEATURE_STUDIO_V2") != "false":
+    failures.append(f"FEATURE_STUDIO_V2={penv.get('FEATURE_STUDIO_V2')!r} by default, want false")
+
 # EXC-670: host monitoring is off by default and mounts no host file then; the
 # proxy and provisioning read the same platform containers, by exact name.
 if penv.get("FEATURE_HOSTMETRICS") != "false":

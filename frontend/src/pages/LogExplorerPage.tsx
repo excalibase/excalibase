@@ -1,62 +1,12 @@
-import { useState, useMemo, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { Loader2, Search, FileText } from 'lucide-react';
-import { useLogSearch } from '../hooks/useProvisioning';
+import { lineColor, keptFor, useLogExplorer } from '../hooks/useLogExplorer';
 import { serverErrorMessage } from '../utils/serverError';
 import { LogDrainsCard } from '../components/LogDrainsCard';
 
-const TIME_RANGES = [
-  { label: '1h', hours: 1, lines: 50 },
-  { label: '6h', hours: 6, lines: 200 },
-  { label: '24h', hours: 24, lines: 500 },
-  { label: '7d', hours: 168, lines: 1000 },
-];
-
-function keptFor(hours: number): string {
-  if (hours % 24 === 0) return hours === 24 ? '1 day' : `${hours / 24} days`;
-  return `${hours} hours`;
-}
-
-// The server searches stored logs for terms up to this long; longer ones only
-// filter the lines already loaded.
-const MAX_SERVER_SEARCH = 200;
-const SEARCH_DEBOUNCE_MS = 400;
-
-function getLineColor(line: string): string {
-  if (line.includes('ERROR')) return 'text-red-400';
-  if (line.includes('WARNING') || line.includes('WARN')) return 'text-yellow-400';
-  return 'text-text-secondary';
-}
-
 export function LogExplorerPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const [search, setSearch] = useState('');
-  const [rangeLabel, setRangeLabel] = useState(TIME_RANGES[0].label);
-  const [retentionHours, setRetentionHours] = useState<number | undefined>();
-  // The plan's retention (EXC-659) hides every range that reaches past it.
-  const ranges = TIME_RANGES.filter((r, i) => i === 0 || !retentionHours || r.hours <= retentionHours);
-  const range = ranges.find((r) => r.label === rangeLabel) ?? ranges[ranges.length - 1];
-  const { label: since, lines } = range;
-  const [serverSearch, setServerSearch] = useState('');
-
-  // Typing filters the loaded lines at once; the term reaches the server, which
-  // searches stored logs when it keeps them, once typing pauses.
-  useEffect(() => {
-    const term = search.trim();
-    const timer = setTimeout(() => setServerSearch(term.length <= MAX_SERVER_SEARCH ? term : ''), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [search]);
-
-  const { data, isLoading, error } = useLogSearch(projectId || '', lines, { since, search: serverSearch });
-  const rawLogs = data?.logs ?? '';
-  useEffect(() => setRetentionHours(data?.retentionHours), [data?.retentionHours]);
-
-  const logLines = useMemo(() => {
-    const allLines = rawLogs.split('\n').filter(Boolean);
-    if (!search.trim()) return allLines;
-    const term = search.toLowerCase();
-    return allLines.filter((l) => l.toLowerCase().includes(term));
-  }, [rawLogs, search]);
+  const { search, setSearch, ranges, range, setRangeLabel, retentionHours, logLines, isLoading, error } = useLogExplorer(projectId || '');
 
   return (
     <div data-testid="log-explorer-page">
@@ -120,7 +70,7 @@ export function LogExplorerPage() {
         {!isLoading && logLines.length > 0 && (
           <div className="max-h-[600px] overflow-y-auto font-mono text-xs p-4 space-y-0.5">
             {logLines.map((line, i) => (
-              <div key={`log-${i}-${line.slice(0, 30)}`} className={`py-0.5 ${getLineColor(line)}`}>
+              <div key={`log-${i}-${line.slice(0, 30)}`} className={`py-0.5 ${lineColor(line)}`}>
                 {line}
               </div>
             ))}

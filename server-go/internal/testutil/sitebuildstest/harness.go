@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,20 +18,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/testcontainers/testcontainers-go"
-	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
-
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider/githubapp"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/internal/testutil/githubfake"
 	"github.com/excalibase/provisioning-poc/internal/testutil/sitestest"
+	"github.com/google/uuid"
+	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 const (
@@ -63,8 +64,7 @@ func startPlatformDB() (*postgres.Store, error) {
 		return nil, err
 	}
 	container, err := pgmod.Run(ctx, "postgres:16-alpine", pgmod.WithDatabase("platform_test"), pgmod.WithUsername("platform"),
-		pgmod.WithPassword(password), testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(60*time.Second)))
+		pgmod.WithPassword(password), pgready.Wait())
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,14 @@ func startPlatformDB() (*postgres.Store, error) {
 	}
 	dsn := url.URL{Scheme: "postgres", User: url.UserPassword("platform", password),
 		Host: fmt.Sprintf("%s:%s", host, port.Port()), Path: "platform_test", RawQuery: "sslmode=disable"}
-	return postgres.New(dsn.String())
+	store, err := postgres.New(dsn.String())
+	if err != nil {
+		return nil, err
+	}
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 var nextIDs atomic.Int64
@@ -176,6 +183,8 @@ type Options struct {
 	// AppsOn switches on the appgitbuilds flag; AppLimits sizes app builds.
 	AppsOn    bool
 	AppLimits sitebuilds.AppLimits
+	// OwnerSuspended, when set, puts the harness project's org under an owner whose suspension it answers (EXC-843).
+	OwnerSuspended *atomic.Bool
 }
 
 func New(t *testing.T, options Options) *Harness {
@@ -221,6 +230,9 @@ func New(t *testing.T, options Options) *Harness {
 	}
 	if options.Previews {
 		serviceOptions.Previews = siteService
+	}
+	if options.OwnerSuspended != nil {
+		serviceOptions.OrgGuard = suspendedOwnerGuard(project, options.OwnerSuspended)
 	}
 	if options.AppLimits.CPUMillis == 0 {
 		options.AppLimits = FreeAppLimits
@@ -485,4 +497,13 @@ func MustNotFind(t *testing.T, haystack, needle string) {
 	if strings.Contains(haystack, needle) {
 		t.Errorf("%q found in %q", needle, haystack)
 	}
+}
+
+// suspendedOwnerGuard refuses the project while flag is set.
+func suspendedOwnerGuard(project string, flag *atomic.Bool) *orgguard.Guard {
+	instances := fakestore.NewInstances()
+	instances.Items[project] = &domain.DatabaseInstance{ProjectID: project, OrgID: "org-suspended-owner"}
+	return orgguard.New(instances, func(context.Context) (map[string]bool, error) {
+		return map[string]bool{"org-suspended-owner": flag.Load()}, nil
+	})
 }

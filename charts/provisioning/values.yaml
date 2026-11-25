@@ -1,3 +1,6 @@
+# MCP confirmation tokens (server-go/internal/mcpserver/confirm.go) are held in this
+# process: more than one replica needs a shared store first, or a token issued by
+# one replica is unknown to the next.
 replicaCount: 1
 
 image:
@@ -63,6 +66,38 @@ trustedProxyCIDRs: ""
 setupToken:
   existingSecret: ""
   existingSecretKey: "token"
+
+# The operator console (EXC-757), off by default. Set host to serve it at its
+# own hostname: /api/admin answers there and nowhere else. The admin host
+# should sit behind Cloudflare Access (proxied DNS); the origin then demands the
+# Access assertion on every request to it, because anyone can send a forged
+# Host header straight to the origin.
+#
+# Prod needs a TLS certificate for the admin host at the origin, with
+# Cloudflare's SSL mode on Full (strict). The defaults below match the prod
+# edge: HAProxy, and the certificate secret (managed by a standalone Certificate)
+# already issued for admin.excalibase.io.
+adminConsole:
+  host: ""
+  ingress:
+    enabled: true
+    className: haproxy
+    # The Studio frontend Service the admin host serves at /.
+    studioService:
+      name: studio
+      port: 80
+    tls:
+      enabled: true
+      secretName: admin-excalibase-io-tls
+    # No issuer annotation on purpose: a standalone Certificate already manages
+    # the secret, and cert-manager must not create a second one for it.
+    annotations: {}
+
+# Cloudflare Access in front of the admin host. Both are required together and
+# need adminConsole.host: <team>.cloudflareaccess.com, and the application's AUD tag.
+adminAccess:
+  teamDomain: ""
+  audience: ""
 
 env:
   PORT: "24005"

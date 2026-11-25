@@ -13,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/apptemplate"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 )
 
@@ -112,6 +113,8 @@ type AppTemplateDeps struct {
 	Network  TemplateNetwork
 	Secrets  TemplateSecretStore
 	Claimer  ProjectOperationClaimer
+	// Guard refuses an organisation whose owner is abuse-suspended (EXC-843); nil allows all.
+	Guard *orgguard.Guard
 	// Flags show the catalog (EXC-669) beside the starters; nil keeps it hidden.
 	Flags features.Flags
 }
@@ -181,6 +184,9 @@ func (s *AppTemplateService) visible(ctx context.Context, tpl *apptemplate.Templ
 }
 
 func (s *AppTemplateService) Deploy(ctx context.Context, projectID, templateID, actor string, opts TemplateDeployOptions) (*TemplateDeployResult, error) {
+	if err := s.deps.Guard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	tpl, err := s.template(ctx, templateID)
 	if err != nil {
 		return nil, err

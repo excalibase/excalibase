@@ -87,6 +87,8 @@ export interface App {
   status: string;
   // Why the last pause, resume or deletion did not complete (EXC-523).
   lifecycleFailure?: LifecycleFailure;
+  // Why the platform stopped the app, while it stays stopped for that reason (EXC-839).
+  suspension?: AppSuspension;
   // The image watcher deploys the tag's new digest when it moves (EXC-542).
   autoDeploy?: boolean;
   imageWatch?: ImageWatch;
@@ -109,6 +111,15 @@ export interface AppRestarts {
 }
 
 export type LifecycleOperation = 'pause' | 'resume' | 'deletion';
+
+export interface AppSuspension {
+  kind: string;
+  // Reads as the end of "Stopped:", e.g. "kept crashing (11 restarts in the last hour)".
+  reason: string;
+  restarts: number;
+  windowMinutes: number;
+  at: string;
+}
 
 export interface LifecycleFailure {
   operation: string;

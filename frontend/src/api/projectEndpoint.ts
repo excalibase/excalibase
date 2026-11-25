@@ -8,9 +8,10 @@ import { api } from './client';
 // port, whether the port is answering right now, the TLS posture and the
 // cluster CA. Studio prints what it is told and decides none of it.
 //
-// The in-cluster endpoint is always present, whether or not the project
-// publishes a public port: an application hosted beside the database should
-// connect there and needs no public port at all.
+// The in-cluster address is never sent to an ordinary user (EXC-759): an app
+// hosted beside the database gets DATABASE_URL injected, so there is nothing
+// for Studio to show. Only a platform admin's response carries it, and no page
+// reads it.
 
 export interface ProjectEndpointConnectionStrings {
   // Passwordless libpq URIs the control plane renders for each TLS choice.
@@ -28,12 +29,10 @@ export interface ProjectEndpointInternal {
 }
 
 // The Mongo half of a DocumentDB project. `available` is whether the gateway
-// behind the public port is serving; the server reports no readiness for the
-// internal address, which exists for every DocumentDB project.
+// behind the public port is serving.
 export interface ProjectMongoEndpoint {
   available: boolean;
   port?: number;
-  internal?: { host: string; port: number };
 }
 
 export interface ProjectEndpoint {
@@ -55,7 +54,7 @@ export interface ProjectEndpoint {
   // The cluster CA, so full verification works, internal or public. Empty
   // while the database is not running.
   caCertificate: string;
-  internal: ProjectEndpointInternal;
+  internal?: ProjectEndpointInternal;
   mongo?: ProjectMongoEndpoint;
   // A project on one Docker or Podman host: its ports are on the host's
   // 127.0.0.1, reached from elsewhere over an SSH tunnel (EXC-576).
@@ -69,20 +68,11 @@ export interface ProjectEndpoint {
 interface ProjectEndpointWire extends Omit<ProjectEndpoint, 'mongo'> {
   mongoPort?: number;
   mongoAvailable?: boolean;
-  // mongoHost is the gateway's own Service: the Postgres host does not serve its port.
-  internal: ProjectEndpointInternal & { mongoHost?: string; mongoPort?: number };
 }
 
 function mongoOf(wire: ProjectEndpointWire): ProjectMongoEndpoint | undefined {
-  const internalPort = wire.internal.mongoPort;
-  if (!wire.mongoPort && !internalPort) return undefined;
-  return {
-    available: wire.mongoAvailable === true,
-    ...(wire.mongoPort ? { port: wire.mongoPort } : {}),
-    ...(internalPort && wire.internal.mongoHost
-      ? { internal: { host: wire.internal.mongoHost, port: internalPort } }
-      : {}),
-  };
+  if (!wire.mongoPort) return undefined;
+  return { available: wire.mongoAvailable === true, port: wire.mongoPort };
 }
 
 function fromWire(wire: ProjectEndpointWire): ProjectEndpoint {
@@ -95,8 +85,8 @@ export const getProjectEndpoint = async (projectId: string): Promise<ProjectEndp
 
 // useProjectEndpoint reads one project's endpoint. A failure is not retried
 // and not surfaced as an error: the pages that use it fall back to the
-// in-cluster details they already hold, which is the honest answer when the
-// public endpoint cannot be read.
+// details they already hold, which is the honest answer when the public
+// endpoint cannot be read.
 export const useProjectEndpoint = (projectId: string | undefined) =>
   useQuery({
     queryKey: ['project-endpoint', projectId],

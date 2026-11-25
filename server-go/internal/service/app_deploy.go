@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"log"
 	"strconv"
 	"sync"
@@ -13,7 +14,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/google/uuid"
 )
@@ -72,6 +75,12 @@ type AppDeployService struct {
 	domainSync func(ctx context.Context, namespace string, app *apphost.App) error
 	// async lets tests run the rollout wait inline instead of in a goroutine.
 	async func(func())
+	// proxyGuard refuses proxy and VPN nodes (EXC-755); nil allows every app.
+	proxyGuard *abuse.AppGuard
+	// flags decides the dark features this service reads; nil is everything off.
+	flags features.Flags
+	// orgGuard refuses an organisation whose owner is abuse-suspended (EXC-843); nil allows all.
+	orgGuard *orgguard.Guard
 
 	mu     sync.Mutex
 	active map[string]*activeRollout // keyed by app id
@@ -269,6 +278,9 @@ func (s *AppDeployService) GetDeploy(projectID, appID, deployID string) (*apphos
 // again to finish.
 func (s *AppDeployService) underLease(ctx context.Context, projectID, appID string,
 	apply func(*apphost.App) (*apphost.Deploy, func(), error)) (*apphost.Deploy, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	release, err := s.holdAppForDeploy(ctx, projectID, appID)
 	if err != nil {
 		return nil, err
@@ -300,6 +312,10 @@ type deployMeta struct {
 // rollout is the deploy engine every deploy and redeploy drives: create the
 // record, apply the workload, and watch the rollout. cfg is what actually runs.
 func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, meta deployMeta) (*apphost.Deploy, func(), error) {
+	cfg, meta, err := s.pinForRollout(ctx, app, cfg, meta)
+	if err != nil {
+		return nil, nil, err
+	}
 	planned, err := s.record(ctx, app, cfg, meta)
 	if err != nil {
 		return nil, nil, err
@@ -319,6 +335,9 @@ type plannedDeploy struct {
 
 // record creates the deploy's pending record; nothing reaches the cluster yet.
 func (s *AppDeployService) record(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, meta deployMeta) (*plannedDeploy, error) {
+	if err := s.refuseProxy(ctx, app, cfg, meta.origin.Actor); err != nil {
+		return nil, err
+	}
 	tierType, tier, err := s.planTier(ctx, app.ProjectID, cfg.Replicas)
 	if err != nil {
 		return nil, err
@@ -391,6 +410,7 @@ func (s *AppDeployService) apply(ctx context.Context, app *apphost.App, planned 
 	render := s.render
 	render.EnvRevision = strconv.Itoa(deploy.Revision)
 	render.DeployID = deploy.ID
+	render.ReusePinnedImages = s.pinningOn(ctx) && cfg.ImagePull == apphost.ImagePullPublic
 	if render.PullAuth, err = s.pullAuth(app, cfg.Image); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
@@ -432,6 +452,7 @@ func (s *AppDeployService) apply(ctx context.Context, app *apphost.App, planned 
 			return deploy, nil, nil
 		}
 	}
+	s.clearSuspension(app.ProjectID, app.ID)
 	s.setStatus(deploy, apphost.DeployStatusRolling, "", nil)
 	watched := *deploy
 	return deploy, func() { s.watch(ctx, watched, namespace, app.Name) }, nil
@@ -717,3 +738,7 @@ func (s *AppDeployService) AppRestarts(ctx context.Context, projectID, appID str
 	}
 	return s.runtime.AppRestarts(ctx, namespace, appID)
 }
+
+// SetOrgGuard makes every action that starts the app's pods refuse an
+// organisation whose owner is abuse-suspended (EXC-843).
+func (s *AppDeployService) SetOrgGuard(guard *orgguard.Guard) { s.orgGuard = guard }

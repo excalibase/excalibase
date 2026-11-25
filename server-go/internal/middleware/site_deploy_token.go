@@ -85,6 +85,11 @@ func deployTokenContext(w http.ResponseWriter, r *http.Request, tokens DeployTok
 	token, err := tokens.ResolveDeployToken(ctx, raw)
 	if err != nil {
 		log.Printf("deploy token: %v", err)
+		if storage.IsUnavailable(err) {
+			w.Header().Set("Retry-After", "5")
+			writeGateError(w, http.StatusServiceUnavailable, "service temporarily unavailable")
+			return nil, false
+		}
 		writeGateError(w, http.StatusInternalServerError, "internal error")
 		return nil, false
 	}

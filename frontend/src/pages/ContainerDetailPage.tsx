@@ -24,6 +24,7 @@ import {
 import { DeployHistory } from '../components/containers/DeployHistory';
 import { AppDomains, HostCertificateBadge } from '../components/containers/AppDomains';
 import { useCustomDomainsEnabled, useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { CrashLoopNotice } from '../components/containers/CrashLoopNotice';
 import { LifecycleActions } from '../components/containers/LifecycleActions';
 import { AppLogs } from '../components/containers/AppLogs';
 import { AppDiskCard } from '../components/containers/AppDiskCard';
@@ -41,7 +42,7 @@ import {
 const DEFAULT_POLL_MS = 2000;
 const MASK = '••••••••';
 
-function CurrentDeploy({ deploy }: { readonly deploy?: Deploy }) {
+export function CurrentDeploy({ deploy }: { readonly deploy?: Deploy }) {
   if (!deploy) return null;
   const status = DEPLOY_STATUS[deploy.status];
   return (
@@ -72,7 +73,7 @@ function CurrentDeploy({ deploy }: { readonly deploy?: Deploy }) {
   );
 }
 
-function DiskStopBanner({ reason }: { readonly reason?: string }) {
+export function DiskStopBanner({ reason }: { readonly reason?: string }) {
   if (!reason) return null;
   return (
     <div
@@ -93,7 +94,8 @@ function describeVar(v: EnvVar): string {
     return `Linked to database ${v.reference.sourceName} (${v.reference.variable})`;
   }
   if (v.kind === 'secret') return `${MASK} secret, set`;
-  return MASK;
+  // A plain value is not a secret: show it, or say it is hidden from this role.
+  return v.value ?? 'Hidden for your role';
 }
 
 // The Service is named after the app, so the project's apps use these (EXC-524, EXC-525).
@@ -102,7 +104,7 @@ function internalAddresses(app: App): string {
   return (app.internal ? tcp : [`http://${app.name}`, ...tcp]).join(', ');
 }
 
-function Settings({ app }: { readonly app: App }) {
+export function Settings({ app }: { readonly app: App }) {
   const size = describeTier(app.tier);
   const rows: Array<[string, string]> = [
     ['Port', app.internal ? 'None (internal service, no public URL)' : String(app.port)],
@@ -129,7 +131,7 @@ function Settings({ app }: { readonly app: App }) {
   );
 }
 
-function Variables({ env }: { readonly env: EnvVar[] }) {
+export function Variables({ env }: { readonly env: EnvVar[] }) {
   if (env.length === 0) return <p className="text-sm text-text-tertiary">No variables.</p>;
   return (
     <ul className="bg-surface-card border border-border-primary rounded-lg divide-y divide-border-primary">
@@ -248,6 +250,7 @@ function Detail({
         </div>
       )}
       <DiskStopBanner reason={diskStopReason(app, newest)} />
+      <CrashLoopNotice app={app} canStart={canDevelop} onError={setLifecycleError} />
       <RestartsBanner app={app} />
       <CurrentDeploy deploy={newest} />
       <div className="grid gap-6 lg:grid-cols-2 mb-6">
@@ -318,7 +321,7 @@ export function ContainerDetailPage({
 
 // A container the runtime restarted still reads ACTIVE; this says why it is
 // not running smoothly (EXC-651).
-function RestartsBanner({ app }: { readonly app: App }) {
+export function RestartsBanner({ app }: { readonly app: App }) {
   const restarts = restartSummary(app);
   if (!restarts) return null;
   return (

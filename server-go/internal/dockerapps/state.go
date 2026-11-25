@@ -33,6 +33,8 @@ type appRecord struct {
 	Deploy string `json:"deploy,omitempty"`
 	// Withdrawn: a project deletion took the routes away until a resume restores them.
 	Withdrawn bool `json:"withdrawn,omitempty"`
+	// Userns is where the app's files belong, decided once (userns.go); nil before that.
+	Userns *appUserns `json:"userns,omitempty"`
 }
 
 type pendingDeploy struct {

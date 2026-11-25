@@ -39,7 +39,7 @@ func (c *Client) RuntimeClassPlacement(ctx context.Context, name string) (Runtim
 	if err != nil {
 		return RuntimePlacement{}, fmt.Errorf("read runtime class %q: %w", name, err)
 	}
-	var placement RuntimePlacement
+	placement := RuntimePlacement{Handler: class.Handler}
 	if class.Overhead != nil {
 		placement.OverheadCPUMilli = class.Overhead.PodFixed.Cpu().MilliValue()
 		placement.OverheadMemBytes = class.Overhead.PodFixed.Memory().Value()

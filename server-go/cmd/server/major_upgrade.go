@@ -10,7 +10,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
@@ -48,10 +47,11 @@ func wireMajorUpgrades(cfg config.AppConfig, sqlStore storage.PlatformStore, d m
 		Backups:   func(inst *domain.DatabaseInstance) bool { return backupStoreFor(d.backupSvc, inst) },
 		Observers: d.observers,
 	})
+	svc.SetOrgGuard(newOrgGuard(d.store, sqlStore))
 	deps.majorUpgradeHandler = handler.NewMajorUpgradeHandler(svc, sqlStore)
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), majorUpgradeLockID)
+		lock = standingLock(sqlStore, majorUpgradeLockID)
 	}
 	return svc.StartRecoverySweeper(context.Background(), service.NewLeadership(lock), majorUpgradeRecoveryInterval)
 }

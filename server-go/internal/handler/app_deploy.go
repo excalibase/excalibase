@@ -11,12 +11,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/imagedigest"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
@@ -370,6 +372,9 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, into any) error 
 }
 
 func (h *AppDeployHandler) writeDiskError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, apphost.ErrInvalidDisk), errors.Is(err, service.ErrAppDiskSameSize):
 		httpError(w, err.Error(), http.StatusBadRequest)
@@ -426,11 +431,18 @@ func (h *AppDeployHandler) lifecycleAccepted(w http.ResponseWriter, r *http.Requ
 const registryRetryAfter = "60"
 
 func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
+	case orgguard.IsRefusal(err):
+		writeOrgGuardError(w, err)
+	case errors.Is(err, abuse.ErrProxyApp), errors.Is(err, abuse.ErrBlockedRegistry):
+		httpError(w, err.Error(), http.StatusForbidden)
 	case errors.Is(err, apphost.ErrInvalidImage), errors.Is(err, appregistry.ErrInternalImage):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, imagedigest.ErrNotPublic):
-		httpError(w, err.Error()+"; push the image to a public registry, or set it as the app's image and deploy with no image, which runs it as the node pulls it, without a pinned digest", http.StatusUnprocessableEntity)
+		httpError(w, err.Error()+"; push the image to a public registry, or set it as the app's image and deploy with no image, which runs it as the node pulls it, without a pinned digest (with FEATURE_APPIMAGEPIN on that unpinned deploy is refused too: name the image by digest and list its registry in APP_LOCAL_REGISTRIES)", http.StatusUnprocessableEntity)
 	case errors.Is(err, imagedigest.ErrNotFound), errors.Is(err, imagedigest.ErrDenied),
 		errors.Is(err, apphost.ErrLocalRegistryNeedsDigest), errors.Is(err, service.ErrRollbackImageRemoved):
 		httpError(w, err.Error(), http.StatusUnprocessableEntity)
@@ -445,7 +457,7 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, apphost.ErrAppStatusConflict), errors.Is(err, apphost.ErrAppBusy),
 		errors.Is(err, storage.ErrProjectBusy),
-		errors.Is(err, k8s.ErrAppNotDeployed), errors.Is(err, k8s.ErrAppNotPaused):
+		errors.Is(err, k8s.ErrAppNotDeployed), errors.Is(err, k8s.ErrAppNotPaused), errors.Is(err, k8s.ErrAppImageUnreadable):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, k8s.ErrAppPodsRemain):
 		httpError(w, err.Error()+"; retry to finish", http.StatusGatewayTimeout)
@@ -461,6 +473,8 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, service.ErrOrgTierUnresolved.Error(), http.StatusInternalServerError)
 	case errors.Is(err, service.ErrAppCapacity):
 		httpError(w, service.ErrAppCapacity.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, service.ErrNoPodSlots):
+		httpError(w, service.ErrNoPodSlots.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, service.ErrAppNoSandboxNode):
 		httpError(w, service.ErrAppNoSandboxNode.Error(), http.StatusServiceUnavailable)
 	default:

@@ -53,7 +53,7 @@ func TestAnAddressDifferingOnlyByCaseIsRefused(t *testing.T) {
 func TestEmailFoldMigrationRefusesExistingCaseDuplicates(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	if err := store.m.Migrate(migrationBeforeEmailFold); err != nil {
+	if err := store.migrateTo(migrationBeforeEmailFold); err != nil {
 		t.Fatalf("migrate down to %d: %v", migrationBeforeEmailFold, err)
 	}
 	for _, u := range []*domain.User{humanWithEmail("a", "Dev@X.example.com"), humanWithEmail("b", "dev@x.example.com")} {
@@ -61,7 +61,7 @@ func TestEmailFoldMigrationRefusesExistingCaseDuplicates(t *testing.T) {
 			t.Fatalf("seed %s: %v", u.ID, err)
 		}
 	}
-	err := store.m.Migrate(migrationEmailFold)
+	err := store.migrateTo(migrationEmailFold)
 	if err == nil {
 		t.Fatal("the migration indexed lower(email) over two accounts sharing an address")
 	}
@@ -73,7 +73,7 @@ func TestEmailFoldMigrationRefusesExistingCaseDuplicates(t *testing.T) {
 func TestEmailFoldMigrationDownAllowsCaseVariantsAgain(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	if err := store.m.Migrate(migrationBeforeEmailFold); err != nil {
+	if err := store.migrateTo(migrationBeforeEmailFold); err != nil {
 		t.Fatalf("migrate down to %d: %v", migrationBeforeEmailFold, err)
 	}
 	if err := store.CreateUser(ctx, humanWithEmail("a", "Dev@X.example.com")); err != nil {

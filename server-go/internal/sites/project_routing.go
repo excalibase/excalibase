@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 )
 
 // UnrouteProjectSites stops serving a project scheduled for deletion: the
@@ -119,6 +121,9 @@ const reconcileSiteTimeout = time.Minute
 // servable is whether the router may send traffic to the site's Worker: a
 // server site only while server sites are on, so switching them off stops their code.
 func (s *Service) servable(ctx context.Context, site *Site) bool {
+	if s.options.OrgGuard.CheckServingUnlessAdmin(ctx, site.ProjectID) != nil {
+		return false
+	}
 	return site.Kind != KindServer || s.serverSitesOn(ctx)
 }
 
@@ -143,7 +148,7 @@ func (s *Service) ReconcileServerSites(ctx context.Context) error {
 			failures = append(failures, err)
 		}
 	}
-	return errors.Join(failures...)
+	return errors.Join(append(failures, s.unrouteSuspended(ctx)...)...)
 }
 
 // reconcileInTime gives each site its own time, so one slow answer leaves no other site routed.
@@ -155,10 +160,12 @@ func (s *Service) reconcileInTime(ctx context.Context, site *Site, serve bool) e
 
 func (s *Service) reconcileServerSite(ctx context.Context, site *Site, serve bool) error {
 	if !serve {
-		if err := s.publisher.DeleteKV(ctx, site.Hostname); err != nil {
-			return publishFailure(site, stepUnroute, err)
-		}
-		return s.unrouteSiteHostnames(ctx, site)
+		return s.unrouteSite(ctx, site)
+	}
+	// A suspended owner's site is taken off the router, not just left alone:
+	// the timer is what keeps it off once anything routed it again (EXC-845).
+	if errors.Is(s.options.OrgGuard.CheckServingUnlessAdmin(ctx, site.ProjectID), orgguard.ErrOrgSuspended) {
+		return s.unrouteSite(ctx, site)
 	}
 	serving, err := s.projectServing(ctx, site.ProjectID)
 	if err != nil || !serving || site.LiveDeployID == "" {
@@ -172,4 +179,39 @@ func (s *Service) reconcileServerSite(ctx context.Context, site *Site, serve boo
 		return publishFailure(site, stepRoute, err)
 	}
 	return s.routeSiteHostnames(ctx, site)
+}
+
+// unrouteSite takes the site's hostname and its proven custom hostnames off the router.
+func (s *Service) unrouteSite(ctx context.Context, site *Site) error {
+	if err := s.publisher.DeleteKV(ctx, site.Hostname); err != nil {
+		return publishFailure(site, stepUnroute, err)
+	}
+	return s.unrouteSiteHostnames(ctx, site)
+}
+
+// unrouteSuspended takes every site and preview of a suspended owner off the
+// router, static ones included: the suspension unrouted them once, and this
+// keeps them off however they got routed again (a deploy that raced it, a
+// hostname check, an admin). Each failure is returned; every site is tried.
+func (s *Service) unrouteSuspended(ctx context.Context) []error {
+	all, err := s.store.ListSites(ctx)
+	if err != nil {
+		return []error{err}
+	}
+	var failures []error
+	for _, site := range all {
+		if !errors.Is(s.options.OrgGuard.CheckServing(ctx, site.ProjectID), orgguard.ErrOrgSuspended) {
+			continue
+		}
+		siteCtx, cancel := context.WithTimeout(ctx, reconcileSiteTimeout)
+		err := s.unrouteSite(siteCtx, site)
+		if err == nil {
+			err = s.routeSitePreviews(siteCtx, site, false)
+		}
+		cancel()
+		if err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return failures
 }

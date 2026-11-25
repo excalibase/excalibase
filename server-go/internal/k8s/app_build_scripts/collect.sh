@@ -17,5 +17,5 @@ else
 fi
 # Printed before the ready mark, so the log has it whenever the controller sees ready.
 echo "packed the image ($(wc -c < /work/collect/image.tar) bytes)"
-touch /work/collect/ready
+printf %s "${READY_TOKEN:-}" > /work/collect/ready
 exec sleep 3600

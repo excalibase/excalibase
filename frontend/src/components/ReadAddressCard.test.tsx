@@ -9,17 +9,15 @@ vi.mock('../api/client', () => ({
   api: { get: vi.fn(), put: vi.fn() },
 }));
 
+// Whether the project hosts apps is its own tested hook; here it is a switch.
+let hostedApps = true;
+vi.mock('../hooks/useHostsApps', () => ({ useHostsApps: () => hostedApps }));
+
 const URL = '/projects/p-1/db-read-address';
 
 const replicas = {
   projectId: 'p-1',
   replicas: 2,
-  internal: {
-    host: 'p-1-postgres-ro.ns.svc.cluster.local',
-    port: 5432,
-    connectionString:
-      'postgresql://app@p-1-postgres-ro.ns.svc.cluster.local:5432/app?sslmode=require',
-  },
   publicOffered: true,
   publicOpen: true,
   enabled: false,
@@ -68,14 +66,14 @@ describe('ReadAddressCard', () => {
     expect(api.get).not.toHaveBeenCalledWith(URL);
   });
 
-  test('shows the replicas, the internal address and what a replica read costs', async () => {
+  test('shows the replicas, the apps note and what a replica read costs', async () => {
     renderCard(replicas);
     expect(await screen.findByTestId('read-address-replicas')).toHaveTextContent(
       '2 replicas serve reads',
     );
-    expect(screen.getByTestId('read-address-internal')).toHaveTextContent(
-      'p-1-postgres-ro.ns.svc.cluster.local:5432',
-    );
+    expect(screen.getByTestId('apps-database-url-note')).toHaveTextContent(/DATABASE_URL/);
+    expect(screen.queryByTestId('read-address-internal')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
     expect(screen.getByTestId('read-address-lag')).toHaveTextContent(/revoked permission/);
     expect(screen.getByTestId('read-address-not-acl')).toHaveTextContent(/not an access control/);
     expect(screen.getByTestId('read-address-public')).toHaveTextContent('No public read port');
@@ -162,9 +160,18 @@ describe('ReadAddressCard', () => {
     expect(await screen.findByTestId('read-address-toggle')).toBeEnabled();
   });
 
-  test('an installation without public ports keeps the internal address', async () => {
+  test('a project without apps shows no apps note', async () => {
+    hostedApps = false;
+    renderCard(replicas);
+    await screen.findByTestId('read-address-replicas');
+    expect(screen.queryByTestId('apps-database-url-note')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
+    hostedApps = true;
+  });
+
+  test('an installation without public ports keeps the apps note', async () => {
     renderCard({ ...replicas, publicOffered: false, publicOpen: false });
-    expect(await screen.findByTestId('read-address-internal')).toBeInTheDocument();
+    expect(await screen.findByTestId('apps-database-url-note')).toBeInTheDocument();
     expect(screen.getByText(/does not offer public database ports/)).toBeInTheDocument();
   });
 

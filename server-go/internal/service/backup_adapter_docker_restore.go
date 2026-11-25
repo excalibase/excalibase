@@ -234,7 +234,7 @@ func (a *DockerBackupAdapter) bringUp(ctx context.Context, dc provisioner.Docker
 	if !archive {
 		return nil
 	}
-	if err := provisioner.NewDockerPostgreSQLProvisioner(dc).EnableWALArchive(ctx, containerID, seeded.owner); err != nil {
+	if err := provisioner.NewDockerPostgreSQLProvisioner(dc).EnableWALArchive(ctx, containerID, seeded.owner, ""); err != nil {
 		return fmt.Errorf("enable WAL archiving on the restored database: %w", err)
 	}
 	return a.waitForPromotedPostgres(ctx, dc, containerID, dbName)

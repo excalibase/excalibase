@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { KeyRound, Eye, EyeOff, Copy, Trash2, Loader2, Lock, Search, Check } from 'lucide-react';
 import { useVaultSecretsList, useVaultSecret, useDeleteVaultSecret, useVaultStatus } from '../hooks/useVault';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
@@ -16,7 +17,9 @@ export function VaultPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data: status } = useVaultStatus();
-  const { data: paths, isLoading: pathsLoading } = useVaultSecretsList();
+  // Only this project's secrets: an unscoped list is every tenant's paths.
+  const { projectId } = useParams<{ projectId: string }>();
+  const { data: paths, isLoading: pathsLoading, error: pathsError } = useVaultSecretsList(`projects/${projectId}/`);
   const { data: secretData, isLoading: secretLoading } = useVaultSecret(revealedPath);
   const deleteMutation = useDeleteVaultSecret();
 
@@ -99,7 +102,13 @@ export function VaultPage() {
         </div>
       )}
 
-      {!pathsLoading && filteredPaths.length === 0 && (
+      {pathsError && (
+        <div role="alert" className="text-center py-16 text-red-400 text-sm" data-testid="vault-error">
+          {serverErrorMessage(pathsError, 'The vault could not be read')}
+        </div>
+      )}
+
+      {!pathsLoading && !pathsError && filteredPaths.length === 0 && (
         <div className="text-center py-16 text-text-secondary text-sm">
           No secrets found.
         </div>

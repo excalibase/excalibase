@@ -100,11 +100,63 @@ const (
 	// SitePreviews is a preview per branch or pull request of a site connected
 	// to git, at its own unguessable hostname, removed with its branch or PR (EXC-660).
 	SitePreviews Feature = "sitepreviews"
+	// FunctionInvoke is MCP's invoke_function. It is not a safeguard: code deployed to
+	// a project's functions can already read that project's function secrets and
+	// database URL and return them through its error text or logs. The flag only
+	// removes one convenient way of running such code from the agent (EXC-684).
+	FunctionInvoke Feature = "functioninvoke"
+	// ProxyBlock refuses an app that is a proxy or VPN node at create, update
+	// and deploy (EXC-755). Unlike the features above it is on unless switched off.
+	ProxyBlock Feature = "proxyblock"
+	// SignupGuard refuses disposable and throwaway mail at account creation and
+	// limits sign-ups per network (EXC-755). On unless switched off.
+	SignupGuard Feature = "signupguard"
+	// OneTimeCredentials shows a database password once, at creation and at a
+	// reset, and never returns it again: the credentials route carries no
+	// password and the connection string a template (EXC-759).
+	OneTimeCredentials Feature = "onetimecredentials"
+	// WALArchiveAlert raises a platform alert, mailed to the platform admins,
+	// when a database's WAL archiving has been failing too long or a project's
+	// backup credential cannot be renewed (EXC-784). On unless switched off.
+	WALArchiveAlert Feature = "walarchivealert"
+	// FreeWALUpload makes a Free database ship its WAL hourly even when idle,
+	// where other plans keep the operator's five minutes (EXC-784). On unless
+	// switched off.
+	FreeWALUpload Feature = "freewalupload"
+	// AppRuntimeLogin hands a project's apps and functions a login of their
+	// own instead of the database owner's, which can create and change logins
+	// on Postgres 16 and later (EXC-765). On unless switched off.
+	AppRuntimeLogin Feature = "appruntimelogin"
+	// FunctionHTMLGuard serves a function's HTML, XHTML and SVG answers as plain
+	// text on the shared API origin, so no fake page is served from the
+	// platform's host (EXC-810). On unless switched off.
+	FunctionHTMLGuard Feature = "functionhtmlguard"
+	// MCPConfirm makes MCP's destructive tools (delete_app, delete_function,
+	// delete_site, delete_function_secret, revoke_publishable_key,
+	// revoke_s3_key) do nothing on the first call and answer with what would be
+	// destroyed plus a short-lived token; only a second call with the token
+	// destroys it. On unless switched off.
+	MCPConfirm Feature = "mcpconfirm"
+	// AppImagePin deploys a customer app by the digest its image resolved to
+	// and runs it with imagePullPolicy IfNotPresent, so a pod restart never
+	// asks the registry again (EXC-839). Off: apps are rendered as before.
+	AppImagePin Feature = "appimagepin"
+	// CrashLoopGuard stops a customer app that keeps crashing (scales it to
+	// zero with a recorded reason Studio shows) and only alerts for a
+	// database that does (EXC-839).
+	CrashLoopGuard Feature = "crashloopguard"
+	// SuspensionEmails mails the account holder when an admin suspends the
+	// account: the rule, what was stopped and how to appeal (EXC-841). Off, a
+	// suspension is silent as before.
+	SuspensionEmails Feature = "suspensionemails"
+	// StudioV2 is the cloud-console layout of Studio: new top bar, navigation
+	// and shared tables. Frontend only; the server just reports it (EXC-762).
+	StudioV2 Feature = "studio_v2"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails}
 }
 
 type Flags interface {

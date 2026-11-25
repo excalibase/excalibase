@@ -283,7 +283,7 @@ func TestAuthLogin_Success(t *testing.T) {
 
 	aliceUser := testutil.FixtureToken("alice")
 	alicePwd := testutil.FixturePassword("alice-login")
-	hash, _ := auth.HashPassword(alicePwd)
+	hash := testutil.FixtureVerifiableHash(alicePwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID:              "u1",
@@ -295,15 +295,30 @@ func TestAuthLogin_Success(t *testing.T) {
 	}
 
 	r := setupAuthRouter(t, us, ts)
-	w := doRequest(r, "POST", routeLogin, fmt.Sprintf(`{"username":%q,"password":%q}`, aliceUser, alicePwd))
+	body := fmt.Sprintf(`{"username":%q,"password":%q}`, aliceUser, alicePwd)
+	w := doRequest(r, "POST", routeLogin, body)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("login: got %d, body: %s", w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Header().Get("Set-Cookie"), "HttpOnly") {
+		t.Errorf("the session belongs in an httpOnly cookie, got %q", w.Header().Get("Set-Cookie"))
+	}
 	var resp map[string]interface{}
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["token"] == nil || resp["token"] == "" {
-		t.Error("token should be present in response")
+	// EXC-761: script on the page must not be able to read the session secret.
+	if _, present := resp["token"]; present {
+		t.Errorf("the session secret must not be in the body unless asked for, got %v", resp)
+	}
+
+	req := httptest.NewRequest("POST", routeLogin, strings.NewReader(body))
+	req.Header.Set(ReturnSessionTokenHeader, "true")
+	opted := httptest.NewRecorder()
+	r.ServeHTTP(opted, req)
+	var optedResp map[string]interface{}
+	json.NewDecoder(opted.Body).Decode(&optedResp)
+	if optedResp["token"] == nil || optedResp["token"] == "" {
+		t.Error("a caller that opts in must receive the token")
 	}
 }
 
@@ -321,7 +336,7 @@ func TestAuthLogin_WrongPassword_Returns401(t *testing.T) {
 	ts := newMockTokenStore()
 
 	correctPwd := testutil.FixturePassword("bob-correct")
-	hash, _ := auth.HashPassword(correctPwd)
+	hash := testutil.FixtureVerifiableHash(correctPwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID: "u1", Username: "bob", PasswordHash: hash, Active: true, CreatedAt: &now,
@@ -349,7 +364,7 @@ func TestAuthLogin_TokenCreationFails_Returns500(t *testing.T) {
 
 	carolUser := testutil.FixtureToken("carol")
 	carolPwd := testutil.FixturePassword("carol-login")
-	hash, _ := auth.HashPassword(carolPwd)
+	hash := testutil.FixtureVerifiableHash(carolPwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID: "u1", Username: carolUser, PasswordHash: hash, Active: true, EmailVerifiedAt: &now, CreatedAt: &now,
@@ -585,7 +600,7 @@ func TestAuthRevokeToken(t *testing.T) {
 func TestAuthLogin_SetsSessionCookie(t *testing.T) {
 	us := newMockUserStore()
 	alicePwd2 := testutil.FixturePassword("alice-cookie")
-	hash, _ := auth.HashPassword(alicePwd2)
+	hash := testutil.FixtureVerifiableHash(alicePwd2)
 	now := time.Now()
 	aliceUser2 := testutil.FixtureToken("alice")
 	us.users["u1"] = &domain.User{
@@ -695,5 +710,55 @@ func TestAuthRevokeToken_RejectsForeign(t *testing.T) {
 	}
 	if ts.tokens[foreignHash] == nil {
 		t.Error("foreign token must NOT be deleted on 403")
+	}
+}
+
+// A failed token delete leaves a live session token behind, so logout must say
+// so (and log it) while still clearing the browser's cookie (EXC-809 L1).
+func TestAuthLogout_FailedRevokeIsA5xxButStillClearsCookie(t *testing.T) {
+	us := newMockUserStore()
+	ts := newMockTokenStore()
+	now := time.Now()
+	user := &domain.User{ID: "u1", Username: testutil.FixtureToken("alice"), Active: true, Role: "user", CreatedAt: &now}
+	us.users["u1"] = user
+	r, tok := setupAuthRouterWithUser(t, us, ts, user)
+	ts.failDelete = true
+
+	w := doAuthRequest(r, "POST", "/api/auth/logout", tok, "")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("logout with a failing delete: got %d, want 500", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "db error") {
+		t.Errorf("internal detail leaked: %s", w.Body.String())
+	}
+	var clearing *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == auth.SessionCookieName {
+			clearing = c
+		}
+	}
+	if clearing == nil || clearing.Value != "" || clearing.MaxAge >= 0 {
+		t.Errorf("the session cookie must still be cleared, got %+v", clearing)
+	}
+}
+
+func TestWritePasswordBusy_OtherErrorsAreAGenericInternalError(t *testing.T) {
+	w := httptest.NewRecorder()
+	writePasswordBusy(w, errors.New("argon2 exploded"))
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), msgInternalError) || strings.Contains(w.Body.String(), "argon2") {
+		t.Errorf("got %d %s, want a generic 500", w.Code, w.Body.String())
+	}
+}
+
+func TestRegister_UserLookupFailureIsAGenericInternalError(t *testing.T) {
+	us := newMockUserStore()
+	us.failList = true
+	h := NewAuthHandler(us, newMockTokenStore())
+	r := chi.NewRouter()
+	r.Post("/api/auth/register", h.Register)
+	body := `{"username":"alice","email":"alice@example.test","password":"Correct-Horse-9-battery"}`
+	w := doAuthRequest(r, "POST", "/api/auth/register", "", body)
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "db error") {
+		t.Errorf("got %d %s, want a generic 500", w.Code, w.Body.String())
 	}
 }

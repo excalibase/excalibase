@@ -6,16 +6,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"io"
 	"net/url"
 	"testing"
-	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
 )
@@ -59,10 +59,7 @@ func startRolePostgresImage(t *testing.T, image string) *rolePostgres {
 		postgres.WithDatabase("app"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("p"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(45*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
@@ -218,4 +215,31 @@ func TestProjectRoleSQL_ResetAdminWithHostileName(t *testing.T) {
 
 	pg.assertNoInjectedEffects(t)
 	pg.assertLogin(t, "owner$$x", password)
+}
+
+// EXC-765: the runtime login's password is applied as a verifier, so a hostile
+// one is stored verbatim and runs nothing, at creation and at a reset.
+func TestProjectRoleSQL_RuntimeLoginTakesHostilePasswordsVerbatim(t *testing.T) {
+	pg := startRolePostgres(t)
+	first := hostilePasswords["dollar quote breakout"]
+	pg.psql(t, `CREATE ROLE shop_owner LOGIN PASSWORD 'old'`)
+	pg.psql(t, BuildProjectRoleSQL(first[0], first[1], first[2], "app", "cdc_watcher_pub"))
+	pg.psql(t, pgroles.CustomerRoleSQL("shop_owner")+pgroles.OwnerAccessSQL("shop_owner"))
+
+	for name, passwords := range hostilePasswords {
+		t.Run(name, func(t *testing.T) {
+			verifier, err := newScramVerifier(passwords[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The role is created once; a later run sets the password the platform filed.
+			pg.psql(t, pgroles.RuntimeRoleSQL("shop_owner", verifier)+
+				BuildProjectRoleResetSQL(mustRoleVerifiers(t, []RolePassword{{Role: roleRuntime, Password: passwords[0]}})))
+			pg.assertNoInjectedEffects(t)
+			pg.assertLogin(t, roleRuntime, passwords[0])
+			pg.psql(t, BuildProjectRoleResetSQL(mustRoleVerifiers(t, []RolePassword{{Role: roleRuntime, Password: passwords[1]}})))
+			pg.assertNoInjectedEffects(t)
+			pg.assertLogin(t, roleRuntime, passwords[1])
+		})
+	}
 }

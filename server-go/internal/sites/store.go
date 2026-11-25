@@ -15,6 +15,8 @@ type Store interface {
 	// Get answers nil, no error, when the project holds no such site.
 	Get(ctx context.Context, projectID, id string) (*Site, error)
 	List(ctx context.Context, projectID string) ([]*Site, error)
+	// ListSites answers every project's sites of any kind, for taking those of a suspended owner off the router.
+	ListSites(ctx context.Context) ([]*Site, error)
 	// ListServerSites answers every project's server-rendered sites, for routing them on or off as a whole.
 	ListServerSites(ctx context.Context) ([]*Site, error)
 	// RuntimeVars and SetRuntimeVars keep a server site's plain variables; the whole set is replaced.

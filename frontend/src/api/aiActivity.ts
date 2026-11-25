@@ -10,6 +10,8 @@ export interface AiActivityCall {
   tool: string;
   status: 'ok' | 'error';
   httpStatus?: number;
+  // A destructive tool asks twice: 'requested' is its first call, which deleted nothing.
+  confirmation?: 'requested' | 'confirmed';
   tokenName: string;
   userId: string;
   at: string;
@@ -41,7 +43,7 @@ export function useRevokeActivityToken(projectId: string) {
 }
 
 export function callResult(call: AiActivityCall): string {
-  if (call.status === 'ok') return 'OK';
+  if (call.status === 'ok') return call.confirmation === 'requested' ? 'Waiting for confirmation' : 'OK';
   if (call.httpStatus === 401 || call.httpStatus === 403 || call.httpStatus === 404) return `Refused (${call.httpStatus})`;
   return call.httpStatus ? `Failed (${call.httpStatus})` : 'Failed';
 }

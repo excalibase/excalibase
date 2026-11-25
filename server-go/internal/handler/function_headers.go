@@ -10,8 +10,12 @@ import (
 // platformCookies are the cookies the platform sets on its own host. Tenant
 // code must never see them: the session cookie holds the developer's PAT.
 var platformCookies = map[string]bool{
-	auth.SessionCookieName: true,
-	oauthStateCookie:       true,
+	auth.SessionCookieName:                       true,
+	auth.LegacySessionCookieName:                 true,
+	auth.HostCookiePrefix + oauthStateCookie:     true,
+	oauthStateCookie:                             true,
+	auth.HostCookiePrefix + siteGitBrowserCookie: true,
+	siteGitBrowserCookie:                         true,
 }
 
 // platformTokenPrefix marks a platform PAT (Studio sessions, service tokens).

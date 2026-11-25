@@ -29,6 +29,11 @@ type TierConfig struct {
 	// cancels it — the direct guard against a runaway query on a shared box.
 	// Empty = no timeout (unbounded). Higher tiers get more headroom.
 	StatementTimeout string
+	// ArchiveTimeout is how long Postgres waits before it closes a WAL segment
+	// that has writes and ships it to the object store (archive_timeout). Empty
+	// keeps the operator's five minutes. A longer one bounds what an idle
+	// database writes a day, and what a destroyed disk can lose (EXC-784).
+	ArchiveTimeout string
 	// AutoPauseAfterDays pauses an ACTIVE project once nothing has touched it
 	// for this many days (warning one day earlier). 0 = never auto-pause.
 	AutoPauseAfterDays int
@@ -89,6 +94,12 @@ func (t TierConfig) CPUString() string { return t.CPU }
 // MemoryString returns Memory as configured (e.g. "512Mi", "4Gi").
 func (t TierConfig) MemoryString() string { return t.Memory }
 
+// freeArchiveTimeout is Free's hourly upload of an idle database's WAL. Up to
+// an hour of writes can be lost if the disk is destroyed; the owner accepted
+// that on 2026-11-19 against 4.6 GB a day of WAL that filled two 5Gi disks
+// when uploads failed (EXC-773).
+const freeArchiveTimeout = "1h"
+
 // Paid tiers run a primary plus standbys, one per node (the cluster requires
 // the anti-affinity, and admission refuses a platform with too few nodes).
 // Counts are odd on purpose: engines that elect by quorum need it.
@@ -104,6 +115,7 @@ var tiers = map[domain.TierType]TierConfig{
 		CPU:                "0.5",
 		BackupEnabled:      true,
 		StatementTimeout:   "15s",
+		ArchiveTimeout:     freeArchiveTimeout,
 		AutoPauseAfterDays: 7,
 		Sites:              siteLimits(5, 30, 2, 2, serverSiteLimits{1, 10 * mebibyte, 50, 20}),
 		SiteBuilds:         siteBuildLimits("2Gi", "5Gi", 10*60, 1),

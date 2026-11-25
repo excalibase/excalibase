@@ -2,7 +2,9 @@ import { BookOpen, Loader2 } from 'lucide-react';
 import { useReadAddress, useSetReadAddress, type ReadAddress } from '../api/readAddress';
 import { refusalMessage } from '../api/clusterSettings';
 import { useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { useHostsApps } from '../hooks/useHostsApps';
 import { Button } from './Button';
+import { AppsConnectionNote } from './AppsConnectionNote';
 
 interface ReadAddressCardProps {
   readonly projectId: string;
@@ -23,7 +25,7 @@ const NO_REPLICA =
 
 const SINGLE_HOST =
   'A single host runs one copy of the database, so there is no replica to read from. ' +
-  'Read replicas need a Kubernetes cluster with a node per copy.';
+  'Read replicas need a multi-server installation with a server per copy.';
 
 // ReadAddressCard shows the database's read-only address to its replicas and
 // opens or closes its public port (EXC-666). Hidden while the flag is off.
@@ -62,6 +64,7 @@ function ReadAddressBody({
   readonly status: string;
   readonly view: ReadAddress;
 }) {
+  const hostsApps = useHostsApps(projectId);
   if (view.reason === 'single-host' || view.singleHost) {
     return (
       <p className="text-xs text-text-secondary" data-testid="read-address-none">
@@ -83,13 +86,10 @@ function ReadAddressBody({
           ? 'No replica is serving right now, so this address refuses connections.'
           : `${view.replicas} ${view.replicas === 1 ? 'replica serves' : 'replicas serve'} reads.`}
       </p>
-      {view.internal && (
-        <p className="text-sm text-text-primary mb-2" data-testid="read-address-internal">
-          Inside the project:{' '}
-          <code className="font-mono text-xs">
-            {view.internal.host}:{view.internal.port}
-          </code>
-        </p>
+      {hostsApps && (
+        <div className="mb-2">
+          <AppsConnectionNote />
+        </div>
       )}
       {view.username && <ReadLogin view={view} />}
       <PublicReadPort projectId={projectId} status={status} view={view} />
@@ -108,7 +108,7 @@ function ReadLogin({ view }: { readonly view: ReadAddress }) {
     <p className="text-xs text-text-secondary mb-2" data-testid="read-address-login">
       Sign in as <code className="font-mono">{view.username}</code>
       {view.readOnlyLogin
-        ? ', a login that can only read. Its password is with the connection details.'
+        ? ', a login that can only read. Reset the password under the connection details to get new credentials.'
         : ', the database owner.'}
     </p>
   );

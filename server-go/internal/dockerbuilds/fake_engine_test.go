@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"testing/iotest"
 
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -39,7 +40,12 @@ type fakeEngine struct {
 	volumes    map[string]bool
 	pulled     []string
 	runtimes   []string
-	calls      []string
+	// runtimePaths is where the engine says a runtime lives; a runtime without one gets a path named for it.
+	runtimePaths map[string]string
+	// tarType and oneByte shape what CopyFromContainer streams: a first entry of that type, read a byte at a time.
+	tarType byte
+	oneByte bool
+	calls   []string
 	// ignoresGatewayMode takes the isolated gateway but still gives the bridge a host address.
 	ignoresGatewayMode bool
 	// refusesGatewayMode is Docker 27: it knows the option, not the mode, and answers 400.
@@ -76,7 +82,11 @@ func (f *fakeEngine) finish(name string, code int, oom bool) {
 func (f *fakeEngine) Info(context.Context) (system.Info, error) {
 	runtimes := map[string]system.RuntimeWithStatus{}
 	for _, name := range f.runtimes {
-		runtimes[name] = system.RuntimeWithStatus{}
+		path := f.runtimePaths[name]
+		if path == "" {
+			path = "/usr/bin/" + name
+		}
+		runtimes[name] = system.RuntimeWithStatus{Runtime: system.Runtime{Path: path}}
 	}
 	return system.Info{Runtimes: runtimes}, nil
 }
@@ -181,9 +191,16 @@ func (f *fakeEngine) CopyFromContainer(_ context.Context, id, path string) (io.R
 	}
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
-	_ = writer.WriteHeader(&tar.Header{Name: "site.tar.gz", Mode: 0o644, Size: int64(len(body))})
+	header := &tar.Header{Name: "site.tar.gz", Mode: 0o644, Size: int64(len(body)), Typeflag: f.tarType}
+	if f.tarType == tar.TypeSymlink {
+		header.Size, header.Linkname = 0, "/etc/passwd"
+	}
+	_ = writer.WriteHeader(header)
 	_, _ = writer.Write(body)
 	_ = writer.Close()
+	if f.oneByte {
+		return io.NopCloser(iotest.OneByteReader(&archive)), container.PathStat{Name: "site.tar.gz"}, nil
+	}
 	return io.NopCloser(&archive), container.PathStat{Name: "site.tar.gz", Size: int64(len(body))}, nil
 }
 

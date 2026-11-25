@@ -28,8 +28,9 @@ func requireVolumeOwner(raw any) error {
 type createVolumes struct {
 	Labels     map[string]string
 	HostConfig struct {
-		Binds  []string
-		Mounts []struct {
+		UsernsMode string
+		Binds      []string
+		Mounts     []struct {
 			Type   string
 			Source string
 		}
@@ -71,6 +72,23 @@ func (h *Handler) requireOwnVolumes(ctx context.Context, create createVolumes) e
 		if err := CheckVolumeOwner(name, VolumeOwners(h.policy.VolumePrefix, name, volume.Labels), create.Labels); err != nil {
 			return err
 		}
+		if err := checkVolumeRange(name, volume.Labels, create.HostConfig.UsernsMode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkVolumeRange: a volume that carries its app's user range is mounted only
+// by a container in exactly that range, and one that carries none only by a
+// container in none, so an app is never put where another's files are owned.
+func checkVolumeRange(name string, labels map[string]string, mode string) error {
+	want := ""
+	if label := labels[UsernsLabel]; label != "" {
+		want = UsernsModeOf(label)
+	}
+	if mode != want {
+		return refuse("volume %q is owned in user range %q; this container runs in %q", name, want, mode)
 	}
 	return nil
 }

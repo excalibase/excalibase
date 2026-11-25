@@ -19,6 +19,8 @@ type AppRuntime interface {
 	PauseAppWorkload(ctx context.Context, namespace, appID string) error
 	ResumeAppWorkload(ctx context.Context, namespace, appID, appName string, tier domain.TierType, timeout time.Duration) error
 	PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error)
+	// PausedAppImages are the images a resume would run, read from the paused workload itself.
+	PausedAppImages(ctx context.Context, namespace, appID, appName string) ([]string, error)
 	WaitForAppPodsGone(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	DeleteAppWorkload(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	PruneAppWorkload(ctx context.Context, namespace, appID, keepName string, timeout time.Duration) error

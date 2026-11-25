@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
@@ -30,8 +31,9 @@ type RoleReconcileReport struct {
 
 // ReconcileProjectRoles re-runs the registration SQL on every running Postgres
 // project whose roles are out of date: one registered before EXC-623, known by
-// the excalibase_scheduler login missing from vault, or one whose
-// excalibase_app can still reach the auth schema (EXC-628). The excalibase
+// the excalibase_scheduler login missing from vault, one whose
+// excalibase_app can still reach the auth schema (EXC-628), or one with no
+// excalibase_runtime login filed while apps are to use it (EXC-765). The excalibase
 // schema is left the superuser's alone, whatever the app role planted there is
 // dropped, the app role loses auth, and the scheduler login is created, filed
 // and admitted by certificate. Filing that login is the last step, so a project
@@ -48,6 +50,10 @@ func (s *ProvisioningService) ReconcileProjectRoles(ctx context.Context) RoleRec
 		return report
 	}
 	for _, inst := range instances {
+		if reconcilesMySQLRuntime(inst) {
+			s.reconcileMySQLRuntimeInto(ctx, inst, &report)
+			continue
+		}
 		if !reconcilesRoles(inst) {
 			continue
 		}
@@ -61,6 +67,21 @@ func (s *ProvisioningService) ReconcileProjectRoles(ctx context.Context) RoleRec
 		}
 	}
 	return report
+}
+
+// reconcileMySQLRuntimeInto creates a MySQL project's runtime login when it has none.
+func (s *ProvisioningService) reconcileMySQLRuntimeInto(ctx context.Context, inst *domain.DatabaseInstance, report *RoleReconcileReport) {
+	projectCtx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+	defer cancel()
+	pending, err := s.mysqlGrantsPending(projectCtx, inst)
+	if err == nil && pending {
+		if err = s.reconcileMySQLRuntime(projectCtx, inst.ProjectID); err == nil {
+			report.Reconciled++
+		}
+	}
+	if err != nil {
+		report.Failed = append(report.Failed, fmt.Errorf("project %s: %w", inst.ProjectID, err))
+	}
 }
 
 // reconcileIfPending reconciles a project whose roles are out of date.
@@ -84,6 +105,9 @@ func (s *ProvisioningService) rolesPending(ctx context.Context, inst *domain.Dat
 	if err != nil || missing {
 		return missing, err
 	}
+	if unfiled, err := s.missingRuntimeLogin(ctx, inst.ProjectID); err != nil || unfiled {
+		return unfiled, err
+	}
 	return appReachesAuth(ctx, s.roleSQLExecer(inst.Namespace, inst.ProjectID+primaryPodSuffix), inst.DatabaseName)
 }
 
@@ -95,6 +119,19 @@ func (s *ProvisioningService) missingSchedulerLogin(projectID string) (bool, err
 		return false, err
 	}
 	return !filed[vaultCredentialPath(projectID, roleScheduler)], nil
+}
+
+// missingRuntimeLogin reports whether apps are to use the runtime login and
+// vault holds none for the project: one registered before EXC-765.
+func (s *ProvisioningService) missingRuntimeLogin(ctx context.Context, projectID string) (bool, error) {
+	if !features.Enabled(ctx, s.flags, features.AppRuntimeLogin) {
+		return false, nil
+	}
+	filed, err := s.filedCredentialPaths(projectID)
+	if err != nil {
+		return false, err
+	}
+	return !filed[vaultCredentialPath(projectID, roleRuntime)], nil
 }
 
 // reconcilesRoles is a running Postgres project with a database.
@@ -115,17 +152,19 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	if err != nil {
 		return err
 	}
+	mintRuntime, err := s.mintsRuntimeLogin(ctx, projectID, &creds)
+	if err != nil {
+		return err
+	}
 	roleSQL, err := projectRoleSQL(spec, creds, s.publicationName)
 	if err != nil {
 		return err
 	}
-	if mintScheduler {
-		scheduler, err := roleVerifiers([]RolePassword{{Role: roleScheduler, Password: creds.schedulerPassword}})
-		if err != nil {
-			return err
-		}
-		roleSQL += BuildProjectRoleResetSQL(scheduler)
+	mintedSQL, err := mintedLoginsResetSQL(creds, mintScheduler, mintRuntime)
+	if err != nil {
+		return err
 	}
+	roleSQL += mintedSQL
 	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
 	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
 		return fmt.Errorf("re-run registration SQL: %w", err)
@@ -141,10 +180,57 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	if err := s.ensureClusterCertLogins(ctx, inst); err != nil {
 		return err
 	}
+	if mintRuntime {
+		if err := s.fileRuntimeCredential(spec, creds.runtimePassword); err != nil {
+			return err
+		}
+	}
 	if !mintScheduler {
 		return nil
 	}
 	return s.fileSchedulerCredential(ctx, spec, creds.schedulerPassword)
+}
+
+// mintedLoginsResetSQL sets the logins minted in this pass to the passwords
+// filed next. A login may already exist from a pass that stopped before filing
+// it, with a password nothing recorded.
+func mintedLoginsResetSQL(creds projectRoleCredentials, mintScheduler, mintRuntime bool) (string, error) {
+	var minted []RolePassword
+	if mintScheduler {
+		minted = append(minted, RolePassword{Role: roleScheduler, Password: creds.schedulerPassword})
+	}
+	if mintRuntime {
+		minted = append(minted, RolePassword{Role: roleRuntime, Password: creds.runtimePassword})
+	}
+	if len(minted) == 0 {
+		return "", nil
+	}
+	verifiers, err := roleVerifiers(minted)
+	if err != nil {
+		return "", err
+	}
+	return BuildProjectRoleResetSQL(verifiers), nil
+}
+
+// mintsRuntimeLogin gives a project that has no runtime login a password for
+// the registration SQL to create it with; one already filed keeps its own.
+func (s *ProvisioningService) mintsRuntimeLogin(ctx context.Context, projectID string, creds *projectRoleCredentials) (bool, error) {
+	unfiled, err := s.missingRuntimeLogin(ctx, projectID)
+	if err != nil || !unfiled {
+		return false, err
+	}
+	creds.runtimePassword = generatePassword(32)
+	return true, nil
+}
+
+// fileRuntimeCredential files the login the reconcile just created. It signs
+// in by password, as the owner does.
+func (s *ProvisioningService) fileRuntimeCredential(spec projectRoleSpec, password string) error {
+	record := specCredentialRecord(spec, roleRuntime, password)
+	if err := s.vault.Put(vaultCredentialPath(spec.projectID, roleRuntime), record); err != nil {
+		return fmt.Errorf("file %s credential: %w", roleRuntime, err)
+	}
+	return nil
 }
 
 func reconcileSpec(inst *domain.DatabaseInstance) projectRoleSpec {
@@ -198,6 +284,11 @@ func (s *ProvisioningService) filedRoleCredentials(projectID string) (projectRol
 	if filed[vaultCredentialPath(projectID, roleReader)] {
 		// A filed reader keeps its password; an unfiled one is not minted here.
 		if creds.readerPassword, err = password(roleReader); err != nil {
+			return projectRoleCredentials{}, false, err
+		}
+	}
+	if filed[vaultCredentialPath(projectID, roleRuntime)] {
+		if creds.runtimePassword, err = password(roleRuntime); err != nil {
 			return projectRoleCredentials{}, false, err
 		}
 	}
@@ -291,6 +382,8 @@ func (s *ProvisioningService) RunRoleReconcile(ctx context.Context, leader Leade
 	if !ok {
 		return RoleReconcileReport{}
 	}
+	s.logPausedBackups(s.ReconcilePausedBackups(ctx))
+	logArchiveTimeouts(s.ReconcileArchiveTimeouts(ctx))
 	report := s.ReconcileProjectRoles(ctx)
 	for _, failure := range report.Failed {
 		if errors.Is(failure, ErrProjectOperationRunning) {

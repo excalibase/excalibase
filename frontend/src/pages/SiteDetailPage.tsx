@@ -25,7 +25,7 @@ import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { useProjectRole } from '../hooks/useProjectRole';
 
 // What a caller who may not change the site sees of its routing.
-function RoutingState({ site }: { readonly site: Site }) {
+export function RoutingState({ site }: { readonly site: Site }) {
   return (
     <section className="bg-surface-card border border-border-primary rounded-lg p-4 space-y-2">
       <p className="text-sm text-text-primary" data-testid="site-spa-state">
@@ -40,7 +40,7 @@ function RoutingState({ site }: { readonly site: Site }) {
   );
 }
 
-function Routing({ projectId, site }: { readonly projectId: string; readonly site: Site }) {
+export function Routing({ projectId, site }: { readonly projectId: string; readonly site: Site }) {
   const update = useSetSpaFallback(projectId, site.id);
   // Held until the server answers, so the box follows the click at once.
   const [pending, setPending] = useState<boolean | null>(null);
@@ -76,7 +76,16 @@ function Routing({ projectId, site }: { readonly projectId: string; readonly sit
   );
 }
 
-function DeleteSite({ projectId, site }: { readonly projectId: string; readonly site: Site }) {
+// afterDelete replaces the trip to the Sites list, for a caller that shows the site inside another page.
+export function DeleteSite({
+  projectId,
+  site,
+  afterDelete,
+}: {
+  readonly projectId: string;
+  readonly site: Site;
+  readonly afterDelete?: () => void;
+}) {
   const navigate = useNavigate();
   const remove = useDeleteSite(projectId, site.id);
   const [open, setOpen] = useState(false);
@@ -95,7 +104,7 @@ function DeleteSite({ projectId, site }: { readonly projectId: string; readonly 
         onClose={() => setOpen(false)}
         onConfirm={() =>
           remove.mutateAsync().then(
-            () => navigate(`/project/${projectId}/sites`),
+            () => (afterDelete ? afterDelete() : navigate(`/project/${projectId}/sites`)),
             () => setOpen(false),
           )
         }

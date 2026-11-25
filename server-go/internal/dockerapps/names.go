@@ -29,6 +29,8 @@ const (
 	labelDisk          = "excalibase.disk"
 	labelDiskMount     = "excalibase.disk-mount"
 	labelGeneration    = "excalibase.disk-generation"
+	// labelUserns is the app's user range "base:size"; absent on what runs in the shared one.
+	labelUserns = "excalibase.userns"
 
 	componentApp      = "app"
 	componentDiskTool = "app-disk-tool"
