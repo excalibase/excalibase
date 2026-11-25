@@ -117,6 +117,8 @@ func TestEnsure_DoesNotRetryARefusalThatWillNotChange(t *testing.T) {
 
 func TestEnsureLocal_PullsThroughTheDaemonTheEnvironmentNames(t *testing.T) {
 	ryukOnce = sync.Once{}
+	// CI sets a mirror prefix; this test is about the names as given.
+	t.Setenv(hubPrefixEnv, "")
 	t.Setenv("HOME", t.TempDir())
 	var pulled []string
 	mux := http.NewServeMux()
