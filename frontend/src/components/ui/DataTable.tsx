@@ -64,6 +64,8 @@ export interface DataTableProps<T> {
 }
 
 const PAGE_SIZES = [10, 25, 50, 100];
+// On a phone a row stacks into a card: each cell is a line headed by its column's name.
+const CELL = 'px-4 py-3 max-md:flex max-md:items-baseline max-md:justify-between max-md:gap-4 max-md:px-0 max-md:py-1.5 max-md:before:shrink-0 max-md:before:text-xs max-md:before:text-text-tertiary max-md:before:content-[attr(data-label)]';
 const FIELD = 'bg-bg-secondary border border-border-primary rounded-lg text-sm text-text-primary';
 
 export function DataTable<T>(props: DataTableProps<T>) {
@@ -243,9 +245,9 @@ function Body<T>(p: BodyProps<T>) {
     );
   }
   return (
-    <table className="w-full text-sm" aria-labelledby={captionId}>
+    <table className="w-full text-sm max-md:block" aria-labelledby={captionId}>
       <caption id={captionId} className="sr-only">{p.label}</caption>
-      <thead>
+      <thead className="max-md:sr-only">
         <tr className="text-text-tertiary border-b border-border-primary bg-bg-secondary">
           {p.selectable && (
             <th scope="col" className="w-10 px-4 py-3">
@@ -257,18 +259,18 @@ function Body<T>(p: BodyProps<T>) {
           {p.rowActions && <th scope="col" className="text-right px-4 py-3 font-medium">Actions</th>}
         </tr>
       </thead>
-      <tbody>
+      <tbody className="max-md:block">
         {p.shown.map((row) => {
           const id = p.getRowId(row);
           return (
-            <tr key={id} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
+            <tr key={id} className="border-b border-border-primary last:border-0 hover:bg-surface-hover max-md:block max-md:px-4 max-md:py-3">
               {p.selectable && (
                 <td className="px-4 py-3">
                   <input type="checkbox" aria-label={`Select ${rowName(p.visible, row, id)}`} checked={p.selection.isSelected(id)} onChange={() => p.selection.toggle(id)} />
                 </td>
               )}
-              {p.visible.map((c) => <td key={c.id} className="px-4 py-3">{c.cell(row)}</td>)}
-              {p.rowActions && <td className="px-4 py-3 text-right">{p.rowActions(row)}</td>}
+              {p.visible.map((c) => <td key={c.id} data-label={c.header} className={CELL}>{c.cell(row)}</td>)}
+              {p.rowActions && <td className={cn(CELL, 'text-right max-md:justify-end')}>{p.rowActions(row)}</td>}
             </tr>
           );
         })}

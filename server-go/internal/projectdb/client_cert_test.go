@@ -113,3 +113,64 @@ func TestPoolLimits_MaxPoolAgeDefaultsToAnHour(t *testing.T) {
 		t.Errorf("MaxPoolAge default = %v", got)
 	}
 }
+
+// A single host's database serves no TLS and has no client CA, so its records
+// carry no certificate; the project's own row says so, with no env override.
+func TestOpen_ASingleHostProjectLogsInWithItsPassword(t *testing.T) {
+	inst := &domain.DatabaseInstance{ProjectID: "proj_a", Status: "ACTIVE", DeploymentMode: domain.ModeDocker, SSLMode: domain.SSLModeDisable}
+	vault := fakeVault{data: map[string]map[string]string{"projects/proj_a/credentials/excalibase_app": withoutCertificate()}}
+	o := NewOpener(testStore(t, inst), vault, Overrides{}, PoolLimits{})
+	defer o.Close()
+
+	if _, err := o.Open(context.Background(), "proj_a"); err != nil {
+		t.Fatalf("a single-host project must open without a client certificate: %v", err)
+	}
+}
+
+// Kubernetes stays strict: a row that says "disable" is not trusted there, and
+// a platform role with no certificate is still refused.
+func TestOpen_AKubernetesProjectWithoutACertificateIsStillRefused(t *testing.T) {
+	for _, mode := range []domain.DeploymentMode{domain.ModeK8s, ""} {
+		inst := &domain.DatabaseInstance{ProjectID: "proj_a", Status: "ACTIVE", DeploymentMode: mode, SSLMode: domain.SSLModeDisable}
+		vault := fakeVault{data: map[string]map[string]string{"projects/proj_a/credentials/excalibase_app": withoutCertificate()}}
+		o := NewOpener(testStore(t, inst), vault, Overrides{}, PoolLimits{})
+
+		_, err := o.Open(context.Background(), "proj_a")
+		o.Close()
+		if !errors.Is(err, tenantcert.ErrNoClientCertificate) {
+			t.Errorf("mode %q: err = %v, want ErrNoClientCertificate", mode, err)
+		}
+	}
+}
+
+// A single host that states no mode (a row older than the column) is not
+// assumed plaintext: only the row's own "disable" turns TLS off.
+func TestOpen_ASingleHostRowThatStatesNoModeStillNeedsACertificate(t *testing.T) {
+	inst := &domain.DatabaseInstance{ProjectID: "proj_a", Status: "ACTIVE", DeploymentMode: domain.ModeDocker}
+	vault := fakeVault{data: map[string]map[string]string{"projects/proj_a/credentials/excalibase_app": withoutCertificate()}}
+	o := NewOpener(testStore(t, inst), vault, Overrides{}, PoolLimits{})
+	defer o.Close()
+
+	if _, err := o.Open(context.Background(), "proj_a"); !errors.Is(err, tenantcert.ErrNoClientCertificate) {
+		t.Fatalf("err = %v, want ErrNoClientCertificate", err)
+	}
+}
+
+func TestOverridesFor_OnlyASingleHostRowThatSaysDisableTurnsTLSOff(t *testing.T) {
+	cases := map[string]struct {
+		base Overrides
+		inst *domain.DatabaseInstance
+		want string
+	}{
+		"single host, disable":     {Overrides{}, &domain.DatabaseInstance{DeploymentMode: domain.ModeDocker, SSLMode: "disable"}, "disable"},
+		"single host, states none": {Overrides{}, &domain.DatabaseInstance{DeploymentMode: domain.ModeDocker}, ""},
+		"kubernetes, disable":      {Overrides{}, &domain.DatabaseInstance{DeploymentMode: domain.ModeK8s, SSLMode: "disable"}, ""},
+		"an override names a mode": {Overrides{SSLMode: "require"}, &domain.DatabaseInstance{DeploymentMode: domain.ModeDocker, SSLMode: "disable"}, "require"},
+		"no row":                   {Overrides{}, nil, ""},
+	}
+	for name, c := range cases {
+		if got := OverridesFor(c.base, c.inst).SSLMode; got != c.want {
+			t.Errorf("%s: sslmode = %q, want %q", name, got, c.want)
+		}
+	}
+}

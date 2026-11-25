@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react';
 import { apiErrorMessage, useApps, type App } from '../api/apps';
 import { VariableRow } from '../components/variables/VariableRow';
 import { panelSearch } from '../components/services/v2/panelState';
+import { useAppHostingEnabled } from '../hooks/useDeploymentMode';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useProjectRole } from '../hooks/useProjectRole';
 
@@ -33,7 +34,10 @@ function ServiceVariables({ projectId, app, canEdit }: { readonly projectId: str
 export function ProjectVariablesPage() {
   useDocumentTitle('Variables');
   const { projectId = '' } = useParams<{ projectId: string }>();
-  const { data, isLoading, error } = useApps(projectId);
+  const { enabled: appHosting, isLoading: configLoading } = useAppHostingEnabled();
+  const apps = useApps(projectId, appHosting);
+  const { data, error } = apps;
+  const isLoading = configLoading || apps.isLoading;
   const { canDevelop } = useProjectRole(projectId);
   const withVariables = (data ?? []).filter((app) => app.env.length > 0);
   return (
@@ -44,7 +48,10 @@ export function ProjectVariablesPage() {
       </div>
       {isLoading && <Loader2 className="w-5 h-5 animate-spin text-text-tertiary" aria-label="Loading" />}
       {error && <p role="alert" className="text-sm text-red-400">{apiErrorMessage(error, 'Could not load the variables')}</p>}
-      {!isLoading && !error && withVariables.length === 0 && (
+      {!isLoading && !appHosting && (
+        <p className="text-sm text-text-secondary" data-testid="variables-not-offered">App hosting is not offered on this install, so there are no services with variables.</p>
+      )}
+      {!isLoading && appHosting && !error && withVariables.length === 0 && (
         <p className="text-sm text-text-secondary">No services with variables yet.</p>
       )}
       {withVariables.map((app) => <ServiceVariables key={app.id} projectId={projectId} app={app} canEdit={canDevelop} />)}

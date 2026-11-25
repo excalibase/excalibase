@@ -50,6 +50,12 @@ func NewMigrationService(store storage.InstanceStore, vault vaultclient.VaultCli
 	}
 }
 
+// withProjectSSLMode lets a single host's own row state that it serves no TLS.
+func withProjectSSLMode(o dsnOverrides, inst *domain.DatabaseInstance) dsnOverrides {
+	o.sslmode = projectdb.OverridesFor(projectdb.Overrides{SSLMode: o.sslmode}, inst).SSLMode
+	return o
+}
+
 // buildTenantDSN composes a lib/pq connection string from vault credentials.
 // An explicit host override (local dev port-forward) flips sslmode to disable
 // unless a mode is given.
@@ -62,12 +68,13 @@ func buildTenantDSN(creds map[string]string, o dsnOverrides) (string, error) {
 // schema editor and data plane use — it holds CREATE on the database (so DDL
 // migrations work) but is NOT a superuser, so COPY ... TO PROGRAM and other
 // OS-level escapes are rejected by Postgres (SEC-C2).
-func (s *MigrationService) openTenantDB(projectID string) (*sql.DB, error) {
+func (s *MigrationService) openTenantDB(inst *domain.DatabaseInstance) (*sql.DB, error) {
+	projectID := inst.ProjectID
 	creds, err := s.vault.Get(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectID))
 	if err != nil {
 		return nil, fmt.Errorf("read excalibase_app credentials: %w", err)
 	}
-	dsn, err := buildTenantDSN(creds, s.overrides)
+	dsn, err := buildTenantDSN(creds, withProjectSSLMode(s.overrides, inst))
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +92,7 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 		return nil, fmt.Errorf("project not found: %s", projectID)
 	}
 
-	db, err := s.openTenantDB(projectID)
+	db, err := s.openTenantDB(inst)
 	if err != nil {
 		return nil, err
 	}

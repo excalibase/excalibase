@@ -34,6 +34,15 @@ function names(): string[] {
 describe('DataTable', () => {
   beforeEach(() => localStorage.clear());
 
+  // On a phone the rows stack into cards; each cell then names its own column.
+  test('every cell carries its column name, and the header row is kept for screen readers on a phone', () => {
+    render(<DataTable label="Projects" columns={COLUMNS} rows={makeRows(1)} getRowId={(r) => r.id} rowActions={() => <a href="/x">Open</a>} />);
+    const cells = within(screen.getAllByRole('row')[1]).getAllByRole('cell');
+    expect(cells.map((c) => c.getAttribute('data-label'))).toEqual(['Name', 'Plan', 'Size', null]);
+    expect(screen.getByRole('table')).toHaveClass('max-md:block');
+    expect(screen.getAllByRole('row')[0].closest('thead')).toHaveClass('max-md:sr-only');
+  });
+
   test('filters rows by text', async () => {
     render(<DataTable label="Projects" columns={COLUMNS} rows={makeRows(5)} getRowId={(r) => r.id} />);
     await userEvent.type(screen.getByRole('searchbox', { name: /filter projects/i }), 'proj-03');

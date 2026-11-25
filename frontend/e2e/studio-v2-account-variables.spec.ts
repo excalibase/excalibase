@@ -10,7 +10,7 @@ const SECRET_PLAIN = 'plain-but-credential-shaped';
 const json = (body: unknown) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 
 async function mockConsole(page: Page, studioV2 = true) {
-  await page.route('**/api/config', (route) => route.fulfill(json({ deploymentMode: 'cloud', sites: false, features: { studio_v2: studioV2 } })));
+  await page.route('**/api/config', (route) => route.fulfill(json({ deploymentMode: 'cloud', appHosting: true, sites: false, features: { studio_v2: studioV2 } })));
   await page.route(/\/api\/orgs(\?.*)?$/, (route) => route.fulfill(json([ORG])));
   await page.route('**/api/provision', (route) => route.fulfill(json([])));
   await page.route('**/api/auth/me', (route) => route.fulfill(json({ ...USER })));

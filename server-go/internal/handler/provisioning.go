@@ -664,6 +664,10 @@ func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if errors.Is(err, service.ErrLogsNotOffered) {
+		writeJSON(w, map[string]any{"logs": "", "notOffered": service.ErrLogsNotOffered.Error()})
+		return
+	}
 	if errors.Is(err, service.ErrLogsUnavailable) {
 		httpError(w, err.Error(), http.StatusServiceUnavailable)
 		return

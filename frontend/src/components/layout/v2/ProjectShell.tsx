@@ -3,7 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { IconRail } from '../IconRail';
 import { SubNav } from '../SubNav';
 import { deriveSection } from '../ProjectLayout';
-import { PROJECT_NAV } from '../navigation';
+import { PROJECT_NAV, sectionLabel } from '../navigation';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { useRouteProjectId } from '../../../hooks/useRouteProjectId';
 import { TopBar } from './TopBar';
@@ -46,24 +46,26 @@ export function ProjectShell() {
     if (wasSearching.current && !searching) searchOpener.current?.focus();
     wasSearching.current = searching;
   }, [searching]);
+  const current = PROJECT_NAV.find((s) => s.key === section);
+  const currentLabel = current ? sectionLabel(current, true) : 'Menu';
   const showSubNav = section && PROJECT_NAV.find((s) => s.key === section)?.children;
   return (
     <div data-testid="studio-shell" className="flex h-screen flex-col overflow-hidden bg-bg-primary">
       <TopBar left={<ProjectCrumb />} onSearch={() => changeSearching(true)} />
       <ProjectTabs />
       {phone && (
-        <MobileNavBar open={drawerShown} label={PROJECT_NAV.find((s) => s.key === section)?.label ?? 'Menu'}
+        <MobileNavBar open={drawerShown} label={currentLabel}
           onToggle={() => setDrawerOpen((o) => !o)} buttonRef={menuButton} />
       )}
       <div className="flex min-h-0 flex-1">
-        {!phone && <IconRail activeSection={showSubNav ? section : railSection} onSectionClick={setRailSection} />}
-        {!phone && showSubNav && section && <SubNav sectionKey={section} />}
+        {!phone && <IconRail v2Names activeSection={showSubNav ? section : railSection} onSectionClick={setRailSection} />}
+        {!phone && showSubNav && section && <SubNav v2Names sectionKey={section} />}
         <main className={`min-w-0 flex-1 overflow-y-auto ${phone ? 'p-4' : 'p-6'}`}><Outlet /></main>
       </div>
       {drawerShown && (
         <NavDrawer onClose={closeDrawer}>
-          <IconRail drawer activeSection={showSubNav ? section : railSection} onSectionClick={setRailSection} />
-          {showSubNav && section && <SubNav drawer sectionKey={section} />}
+          <IconRail drawer v2Names activeSection={showSubNav ? section : railSection} onSectionClick={setRailSection} />
+          {showSubNav && section && <SubNav drawer v2Names sectionKey={section} />}
         </NavDrawer>
       )}
       <CommandPalette open={searching} onOpenChange={changeSearching} />

@@ -72,7 +72,11 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 // ErrLogsUnavailable is a log backend that did not answer.
 var ErrLogsUnavailable = errors.New("the database's logs are not available right now")
 
-var errLogsOnSingleHost = fmt.Errorf("%w: the log search reads Kubernetes pod logs; this installation runs its databases on a single host", ErrLogsUnavailable)
+// ErrLogsNotOffered is an install that has no log search for its databases; it is
+// not a failure, so a caller shows it as a plain "not offered".
+var ErrLogsNotOffered = errors.New("log search is not turned on for this single host: switch on host monitoring to search the database's logs")
+
+var errLogsOnSingleHost = fmt.Errorf("%w: %w", ErrLogsUnavailable, ErrLogsNotOffered)
 
 // maxLokiAnswer bounds one Loki reply: 5000 lines with their labels.
 const maxLokiAnswer = 32 << 20
