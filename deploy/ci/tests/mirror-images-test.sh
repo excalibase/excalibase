@@ -101,5 +101,38 @@ expect "a digest the mirror holds is not copied" "0" "$(grep -c '^copy' "$CRANE_
 PATH="$WORK/bin:$PATH" sh "$TOOL" sync "$WORK/pinned.txt" >/dev/null 2>&1
 grep -q "^copy docker.io/library/busybox@$PINNED ghcr.io/excalibase/mirror/busybox:1.37.0" "$CRANE_CALLS"; expect "a pinned image is copied by digest" "0" "$?"
 
+# guard on a throwaway repository: each way of naming a Docker Hub image is caught, one at a time.
+REPO="$WORK/repo"
+mkdir -p "$REPO/deploy/ci" "$REPO/.github/workflows" "$REPO/deploy/single-host/tests" "$REPO/server-go/internal/x"
+cp "$TOOL" "$REPO/deploy/ci/"
+printf 'busybox:1.36\n' > "$REPO/deploy/ci/mirror-images.txt"
+printf '#!/bin/sh\ntrue\n' > "$REPO/deploy/ci/third-party-images.sh"
+git -C "$REPO" init -q && git -C "$REPO" add -A >/dev/null
+inject() { # <name> <file> <content> <image the guard must name>
+  printf '%s\n' "$3" > "$REPO/$2"
+  git -C "$REPO" add -A >/dev/null
+  if sh "$REPO/deploy/ci/mirror-images.sh" guard >"$WORK/guard.out" 2>&1; then
+    echo "FAIL guard missed $1"; failed=$((failed + 1))
+  elif grep -q "$4" "$WORK/guard.out"; then echo "PASS guard catches $1"
+  else echo "FAIL guard named the wrong image for $1: $(cat "$WORK/guard.out")"; failed=$((failed + 1)); fi
+  git -C "$REPO" rm -qf --cached "$2" >/dev/null; rm -f "$REPO/$2"
+}
+inject "docker run in a script" deploy/single-host/tests/a.sh 'docker run --rm -e A=b --name x redis:7 sleep 1' 'redis:7'
+inject "docker run over several lines" deploy/single-host/tests/b.sh 'docker run -d \
+  --network n \
+  memcached:1.6 serve' 'memcached:1.6'
+inject "docker pull in a workflow run" .github/workflows/w.yml '      - run: docker pull -q valkey/valkey:8' 'valkey/valkey:8'
+inject "docker create with an engine variable" deploy/single-host/tests/c.sh '$ENGINE create --name a haproxy:3.0' 'haproxy:3.0'
+inject "an image in a workflow env var" .github/workflows/e.yml '      K3S_IMAGE: rancher/k3s:v9.9.9-k3s1' 'rancher/k3s:v9.9.9-k3s1'
+inject "an image in a script variable" deploy/single-host/tests/d.sh 'POSTGRES_IMAGE=postgres:99' 'postgres:99'
+inject "COPY --from an image" server-go/Dockerfile 'FROM busybox:1.36
+COPY --from=tianon/gosu:1.17 /gosu /gosu' 'tianon/gosu:1.17'
+inject "an unqualified image in a live Go test" server-go/internal/x/a_test.go '//go:build live
+
+package x
+
+const img = "redis:7-alpine"' 'redis:7-alpine'
+printf 'package x\n' > "$REPO/server-go/internal/x/ok.go"
+
 [ "$failed" -eq 0 ] || { echo "$failed check(s) failed"; exit 1; }
 echo "all mirror checks passed"

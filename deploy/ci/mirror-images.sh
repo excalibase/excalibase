@@ -103,7 +103,8 @@ sync_entry() {
 cmd_sync() {
   list=${1:-$MIRROR_LIST_FILE}
   failed=0
-  for entry in $(list_entries "$list"); do
+  entries=$(list_entries "$list")
+  while IFS= read -r entry; do
     echo "mirror $entry"
     sync_entry "$entry" && continue
     status=$?
@@ -112,7 +113,9 @@ cmd_sync() {
       return 1
     fi
     failed=$((failed + 1))
-  done
+  done <<EOF
+$entries
+EOF
   [ "$failed" -eq 0 ] || { echo "$failed image(s) not mirrored" >&2; return 1; }
 }
 
@@ -152,6 +155,34 @@ cmd_rewrite() {
   done
 }
 
+
+# Words after `docker run|pull|create` that take a value, so the image is the first word that is not
+# a flag or a flag's value.
+DOCKER_RUN_AWK='
+function image_after(words, n, start,   j, w) {
+  for (j = start; j <= n; j++) {
+    w = words[j]
+    if (w ~ /^-/) { if (w !~ /=/ && w ~ FLAGS_WITH_VALUE) j++; continue }
+    gsub(/["\x27]/, "", w)
+    if (w == "" || w ~ /[$(){}`]/) return ""
+    return w
+  }
+  return ""
+}
+BEGIN { FLAGS_WITH_VALUE = "^(-e|--env|-v|--volume|--name|--network|--net|-p|--publish|--env-file|--entrypoint|--stop-signal|--restart|-w|--workdir|--label|-l|--user|-u|--cap-add|--cap-drop|--security-opt|--tmpfs|--hostname|-h|--memory|-m|--cpus|--platform|--pull|--add-host|--device|--dns|--log-driver|--mount|--pid|--ipc|--runtime|--network-alias|--group-add|--ulimit|--sysctl|--health-cmd)$" }
+{
+  line = $0
+  while (line ~ /\\[ \t]*$/ && (getline nxt) > 0) { sub(/\\[ \t]*$/, "", line); line = line " " nxt }
+  n = split(line, words, /[ \t]+/)
+  for (i = 1; i < n; i++) {
+    tool = words[i]; gsub(/["\x27]/, "", tool)
+    if (tool ~ /^(docker|podman|[$]DOCKER|[$]ENGINE|[$][{]ENGINE[}]|[$][{]DOCKER[}])$/ && words[i + 1] ~ /^(run|pull|create)$/) {
+      ref = image_after(words, n, i + 2)
+      if (ref != "") print ref
+    }
+  }
+}'
+
 # guard_candidates: every Docker Hub image the files CI runs name, one normalized path per line.
 # Three sources: explicit docker.io references, `image:` lines, and FROM lines of the Dockerfiles.
 guard_candidates() {
@@ -167,9 +198,13 @@ guard_candidates() {
       if grep -qE '^//go:build .*(integration|live)' "$file" ||
          echo "$file" | grep -qE '/internal/(config/(app_builds|sites_git)|sitebuilds/settings)\.go$'; then echo "$file"; fi
     done)
+    go_tagged=$(for file in $go_files; do grep -qE '^//go:build .*(integration|live)' "$file" && echo "$file"; done)
     # shellcheck disable=SC2086 # one word per file
     {
       grep -hoE 'docker\.io/[A-Za-z0-9][A-Za-z0-9._/-]*(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]+)?' $scanned $go_files 2>/dev/null
+      # Unqualified images in the tagged Go tests: "name:tag" with a version-like tag, not host:port.
+      [ -z "$go_tagged" ] || grep -hoE '"[a-z0-9][a-z0-9._/-]*:(v?[0-9][A-Za-z0-9._-]*|latest|main|pg[0-9]+)(@sha256:[0-9a-f]+)?"' $go_tagged 2>/dev/null |
+        tr -d '"' | grep -vE '^[0-9.]+:|^localhost:|^[a-z]:[0-9]|^(acme|a|x)/|^[a-z0-9-]+([.][a-z0-9-]+)+:[0-9]+$|^sha256:'
       grep -hE '^[[:space:]]*(-[[:space:]]+)?image:[[:space:]]+[^$[:space:]]+[[:space:]]*$' $scanned 2>/dev/null |
         sed -E 's/^[[:space:]]*(-[[:space:]]+)?image:[[:space:]]+//; s/[[:space:]]+$//' | tr -d "\"'"
       for dockerfile in $(printf '%s\n' $scanned | grep -E '(^|/)Dockerfile[^/]*$'); do
@@ -178,15 +213,26 @@ guard_candidates() {
                gsub(/[$][{]HUB_MIRROR[}]/, "", ref)
                if (ref !~ /[$]/ && !(ref in stage)) print ref
                for (i = 2; i < NF; i++) if (toupper($i) == "AS") stage[$(i + 1)] = 1
+             }
+             # COPY --from=<image> names an image unless it is an earlier stage
+             toupper($1) == "COPY" && $2 ~ /^--from=/ {
+               ref = substr($2, 8); gsub(/[$][{]HUB_MIRROR[}]/, "", ref)
+               if (ref !~ /[$]/ && !(ref in stage) && ref !~ /^[0-9]+$/) print ref
              }' "$dockerfile"
       done
+      # A bare `docker run|pull|create <image>` in a script or a workflow run: line.
+      # shellcheck disable=SC2086
+      [ -z "$scanned" ] || awk "$DOCKER_RUN_AWK" $scanned
+      # An image named in a variable: IMAGE-ish names in workflows (KEY: value) and scripts (KEY=value).
+      grep -hE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z0-9_]*IMAGE[A-Za-z0-9_]*[:=][[:space:]]*["'"'"']?[a-z0-9][A-Za-z0-9._/-]*(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]+)?["'"'"']?[[:space:]]*$' $scanned 2>/dev/null |
+        sed -E 's/^[[:space:]]*(export[[:space:]]+)?[A-Za-z0-9_]*IMAGE[A-Za-z0-9_]*[:=][[:space:]]*//; s/[[:space:]]+$//' | tr -d "\"'"
     } | while read -r ref; do
       path=$(hub_path "$ref")
       [ -n "$path" ] || continue
       # A reference with neither tag nor digest carries a variable (${TAG}): nothing to compare.
       case $path in *:*|*@sha256:*) ;; *) continue ;; esac
       # Built by CI itself, or a name a test uses to prove a pull fails.
-      case $path in *:ci|*-candidate:*|*:ci@*|excalibase/does-not-exist:*|*:9.9.9) continue ;; esac
+      case $path in *:ci|*-candidate:*|*:ci@*|excalibase/does-not-exist:*|*:9.9.9|*never-published)  continue ;; esac
       printf '%s\n' "$path"
     done | sort -u
   )

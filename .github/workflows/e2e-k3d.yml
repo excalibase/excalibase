@@ -60,7 +60,8 @@ jobs:
       IMAGE: excalibase/provisioning:ci
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       # EXC-881: Docker Hub rate-limits CI; the images come from the mirror (deploy/ci/mirror-images.txt).
-      IMAGE_MIRROR: ghcr.io/excalibase/mirror
+      # Empty for a fork PR (no token for GHCR): everything then pulls from Docker Hub as before.
+      IMAGE_MIRROR: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'ghcr.io/excalibase/mirror' || '' }}
       K3S_IMAGE: rancher/k3s:v1.31.6-k3s1
       DISK_TOOLS_IMAGE: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
     steps:
@@ -82,19 +83,23 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build provisioning image
-        run: docker build --build-arg "HUB_MIRROR=$IMAGE_MIRROR/" -t "$IMAGE" -f server-go/Dockerfile server-go
+        run: docker build --build-arg "HUB_MIRROR=${IMAGE_MIRROR:+$IMAGE_MIRROR/}" -t "$IMAGE" -f server-go/Dockerfile server-go
 
       - name: Install k3d
         run: curl -sSfL https://raw.githubusercontent.com/k3d-io/k3d/${K3D_VERSION}/install.sh | TAG=${K3D_VERSION} bash
 
       # The cluster's own pulls (CoreDNS, the pause image, Postgres below) ask docker.io; containerd is
-      # told to ask the mirror first. The mirror keeps Docker Hub's paths under excalibase/mirror/ and
+      # told to ask the mirror first (a fork PR has no mirror and keeps the stock cluster). The mirror keeps Docker Hub's paths under excalibase/mirror/ and
       # drops library/, so the path is rewritten. A pull the mirror cannot answer still falls back to Docker Hub.
       - name: Create cluster
         env:
           REGISTRY_ACTOR: ${{ github.actor }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if [ -z "$IMAGE_MIRROR" ]; then
+            k3d cluster create "$CLUSTER" --agents 1 --wait --timeout 180s
+            exit 0
+          fi
           {
             echo 'mirrors:'
             echo '  docker.io:'
@@ -102,13 +107,11 @@ jobs:
             echo '      - https://ghcr.io'
             echo '    rewrite:'
             echo '      "^(?:library/)?(.*)$": "excalibase/mirror/$1"'
-            if [ "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}" = true ]; then
-              echo 'configs:'
-              echo '  ghcr.io:'
-              echo '    auth:'
-              echo "      username: $REGISTRY_ACTOR"
-              echo "      password: $REGISTRY_TOKEN"
-            fi
+            echo 'configs:'
+            echo '  ghcr.io:'
+            echo '    auth:'
+            echo "      username: $REGISTRY_ACTOR"
+            echo "      password: $REGISTRY_TOKEN"
           } > "$RUNNER_TEMP/registries.yaml"
           k3d cluster create "$CLUSTER" --image "$IMAGE_MIRROR/$K3S_IMAGE" --registry-config "$RUNNER_TEMP/registries.yaml" \
             --agents 1 --wait --timeout 180s
@@ -138,7 +141,7 @@ jobs:
               spec:
                 containers:
                   - name: postgres
-                    image: ${{ env.IMAGE_MIRROR }}/postgres:16-alpine
+                    image: ${{ env.IMAGE_MIRROR && format('{0}/', env.IMAGE_MIRROR) }}postgres:16-alpine
                     env:
                       - { name: POSTGRES_USER, value: platform }
                       - { name: POSTGRES_PASSWORD, value: platform }
@@ -229,7 +232,7 @@ jobs:
             --set-string env.TENANT_STORAGE_CLASS=tenant-sized \
             --set-string env.TENANT_SIZED_PROVISIONERS=rancher.io/local-path \
             --set-string env.STORAGE_NODE_CAPACITY=20Gi \
-            --set-string env.APP_DISK_TOOLS_IMAGE="$IMAGE_MIRROR/$DISK_TOOLS_IMAGE" \
+            --set-string env.APP_DISK_TOOLS_IMAGE="${IMAGE_MIRROR:+$IMAGE_MIRROR/}$DISK_TOOLS_IMAGE" \
             --set-string platformDB.url='postgres://platform:platform@platform-db.excalibase-platform:5432/platform?sslmode=disable'
 
       - name: Wait for provisioning rollout

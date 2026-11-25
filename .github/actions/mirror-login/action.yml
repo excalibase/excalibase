@@ -1,8 +1,8 @@
 name: Log in to the image mirror
 description: >-
-  EXC-881: CI pulls Docker Hub images from ghcr.io/excalibase/mirror/. The packages are public, so
-  a run without a token (a fork PR) still pulls anonymously; with a token the pulls count as the
-  repository's, not an anonymous address's.
+  EXC-881: CI pulls Docker Hub images from ghcr.io/excalibase/mirror/. A run of this repository logs
+  in with its token; a fork PR has no usable token and skips the login, and its workflow then sets
+  no mirror, so it pulls from Docker Hub as before.
 runs:
   using: composite
   steps:
