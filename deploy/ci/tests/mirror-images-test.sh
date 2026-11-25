@@ -93,6 +93,9 @@ PATH="$WORK/bin:$PATH" COPY_ERROR='manifest list must be converted, digest sha25
 expect "another failure does not stop the run" "2" "$(grep -c '^copy' "$CRANE_CALLS")"
 grep -q 'rate limiting' "$WORK/out"; expect "another failure is not called a rate limit" "1" "$?"
 grep -q 'manifest list must be converted' "$WORK/out"; expect "the real error is shown" "0" "$?"
+: > "$CRANE_CALLS"
+MIRROR_RETRY_PAUSE=0 PATH="$WORK/bin:$PATH" COPY_ERROR='PUT https://ghcr.io/v2/x: DENIED: requested access to the resource is denied' sh "$TOOL" sync "$WORK/two.txt" >/dev/null 2>&1
+expect "a DENIED push is tried once more, not looped" "4" "$(grep -c '^copy' "$CRANE_CALLS")"
 printf 'busybox:1.37.0@%s\n' "$PINNED" > "$WORK/pinned.txt"
 : > "$CRANE_CALLS"
 PATH="$WORK/bin:$PATH" MIRROR_HAS=1 sh "$TOOL" sync "$WORK/pinned.txt" >/dev/null 2>&1

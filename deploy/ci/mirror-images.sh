@@ -85,7 +85,11 @@ sync_entry() {
   have=$(registry_digest "$target")
   if [ -n "$digest" ]; then want=$digest; else want=$(registry_digest "$source"); fi
   if [ -n "$have" ] && [ "$have" = "$want" ]; then echo "  already mirrored"; return 0; fi
-  out=$(crane copy "$source" "$target" 2>&1) || {
+  out=$(crane copy "$source" "$target" 2>&1) || case $out in
+    # GHCR refuses the first push into a package it has only just created; one more try, after a pause, works.
+    *DENIED*) sleep "${MIRROR_RETRY_PAUSE:-20}"; out=$(crane copy "$source" "$target" 2>&1) ;;
+    *) false ;;
+  esac || {
     echo "$out" >&2
     # Only the registry's own words count as a rate limit; anything else is a real failure.
     case $out in *[Tt][Oo][Oo][Mm][Aa][Nn][Yy][Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]*|*"429 Too Many Requests"*) return 75 ;; esac
