@@ -17,6 +17,7 @@ import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { FunctionEgressCard } from '../components/FunctionEgressCard';
 import type { EdgeFunction, EdgeFile, RuntimeStatus } from '../types/edgefn';
 import { serverErrorMessage } from '../utils/serverError';
+import { parseInstant } from '../utils/instant';
 
 const DEFAULT_INDEX_TS = `export default async (req: Request): Promise<Response> => {
   const { name = 'world' } = await req.json().catch(() => ({}));
@@ -579,7 +580,7 @@ export function EdgeFunctionsPage() {
               </div>
             )}
             {logs.map((entry, i) => {
-              const when = new Date(entry.ts).toLocaleTimeString();
+              const when = new Date(parseInstant(entry.ts)).toLocaleTimeString();
               return (
                 /* eslint-disable-next-line react/no-array-index-key -- log entries have no stable id; ts alone can collide under rapid invocation */
                 <div key={`${entry.ts}-${i}`} className="flex gap-2">

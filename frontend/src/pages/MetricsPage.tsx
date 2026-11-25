@@ -16,6 +16,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
+import { parseInstant } from '../utils/instant';
 
 // SKELETON_KEYS provides stable React keys for the loading-state placeholder
 // tiles. Static identifiers avoid the array-index-as-key smell (S6479).
@@ -59,7 +60,7 @@ export function MetricsPage() {
   const chartData = (history?.metrics ?? [])
     .filter((m) => m.metricsAvailable)
     .map((m) => ({
-      time: new Date(m.timestamp).toLocaleTimeString(),
+      time: new Date(parseInstant(m.timestamp)).toLocaleTimeString(),
       // An unmeasured point is a gap in the chart, not a 0%.
       cpu: m.cpuUsagePercent == null ? null : Math.round(m.cpuUsagePercent),
       memory: m.memoryUsagePercent == null ? null : Math.round(m.memoryUsagePercent),
@@ -167,12 +168,12 @@ export function MetricsPage() {
               label="Last Backup"
               value={
                 current.lastBackupTime
-                  ? new Date(current.lastBackupTime).toLocaleTimeString()
+                  ? new Date(parseInstant(current.lastBackupTime)).toLocaleTimeString()
                   : 'None'
               }
               subtitle={
                 current.lastBackupTime
-                  ? new Date(current.lastBackupTime).toLocaleDateString()
+                  ? new Date(parseInstant(current.lastBackupTime)).toLocaleDateString()
                   : undefined
               }
               color="text-pink-400"

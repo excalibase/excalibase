@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import { listDeploys, type Deploy } from './apps';
 import type { TierType } from '../types';
+import { parseInstant } from '../utils/instant';
 
 // Built-in templates (EXC-526) as GET /api/projects/{projectId}/app-templates/ serves them.
 export type TemplateVarSource = 'literal' | 'generated' | 'database' | 'app';
@@ -94,7 +95,7 @@ const FIRST_DEPLOY_POLL_MS = 3000;
 export function firstDeploy(newest: Deploy | undefined, acceptedAt: string, now = Date.now()): FirstDeploy {
   if (newest?.status === 'succeeded') return { state: 'running' };
   if (newest?.status === 'failed') return { state: 'failed', reason: newest.failureReason ?? 'the deploy failed' };
-  if (now - Date.parse(acceptedAt) > FIRST_DEPLOY_FOLLOW_MS) return { state: 'stalled' };
+  if (now - parseInstant(acceptedAt) > FIRST_DEPLOY_FOLLOW_MS) return { state: 'stalled' };
   return !newest || newest.status === 'pending' ? { state: 'starting' } : { state: 'rolling' };
 }
 
@@ -108,7 +109,7 @@ export const useFirstDeploy = (projectId: string, appId: string, acceptedAt: str
     refetchInterval: (query) => {
       const state = query.state.data?.state;
       if (state && FINISHED.has(state)) return false;
-      return Date.now() - Date.parse(acceptedAt) > FIRST_DEPLOY_FOLLOW_MS ? false : FIRST_DEPLOY_POLL_MS;
+      return Date.now() - parseInstant(acceptedAt) > FIRST_DEPLOY_FOLLOW_MS ? false : FIRST_DEPLOY_POLL_MS;
     },
   });
 

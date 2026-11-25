@@ -17,6 +17,7 @@ import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { BucketAccessPanel } from '../components/storage/BucketAccessPanel';
 import { S3AccessPanel } from '../components/storage/S3AccessPanel';
 import type { BucketAccess } from '../hooks/useStorage';
+import { parseInstant } from '../utils/instant';
 
 // initialBucket opens that bucket first; the project view uses it to land on the card that was chosen.
 export function StoragePage({ initialBucket }: { readonly initialBucket?: string } = {}) {
@@ -268,7 +269,7 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
                   <td className="px-3 py-2 text-right text-text-secondary">{formatBytes(o.size)}</td>
                   <td className="px-3 py-2 text-text-secondary">{o.mimeType ?? '—'}</td>
                   <td className="px-3 py-2 text-text-secondary">
-                    {new Date(o.createdAt).toLocaleString()}
+                    {new Date(parseInstant(o.createdAt)).toLocaleString()}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <Button size="sm" variant="ghost" onClick={() => handleDownload(o.key)} title="Download">

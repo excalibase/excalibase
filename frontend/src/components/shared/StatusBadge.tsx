@@ -1,6 +1,7 @@
 import { CheckCircle, AlertTriangle, XCircle, Loader2, MinusCircle, PauseCircle, Trash2, HelpCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import type { ProvisioningStage } from '../../types';
+import { parseInstant } from '../../utils/instant';
 
 interface StatusBadgeProps {
   // The record's own status (project, backup, ...). Wins over the stage unless
@@ -54,7 +55,7 @@ const LOOKS: Record<string, Look> = {
 
 function formatDue(iso?: string): string {
   if (!iso) return '';
-  const due = new Date(iso);
+  const due = new Date(parseInstant(iso));
   return Number.isNaN(due.getTime()) ? '' : ` · ${due.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`;
 }
 

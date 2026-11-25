@@ -11,6 +11,7 @@ import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletio
 import { engineIcon, engineLabel } from '../utils/engine';
 import { LayoutLoading } from '../components/layout/v2/LayoutLoading';
 import { useStudioV2 } from '../hooks/useDeploymentMode';
+import { parseInstant } from '../utils/instant';
 const ProjectsPage = lazy(() => import('./home/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
 
 const ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
@@ -119,7 +120,7 @@ function renderInstancesContent(args: InstancesContentArgs) {
               <TierBadge tier={inst.tier} />
             </td>
             <td className="px-6 py-4"><StatusBadge status={inst.status} stage={inst.currentStage} deletionDueAt={inst.deletionDueAt} /></td>
-            <td className="px-6 py-4 text-text-tertiary">{new Date(inst.createdAt).toLocaleDateString()}</td>
+            <td className="px-6 py-4 text-text-tertiary">{new Date(parseInstant(inst.createdAt)).toLocaleDateString()}</td>
             <td className="px-6 py-4">
               <fieldset
                 className="flex items-center gap-2 justify-end border-0 p-0 m-0"

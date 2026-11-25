@@ -12,6 +12,7 @@ import {
   Legend
 } from 'recharts';
 import { Activity, Database, HardDrive, Cpu, Clock, Zap } from 'lucide-react';
+import { parseInstant } from '../utils/instant';
 
 interface MonitoringDashboardProps {
   readonly projectId: string;
@@ -48,7 +49,7 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
   };
 
   const formatTimestamp = (timestamp: string) => {
-    return new Date(timestamp).toLocaleTimeString();
+    return new Date(parseInstant(timestamp)).toLocaleTimeString();
   };
 
   // Prepare chart data. metric fields are nullable when the project is in
@@ -248,7 +249,7 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
                 <div>
                   <p className="text-sm text-text-tertiary">Last Backup</p>
                   <p className="text-sm font-medium text-text-primary">
-                    {new Date(metrics.lastBackupTime).toLocaleString()}
+                    {new Date(parseInstant(metrics.lastBackupTime)).toLocaleString()}
                   </p>
                 </div>
               )}
@@ -256,7 +257,7 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
                 <div>
                   <p className="text-sm text-text-tertiary">Next Backup</p>
                   <p className="text-sm font-medium text-text-primary">
-                    {new Date(metrics.nextBackupTime).toLocaleString()}
+                    {new Date(parseInstant(metrics.nextBackupTime)).toLocaleString()}
                   </p>
                 </div>
               )}

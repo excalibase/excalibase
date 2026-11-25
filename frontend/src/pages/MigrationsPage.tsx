@@ -3,6 +3,7 @@ import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { useMigrations, useApplyMigration, type MigrationRequest } from '../hooks/useMigrations';
 import { CheckCircle, XCircle, Clock, ArrowUpDown, Plus, X } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
+import { parseInstant } from '../utils/instant';
 
 interface StatusBadgeProps {
   readonly status: string;
@@ -127,7 +128,7 @@ export function MigrationsPage() {
                     {m.description && <p className="text-text-tertiary text-xs mt-0.5">{m.description}</p>}
                   </td>
                   <td className="px-6 py-4"><StatusBadge status={m.status} /></td>
-                  <td className="px-6 py-4 text-text-tertiary">{new Date(m.appliedAt).toLocaleString()}</td>
+                  <td className="px-6 py-4 text-text-tertiary">{new Date(parseInstant(m.appliedAt)).toLocaleString()}</td>
                   <td className="px-6 py-4 text-text-tertiary">
                     <span className="inline-flex items-center gap-1">
                       <Clock className="w-3 h-3" />{m.executionTimeMs}ms

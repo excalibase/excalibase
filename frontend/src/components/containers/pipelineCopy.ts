@@ -1,4 +1,5 @@
 import type { Deploy } from '../../api/apps';
+import { parseInstant } from '../../utils/instant';
 
 // The first twelve hex characters, as registries and docker show a digest.
 export function shortDigest(digest?: string): string {
@@ -24,7 +25,7 @@ export function deployDuration(deploy: Deploy): string {
   if (!deploy.finishedAt) return '';
   const seconds = Math.max(
     0,
-    Math.round((Date.parse(deploy.finishedAt) - Date.parse(deploy.createdAt)) / 1000),
+    Math.round((parseInstant(deploy.finishedAt) - parseInstant(deploy.createdAt)) / 1000),
   );
   if (Number.isNaN(seconds)) return '';
   if (seconds < 60) return `${seconds}s`;

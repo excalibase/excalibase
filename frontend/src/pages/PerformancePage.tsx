@@ -3,6 +3,7 @@ import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { usePerformanceSummary, useTopQueries, useWaitEvents, useEnablePerformanceInsights } from '../hooks/usePerformance';
 import { Zap, Clock, Database, AlertCircle, Settings, CheckCircle, type LucideIcon } from 'lucide-react';
 import { formatBytes } from '../utils/formatBytes';
+import { parseInstant } from '../utils/instant';
 // formatBytes is used to render summary.databaseSizeBytes below.
 
 type Tab = 'summary' | 'queries' | 'waits';
@@ -157,7 +158,7 @@ export function PerformancePage() {
                   </div>
                 ))}
               </div>
-              <p className="text-xs text-text-tertiary">Last collected: {summary.collectedAt ? new Date(summary.collectedAt).toLocaleString() : '—'}</p>
+              <p className="text-xs text-text-tertiary">Last collected: {summary.collectedAt ? new Date(parseInstant(summary.collectedAt)).toLocaleString() : '—'}</p>
             </div>
           )}
 

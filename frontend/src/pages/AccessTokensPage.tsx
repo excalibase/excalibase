@@ -14,6 +14,7 @@ import {
   type CreatedAccessToken,
   type TokenAccess,
 } from '../api/accessTokens';
+import { parseInstant } from '../utils/instant';
 
 const EXPIRY_OPTIONS = [
   { value: '7d', label: '7 days' },
@@ -31,12 +32,12 @@ function errorText(err: unknown, fallback: string): string {
 }
 
 function formatDate(value?: string | null): string {
-  return value ? new Date(value).toLocaleString() : 'Never';
+  return value ? new Date(parseInstant(value)).toLocaleString() : 'Never';
 }
 
 function expiryText(value?: string | null): string {
   if (!value) return 'Never';
-  return new Date(value).getTime() < Date.now() ? `Expired ${formatDate(value)}` : formatDate(value);
+  return new Date(parseInstant(value)).getTime() < Date.now() ? `Expired ${formatDate(value)}` : formatDate(value);
 }
 
 type CopyState = 'idle' | 'copied' | 'failed';

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
+import { parseInstant } from '../utils/instant';
 
 // Sites (EXC-353): a project's built frontend, uploaded and served from the CDN.
 export interface Site {
@@ -118,7 +119,7 @@ export const deleteSite = async (projectId: string, siteId: string): Promise<voi
 
 export const listSiteDeploys = async (projectId: string, siteId: string): Promise<SiteDeploy[]> => {
   const { data } = await api.get<SiteDeploy[]>(`${siteBase(projectId, siteId)}/deploys`);
-  return [...data].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return [...data].sort((a, b) => parseInstant(b.createdAt) - parseInstant(a.createdAt));
 };
 
 // The archive is the raw body, as `curl --data-binary @dist.tgz` sends it.

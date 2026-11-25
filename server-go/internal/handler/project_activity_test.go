@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -153,8 +154,14 @@ func TestProjectActivity_LastSeenAtExposedOnGetAndList(t *testing.T) {
 	if err := json.Unmarshal(body, &single); err != nil {
 		t.Fatalf("decode GET: %v", err)
 	}
-	if single["projectId"] != "p1" || single["lastSeenAt"] != "2026-09-10T08:30:00.000000000" {
+	if single["projectId"] != "p1" || single["lastSeenAt"] != "2026-09-10T08:30:00Z" {
 		t.Errorf("GET must carry projectId + lastSeenAt: %v", single)
+	}
+
+	for field, value := range single {
+		if text, ok := value.(string); ok && strings.HasSuffix(field, "At") && !strings.HasSuffix(text, "Z") && !strings.Contains(text, "+") {
+			t.Errorf("%s = %q must carry a zone", field, text)
+		}
 	}
 
 	_, body = getJSON(t, r, "/api/provision/")
@@ -167,7 +174,7 @@ func TestProjectActivity_LastSeenAtExposedOnGetAndList(t *testing.T) {
 		byID[item["projectId"].(string)] = item
 	}
 	// The GET above was itself activity, so p1's marker has moved past the seed.
-	if seenAt, _ := byID["p1"]["lastSeenAt"].(string); seenAt <= "2026-09-10T08:30:00.000000000" {
+	if seenAt, _ := byID["p1"]["lastSeenAt"].(string); seenAt <= "2026-09-10T08:30:00Z" {
 		t.Errorf("list must carry the bumped lastSeenAt for p1: %v", byID["p1"])
 	}
 	if _, present := byID["p2"]["lastSeenAt"]; present {

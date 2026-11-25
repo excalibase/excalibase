@@ -17,6 +17,7 @@ import { ToneBadge } from '../../containers/ContainerBits';
 import { databaseServiceStatus } from '../serviceStatus';
 import { panelSearch } from './panelState';
 import { card, Fact } from './sections';
+import { parseInstant } from '../../../utils/instant';
 
 const NOT_AVAILABLE = 'Not available';
 
@@ -34,7 +35,7 @@ function LiveState({ project }: { readonly project: DatabaseInstance }) {
     <section aria-labelledby="db-live-state" className={card}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 id="db-live-state" className="text-sm font-semibold text-text-primary">Live state</h3>
-        {dataUpdatedAt > 0 && <p className="text-xs text-text-tertiary">Read from the running database, checked {new Date(dataUpdatedAt).toLocaleTimeString()}</p>}
+        {dataUpdatedAt > 0 && <p className="text-xs text-text-tertiary">Read from the running database, checked {new Date(parseInstant(dataUpdatedAt)).toLocaleTimeString()}</p>}
       </div>
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Fact label="Status"><ToneBadge {...status} /></Fact>

@@ -11,6 +11,7 @@ import {
   type CreatedSdkKey,
   type SdkKeyType,
 } from '../api/sdkKeys';
+import { parseInstant } from '../utils/instant';
 
 function errorText(err: unknown, fallback: string): string {
   const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -121,7 +122,7 @@ export function SdkKeysPage() {
                 <td className="py-2">{key.name || '—'}</td>
                 <td>{key.keyType}</td>
                 <td><code className="text-xs">{displayPrefix(key)}…</code></td>
-                <td>{new Date(key.createdAt).toLocaleString()}</td>
+                <td>{new Date(parseInstant(key.createdAt)).toLocaleString()}</td>
                 <td className="text-right">
                   <button type="button" onClick={() => revoke(key.id, key.name || displayPrefix(key))}
                     className="text-red-400 hover:text-red-300">Revoke</button>

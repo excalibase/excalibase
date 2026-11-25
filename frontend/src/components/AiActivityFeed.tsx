@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Activity, Loader2 } from 'lucide-react';
 import { ConfirmModal } from './ui/ConfirmModal';
 import { aiActivityKey, callResult, useAiActivity, useRevokeActivityToken, type AiActivityCall } from '../api/aiActivity';
+import { parseInstant } from '../utils/instant';
 
 function errorText(err: unknown, fallback: string): string {
   const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -63,7 +64,7 @@ export function AiActivityFeed({ projectId }: { readonly projectId: string }) {
           <tbody>
             {activity.data.map((call) => (
               <tr key={call.id} data-testid={`ai-activity-${call.id}`} className="border-t border-border-primary text-text-primary">
-                <td className="py-2">{new Date(call.at).toLocaleString()}</td>
+                <td className="py-2">{new Date(parseInstant(call.at)).toLocaleString()}</td>
                 <td><code className="text-xs">{call.tool}</code></td>
                 <TokenCell call={call} onRevoke={setRevoking} />
                 <td className={call.status === 'ok' ? 'text-green-400' : 'text-red-400'}>{callResult(call)}</td>

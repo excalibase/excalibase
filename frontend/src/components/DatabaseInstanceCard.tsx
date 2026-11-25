@@ -10,6 +10,7 @@ import { ChevronDown, ChevronUp, Database, Trash2, Info, Activity, Key } from 'l
 import { useDeprovisionDatabase } from '../hooks/useProvisioning';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { engineLabel } from '../utils/engine';
+import { parseInstant } from '../utils/instant';
 
 interface DatabaseInstanceCardProps {
   readonly instance: DatabaseInstance;
@@ -147,7 +148,7 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
                   <div>
                     <p className="text-sm text-text-tertiary">Created</p>
                     <p className="text-text-primary font-medium">
-                      {new Date(instance.createdAt).toLocaleString()}
+                      {new Date(parseInstant(instance.createdAt)).toLocaleString()}
                     </p>
                   </div>
                   <div>
