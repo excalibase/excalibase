@@ -16,7 +16,7 @@ ENGINE=${1:-docker}
 CADDY_IMAGE=$(sed -n 's/^ *image: \(docker.io\/library\/caddy:.*\)$/\1/p' "$DIR/../compose.yaml")
 [ -n "$CADDY_IMAGE" ] || { echo "no Caddy image in compose.yaml" >&2; exit 1; }
 CADDY_IMAGE=$(mirror_ref "$CADDY_IMAGE")
-NGINX_IMAGE=$(sed -n 's/^FROM \(nginx:.*\)$/\1/p' "$DIR/../../../frontend/Dockerfile")
+NGINX_IMAGE=$(sed -n 's/^FROM \(${HUB_MIRROR}\)\{0,1\}\(nginx:.*\)$/\2/p' "$DIR/../../../frontend/Dockerfile")
 [ -n "$NGINX_IMAGE" ] || { echo "no nginx image in frontend/Dockerfile" >&2; exit 1; }
 NGINX_IMAGE=$(mirror_ref "$NGINX_IMAGE")
 NET=api-upload-edge-test-$$
