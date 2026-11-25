@@ -5,6 +5,7 @@ import { Camera, Download, Trash2, Plus, FileText } from 'lucide-react';
 import { formatBytes } from '../utils/formatBytes';
 import { API_BASE } from '../api/base';
 import { serverErrorMessage } from '../utils/serverError';
+import { formatInstant } from '../utils/instant';
 
 function getSnapshotType(schemaOnly: boolean, dataOnly: boolean): string {
   if (schemaOnly) return 'Schema only';
@@ -131,7 +132,7 @@ export function SnapshotsPage() {
                     )}
                   </td>
                   <td className="px-6 py-4 text-text-secondary">{formatBytes(s.size)}</td>
-                  <td className="px-6 py-4 text-text-tertiary">{new Date(s.createdAt).toLocaleString()}</td>
+                  <td className="px-6 py-4 text-text-tertiary">{formatInstant(s.createdAt)}</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       <a

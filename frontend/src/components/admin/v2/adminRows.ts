@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { serverErrorMessage } from '../../../utils/serverError';
+import { parseInstant } from '../../../utils/instant';
 
 const DASH = '—';
 
@@ -10,7 +11,7 @@ export const formatMemory = (bytes?: number) => (bytes == null ? DASH : `${(byte
 // The server sends a created time as text; an older shape wraps it in an object.
 export function createdOn(value: string | { time: string } | undefined): string {
   const raw = typeof value === 'object' ? value?.time : value;
-  const parsed = raw ? new Date(raw) : null;
+  const parsed = raw ? new Date(parseInstant(raw)) : null;
   return parsed && !Number.isNaN(parsed.getTime()) ? parsed.toLocaleDateString() : DASH;
 }
 

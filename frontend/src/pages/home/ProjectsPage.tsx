@@ -10,6 +10,7 @@ import { containsLabel, lastUsedAt, projectStatus, relativeTime, rowAction, serv
 import { ResumeButton } from './ResumeButton';
 import { useProjectServices, type LoadedServices } from './useHomeData';
 import type { DatabaseInstance } from '../../types';
+import { formatInstant, parseInstant } from '../../utils/instant';
 
 interface ProjectRow {
   project: DatabaseInstance;
@@ -30,7 +31,7 @@ export function buildRows(projects: readonly DatabaseInstance[], services: (proj
       const known = services(project.projectId);
       return { project, services: known, status: projectStatus(project, known), contains: containsLabel(project, known), lastUsed: lastUsedAt(project) };
     })
-    .sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0) || Date.parse(b.project.createdAt) - Date.parse(a.project.createdAt));
+    .sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0) || parseInstant(b.project.createdAt) - parseInstant(a.project.createdAt));
 }
 
 function columns(now: Date): Column<ProjectRow>[] {
@@ -51,7 +52,7 @@ function columns(now: Date): Column<ProjectRow>[] {
       id: 'status', header: 'Status', sortValue: (row) => row.status.label,
       cell: (row) => <span className={cn('font-medium', TONE[row.status.tone])}>{row.status.label}</span>,
     },
-    { id: 'created', header: 'Created', sortValue: (row) => Date.parse(row.project.createdAt), cell: (row) => <span className="text-text-secondary">{new Date(row.project.createdAt).toLocaleDateString()}</span> },
+    { id: 'created', header: 'Created', sortValue: (row) => parseInstant(row.project.createdAt), cell: (row) => <span className="text-text-secondary">{formatInstant(row.project.createdAt, 'date')}</span> },
     {
       id: 'used', header: 'Last used', sortValue: (row) => row.lastUsed,
       cell: (row) => <span className="text-text-secondary">{row.lastUsed === null ? '—' : relativeTime(row.lastUsed, now)}</span>,

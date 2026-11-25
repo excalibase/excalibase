@@ -129,3 +129,16 @@ describe('Projects list helpers', () => {
     expect(relativeTime('nope', NOW)).toBe('');
   });
 });
+
+describe('last used reads the server clock correctly', () => {
+  test('a project active seconds ago shows just now, in any browser zone', () => {
+    const justNow = new Date(NOW.getTime() - 5_000).toISOString();
+    expect(relativeTime(lastUsedAt(project('a', { lastActiveAt: justNow })) as number, NOW)).toBe('just now');
+  });
+
+  test('a zoneless time is unknown, never read as UTC or local', () => {
+    const zoneless = new Date(NOW.getTime() - 5_000).toISOString().replace('Z', '');
+    expect(lastUsedAt(project('a', { lastActiveAt: zoneless }))).toBeNull();
+    expect(relativeTime(zoneless, NOW)).toBe('');
+  });
+});

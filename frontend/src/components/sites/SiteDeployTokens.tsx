@@ -13,6 +13,7 @@ import {
 import { ConfirmModal } from '../ui/ConfirmModal';
 import { formatWhen } from '../containers/appCopy';
 import { Spinner, primaryButton, secondaryButton } from '../containers/ContainerBits';
+import { parseInstant } from '../../utils/instant';
 
 interface SiteRef {
   readonly projectId: string;
@@ -58,7 +59,7 @@ function IssuedToken({
 
 // tokenStatus is why a token would be refused now, or how long it has left.
 function tokenStatus(token: DeployToken): { readonly text: string; readonly refused: boolean } {
-  if (new Date(token.expiresAt).getTime() <= Date.now()) {
+  if (new Date(parseInstant(token.expiresAt)).getTime() <= Date.now()) {
     return { text: `Expired ${formatWhen(token.expiresAt)}`, refused: true };
   }
   if (token.creatorCanDeploy === false) {

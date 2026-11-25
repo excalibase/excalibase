@@ -2,6 +2,7 @@ import { useCallback, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import type { TierType } from '../types';
+import { parseInstant } from '../utils/instant';
 
 export type VarKind = 'literal' | 'reference' | 'secret';
 
@@ -358,7 +359,7 @@ const LIFECYCLE_DONE: Record<LifecycleOperation, (app: App | null) => boolean> =
 // Whether the operation started at acceptedAt has finished, from the app as read.
 export function lifecycleOutcome(pending: PendingLifecycle, app: App | null): LifecycleOutcome {
   const failure = app?.lifecycleFailure;
-  if (failure?.operation === pending.operation && Date.parse(failure.at) >= Date.parse(pending.acceptedAt)) {
+  if (failure?.operation === pending.operation && parseInstant(failure.at) >= parseInstant(pending.acceptedAt)) {
     return { state: 'failed', reason: failure.reason };
   }
   return LIFECYCLE_DONE[pending.operation](app) ? { state: 'done' } : { state: 'pending' };

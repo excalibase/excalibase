@@ -16,6 +16,7 @@ import { useProjectRole } from '../hooks/useProjectRole';
 import { ConfirmModal } from './ui/ConfirmModal';
 import { formatWhen } from './containers/appCopy';
 import { Spinner, primaryButton, secondaryButton } from './containers/ContainerBits';
+import { parseInstant } from '../utils/instant';
 
 interface ProjectRef {
   readonly projectId: string;
@@ -86,7 +87,7 @@ function IssuedKey({
 }
 
 function keyStatus(key: MetricsKey): { readonly text: string; readonly refused: boolean } {
-  if (key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now()) {
+  if (key.expiresAt && new Date(parseInstant(key.expiresAt)).getTime() <= Date.now()) {
     return { text: `Expired ${formatWhen(key.expiresAt)}`, refused: true };
   }
   return { text: key.expiresAt ? `Expires ${formatWhen(key.expiresAt)}` : '', refused: false };

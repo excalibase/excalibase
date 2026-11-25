@@ -12,6 +12,7 @@ import {
 import { Button } from '../Button';
 import { toLocalInput, toZonedInstant } from '../../utils/zonedInstant';
 import { serverErrorCode, serverErrorMessage } from '../../utils/serverError';
+import { formatInstant } from '../../utils/instant';
 
 type RestoreTone = 'pending' | 'ok' | 'error';
 
@@ -126,7 +127,7 @@ function MySQLWindowNote({ window }: { readonly window?: RestoreWindow }) {
   return (
     <p data-testid="restore-window" className="text-sm text-text-secondary">
       {window
-        ? `Point-in-time within the backup window: ${new Date(window.earliest).toLocaleString()} – ${new Date(window.latest).toLocaleString()}. Leave the target time blank to restore the latest backup.`
+        ? `Point-in-time within the backup window: ${formatInstant(window.earliest)} – ${formatInstant(window.latest)}. Leave the target time blank to restore the latest backup.`
         : 'No backup has completed yet, so there is nothing to restore.'}
     </p>
   );

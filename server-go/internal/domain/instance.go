@@ -6,13 +6,16 @@ import (
 	"time"
 )
 
-// FlexTime handles both Go RFC3339 and Java LocalDateTime (no timezone) formats.
+// FlexTime writes an instant as RFC 3339 in UTC, zone included, so a browser
+// reads the same moment whatever the server's clock zone is. It reads RFC 3339
+// and the older zoneless forms, which older rows hold; those were written in
+// UTC and are read as UTC.
 type FlexTime struct {
 	time.Time
 }
 
 func (ft FlexTime) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + ft.Time.Format("2006-01-02T15:04:05.000000000") + `"`), nil
+	return []byte(`"` + ft.Time.UTC().Format(time.RFC3339Nano) + `"`), nil
 }
 
 func (ft *FlexTime) UnmarshalJSON(b []byte) error {
@@ -20,7 +23,7 @@ func (ft *FlexTime) UnmarshalJSON(b []byte) error {
 	if s == "" || s == "null" {
 		return nil
 	}
-	// Try RFC3339 first, then Java LocalDateTime
+	// RFC3339 first, then the zoneless forms, read as UTC
 	for _, layout := range []string{
 		time.RFC3339Nano,
 		time.RFC3339,
