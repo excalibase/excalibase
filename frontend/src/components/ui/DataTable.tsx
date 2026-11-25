@@ -304,7 +304,7 @@ function PhoneControls<T>({ visible, sort, onSort, selectable, selection }: Pick
       {selectable && (
         <label className="flex items-center gap-2">
           <input type="checkbox" aria-label="Select every row on this page" checked={selection.allSelected} onChange={selection.toggleAll} />
-          Select page
+          <span>Select page</span>
         </label>
       )}
     </div>

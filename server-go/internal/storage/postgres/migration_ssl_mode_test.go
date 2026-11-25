@@ -15,7 +15,7 @@ func TestBackfillSSLModeTouchesOnlySingleHostRowsWithNone(t *testing.T) {
 	}
 	statements := strings.Count(string(raw), ";")
 	sql := strings.Join(strings.Fields(string(raw)), " ")
-	if statements != 1 || !strings.HasSuffix(sql, "UPDATE database_instances SET ssl_mode = 'disable' WHERE deployment_mode = 'docker' AND COALESCE(ssl_mode, '') = '';") {
+	if statements != 1 || !strings.HasSuffix(sql, "UPDATE database_instances SET ssl_mode = 'disable' WHERE deployment_mode = 'docker' AND (ssl_mode IS NULL OR ssl_mode = '');") {
 		t.Fatalf("migration is not the one guarded update: %q", sql)
 	}
 }
