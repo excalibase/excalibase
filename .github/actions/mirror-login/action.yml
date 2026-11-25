@@ -1,0 +1,15 @@
+name: Log in to the image mirror
+description: >-
+  EXC-881: CI pulls Docker Hub images from ghcr.io/excalibase/mirror/. The packages are public, so
+  a run without a token (a fork PR) still pulls anonymously; with a token the pulls count as the
+  repository's, not an anonymous address's.
+runs:
+  using: composite
+  steps:
+    - name: Log in to ghcr.io
+      if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}

@@ -9,9 +9,12 @@
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# EXC-881: CI pulls Docker Hub images from its mirror (IMAGE_MIRROR); unset, the names are unchanged.
+# shellcheck disable=SC1091
+. "$DIR/../../ci/mirror-images.sh"
 IMAGE=${IMAGE:-docker.io/excalibase/provisioning:ci}
-TENANT_IMAGE=docker.io/library/alpine:3.20
-DIND=${DIND_IMAGE:-docker.io/library/docker:29-dind}
+TENANT_IMAGE=$(mirror_ref docker.io/library/alpine:3.20)
+DIND=${DIND_IMAGE:-$(mirror_ref docker.io/library/docker:29-dind)}
 MACHINE=exc683-reboot-$$
 FIREWALL=excalibase-host-firewall
 PROXY=excalibase-engine-proxy
