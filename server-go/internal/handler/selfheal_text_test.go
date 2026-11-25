@@ -12,12 +12,12 @@ import (
 // are, and a pause that ends in one is still a conflict to come back to.
 func TestSelfHealText_CustomerReadsTheRetryingSentences(t *testing.T) {
 	for _, sentence := range []error{service.ErrPauseRetrying, service.ErrResumeRetrying} {
-		if got := publicFailureMessage(sentence.Error()); got != sentence.Error() {
+		if publicFailureMessage(sentence.Error()) != sentence.Error() {
 			t.Errorf("%q withheld from the customer", sentence)
 		}
 		wrapped := fmt.Errorf("resume p1 at start: pod p1-postgres-1 gone: %w", sentence)
-		if got := lifecycleMessage(wrapped); got != sentence.Error() {
-			t.Errorf("lifecycle message = %q, want %q", got, sentence)
+		if lifecycleMessage(wrapped) != sentence.Error() {
+			t.Errorf("lifecycle message = %q, want %q", lifecycleMessage(wrapped), sentence)
 		}
 	}
 	if !errors.Is(service.ErrPauseRetrying, service.ErrPauseNotObserved) {
