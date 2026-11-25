@@ -48,6 +48,12 @@ func mcpServer(t *testing.T) (*httptest.Server, *discardAudit) {
 
 func mcpServerWith(t *testing.T, flags features.Flags) (*httptest.Server, *discardAudit) {
 	t.Helper()
+	return mcpServerTweaked(t, flags, nil)
+}
+
+// mcpServerTweaked is mcpServerWith with a hook that swaps in stand-ins for stores the harness leaves offline.
+func mcpServerTweaked(t *testing.T, flags features.Flags, tweak func(deps *handlerDeps, instances *fakestore.Instances, orgs *fakestore.Orgs)) (*httptest.Server, *discardAudit) {
+	t.Helper()
 	instances := fakestore.NewInstances()
 	instances.Items[matrixProjectA] = &domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"}
 	instances.Items[matrixProjectB] = &domain.DatabaseInstance{ProjectID: matrixProjectB, OrgID: matrixOrgB, Status: "ACTIVE"}
@@ -70,6 +76,9 @@ func mcpServerWith(t *testing.T, flags features.Flags) (*httptest.Server, *disca
 	audit := &discardAudit{}
 	deps.mcpAudit = audit
 	deps.features = flags
+	if tweak != nil {
+		tweak(deps, instances, platform.Orgs)
+	}
 	cfg := config.AppConfig{DeploymentMode: "cloud", AppHostingEnabled: true, PublicBaseURL: "https://api.example.test"}
 	server := httptest.NewServer(buildRouter(cfg, platform, instances, deps))
 	t.Cleanup(server.Close)

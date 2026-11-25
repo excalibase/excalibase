@@ -110,7 +110,7 @@ test.describe('Real-user studio flow (no mocks)', () => {
     await expect(page.getByTestId('vault-setup-admin')).toHaveCount(0, { timeout: 15_000 });
 
     // Signed in with a cookie no script can read, as the platform admin.
-    const session = (await page.context().cookies()).find((c) => c.name === 'excali_session');
+    const session = (await page.context().cookies()).find((c) => c.name === '__Host-excali_session');
     expect(session?.httpOnly).toBe(true);
     expect(await page.evaluate(() => localStorage.getItem('auth_token'))).toBeNull();
     const me = await page.request.get(`${apiUrl}/auth/me`);

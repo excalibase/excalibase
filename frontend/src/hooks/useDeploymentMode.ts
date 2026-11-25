@@ -29,7 +29,10 @@ export type Feature =
   | 'dbcopy'
   | 'majorupgrade'
   | 'appgitbuilds'
-  | 's3';
+  | 's3'
+  | 'onetimecredentials'
+  // The cloud-console layout of Studio (EXC-762); off until the owner turns it on.
+  | 'studio_v2';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
@@ -44,6 +47,10 @@ interface ConfigResponse {
   features?: Partial<Record<Feature, boolean>>;
   // The public API base the SDK, REST and GraphQL calls go to.
   apiUrl?: string;
+  // Where the operator console is also served (EXC-757); absent when it is not.
+  adminHost?: string;
+  // False when the server has the console switched off (a cloud install with no admin host).
+  adminConsole?: boolean;
 }
 
 function useStudioConfig() {
@@ -100,6 +107,20 @@ export function useFeatureEnabled(feature: Feature): { enabled: boolean; isLoadi
   return { enabled: data?.features?.[feature] === true, isLoading };
 }
 
+// The new Studio layout: off while the server has not answered, so a signed-in
+// page never flashes the new shell before the flag is known.
+export function useStudioV2(): { enabled: boolean; isLoading: boolean } {
+  return useFeatureEnabled('studio_v2');
+}
+
+// The flag for a page that waits for it: loading only until the first answer or
+// failure. A failed /config is retried each time a page mounts, and that retry
+// must not put a spinner over a page whose layout already settled on "off".
+export function useStudioV2Settling(): { enabled: boolean; loading: boolean } {
+  const { data, isLoading, errorUpdateCount } = useStudioConfig();
+  return { enabled: data?.features?.studio_v2 === true, loading: isLoading && errorUpdateCount === 0 };
+}
+
 // Every feature the server reports on; empty until it answers.
 export function useFeatures(): Partial<Record<Feature, boolean>> {
   const { data } = useStudioConfig();
@@ -119,4 +140,26 @@ export function useApiUrl(): { apiUrl: string | undefined; isLoading: boolean } 
   const { data, isLoading } = useStudioConfig();
   const apiUrl = data?.apiUrl?.trim();
   return { apiUrl: apiUrl || undefined, isLoading };
+}
+
+// useIsAdminHost is true on the hostname the operator console is served at, so
+// the root page there is the console and not a customer's dashboard.
+export function useIsAdminHost(currentHost: string = globalThis.location?.hostname ?? ''): boolean {
+  const { data } = useStudioConfig();
+  const adminHost = data?.adminHost?.trim().toLowerCase();
+  return !!adminHost && currentHost.toLowerCase() === adminHost;
+}
+
+// AdminRouteRule says whether the console's pages may be shown on this host:
+// with an admin host configured they are served there and nowhere else, so any
+// other host gets the page a missing route gets (EXC-757).
+export type AdminRouteRule = 'loading' | 'allowed' | 'refused';
+
+export function useAdminRouteRule(currentHost: string = globalThis.location?.hostname ?? ''): AdminRouteRule {
+  const { data, isLoading } = useStudioConfig();
+  if (isLoading) return 'loading';
+  if (data?.adminConsole === false) return 'refused';
+  const adminHost = data?.adminHost?.trim().toLowerCase();
+  if (!adminHost) return 'allowed';
+  return currentHost.toLowerCase() === adminHost ? 'allowed' : 'refused';
 }

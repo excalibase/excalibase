@@ -13,7 +13,8 @@ import { useFeatures, type Feature } from '../hooks/useDeploymentMode';
 // refuses those calls with 409 regardless; this only saves the round trip.
 // mysql marks pages that also work on a MySQL project (EXC-586, ADR 0041);
 // mysqlFeature, pages that do while that feature is on.
-export function DatabaseRequired({ mysql = false, mysqlFeature }: { readonly mysql?: boolean; readonly mysqlFeature?: Feature }) {
+export function DatabaseRequired({ mysql = false, mysqlFeature, children }: { readonly mysql?: boolean; readonly mysqlFeature?: Feature; readonly children?: React.ReactNode }) {
+  const content = children ?? <Outlet />;
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: project, error } = useInstance(projectId);
   const features = useFeatures();
@@ -33,8 +34,8 @@ export function DatabaseRequired({ mysql = false, mysqlFeature }: { readonly mys
       </div>
     );
   }
-  if (isMySQLProject(project)) return servesMySQL ? <Outlet /> : <PostgresRequired projectId={projectId} />;
-  if (!project.noDatabase) return <Outlet />;
+  if (isMySQLProject(project)) return servesMySQL ? content : <PostgresRequired projectId={projectId} />;
+  if (!project.noDatabase) return <>{content}</>;
   return (
     <div data-testid="database-required" className="max-w-xl mx-auto py-16 text-center space-y-4">
       <Database className="w-10 h-10 mx-auto text-text-tertiary" />

@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	gatewayImage = "ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:8a5c7e533dc0fbed8ed780b22e31001a6b12ae0eb670f4aac62c1ded782742ed"
+	gatewayImage = "excalibase/documentdb-gateway:0.117.0@sha256:893e6085f202fa0c4b65f3205c84f9b343aa9defe978cf1650577040ef755e6c"
 	otherImage   = "docker.io/library/alpine@sha256:0a4eaa0eecf5f8c050e5bba433f58c052be7587ee8af3e8b3910ef9ab5fbe9f5"
 )
 

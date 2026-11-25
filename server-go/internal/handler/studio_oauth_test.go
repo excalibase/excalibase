@@ -114,7 +114,7 @@ func newOAuthHarness(t *testing.T, inviteOnly bool) *oauthHarness {
 func (h *oauthHarness) callback(browserState string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("GET", "/api/auth/oauth/github/callback?code=c&state=st4te", nil)
 	if browserState != "" {
-		req.AddCookie(&http.Cookie{Name: oauthStateCookie, Value: browserState})
+		req.AddCookie(&http.Cookie{Name: auth.CookieName(oauthStateCookie), Value: browserState})
 	}
 	w := httptest.NewRecorder()
 	h.router.ServeHTTP(w, req)
@@ -166,7 +166,7 @@ func TestOAuthStartSendsTheBrowserToTheProviderWithABoundState(t *testing.T) {
 	}
 	var state *http.Cookie
 	for _, c := range w.Result().Cookies() {
-		if c.Name == oauthStateCookie {
+		if c.Name == auth.CookieName(oauthStateCookie) {
 			state = c
 		}
 	}
@@ -390,7 +390,7 @@ func TestOAuthCallbackClearsTheStateCookie(t *testing.T) {
 	h := newOAuthHarness(t, false)
 	w := h.callback("st4te")
 	for _, c := range w.Result().Cookies() {
-		if c.Name == oauthStateCookie && c.MaxAge >= 0 {
+		if c.Name == auth.CookieName(oauthStateCookie) && c.MaxAge >= 0 {
 			t.Fatalf("state cookie left in place: %+v", c)
 		}
 	}

@@ -39,12 +39,12 @@ function notRunning(status: string): NotRunning {
 // Wraps the pages that connect to the project's database. The server serves
 // only an ACTIVE project's database (projectdb.checkServable) and answers 409
 // otherwise; this says why instead of leaving each page loading.
-export function DatabaseRunning() {
+export function DatabaseRunning({ children }: { readonly children?: React.ReactNode }) {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: project } = useInstance(projectId);
 
   // Loading and load errors are DatabaseRequired's, which wraps this.
-  if (!project || project.status === 'ACTIVE') return <Outlet />;
+  if (!project || project.status === 'ACTIVE') return <>{children ?? <Outlet />}</>;
   const state = notRunning(project.status ?? '');
   return (
     <div data-testid="database-not-running" className="max-w-xl mx-auto py-16 text-center space-y-4">

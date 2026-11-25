@@ -19,7 +19,10 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -80,7 +83,11 @@ func newRealRigWith(t *testing.T, configure func(*Options), dbCommand ...string)
 	if configure != nil {
 		configure(&options)
 	}
-	rig.rt, err = New(proxied, options)
+	var engine Engine = proxied
+	if os.Getenv("IT_NO_CPU_LIMIT") != "" {
+		engine = noCPULimit{Engine: proxied}
+	}
+	rig.rt, err = New(engine, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +95,17 @@ func newRealRigWith(t *testing.T, configure func(*Options), dbCommand ...string)
 		t.Fatal(err)
 	}
 	return rig
+}
+
+// noCPULimit drops CPU limits where the engine's user has no cpu cgroup controller (a
+// desktop session delegates only memory and pids): IT_NO_CPU_LIMIT=1 runs the rest of the test there.
+type noCPULimit struct{ Engine }
+
+func (n noCPULimit) ContainerCreate(ctx context.Context, config *container.Config, host *container.HostConfig,
+	networking *network.NetworkingConfig, platform *ocispec.Platform, name string) (container.CreateResponse, error) {
+	unlimited := *host
+	unlimited.NanoCPUs = 0
+	return n.Engine.ContainerCreate(ctx, config, &unlimited, networking, platform, name)
 }
 
 func pullDirect(t *testing.T, engine *client.Client, ref string) {

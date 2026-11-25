@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/sites"
@@ -25,7 +26,6 @@ import (
 // Lax, because the git host returns the browser with a cross-site navigation.
 const (
 	siteGitBrowserCookie = "excali_site_git"
-	siteGitCookiePath    = "/api/sites/github"
 )
 
 const (
@@ -281,10 +281,7 @@ func (h *SiteGitHandler) webhook(w http.ResponseWriter, r *http.Request) {
 // callback finishes a sign-in and sends the browser back to the site's or app's page in Studio.
 func (h *SiteGitHandler) callback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, siteGitCookie("", -1))
-	var browserKey string
-	if cookie, err := r.Cookie(siteGitBrowserCookie); err == nil {
-		browserKey = cookie.Value
-	}
+	browserKey, _ := auth.ReadCookie(r, siteGitBrowserCookie)
 	query := r.URL.Query()
 	signIn, err := h.builds.FinishSignIn(r.Context(), query.Get("state"), browserKey, query.Get("code"))
 	if signIn.ProjectID == "" {
@@ -313,8 +310,7 @@ func signInReturn(studioURL string, signIn sitebuilds.SignIn, outcome url.Values
 }
 
 func siteGitCookie(value string, maxAge int) *http.Cookie {
-	return &http.Cookie{Name: siteGitBrowserCookie, Value: value, Path: siteGitCookiePath, MaxAge: maxAge,
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode}
+	return auth.NewCookie(siteGitBrowserCookie, value, maxAge, http.SameSiteLaxMode)
 }
 
 // writeSiteGitError maps the git-build refusals, then the Sites ones.

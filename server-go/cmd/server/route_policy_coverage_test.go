@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/adminaccess"
 	"github.com/excalibase/provisioning-poc/internal/s3keys"
 	"net/http"
 	"net/http/httptest"
@@ -55,6 +56,7 @@ const (
 	policyBoundID    = "bound-a"
 	policySvcAuthID  = "svc-auth-policy"
 	policySvcGqlID   = "svc-graphql-policy"
+	policySvcBootID  = "svc-bootstrap-policy"
 	policyOtherOrgID = "member-b"
 )
 
@@ -84,12 +86,13 @@ var gateRefusalBodies = map[string]bool{
 	`{"error":"a deploy token may only deploy its own site and read its deploys"}`: true,
 	`{"error":"a metrics key may only read its own project's metrics"}`:            true,
 	// Refusals the handlers write themselves, in their own words.
-	`{"error":"org not found","status":404}`:                 true,
-	`{"error":"insufficient permissions","status":403}`:      true,
-	`{"error":"only org owner can delete","status":403}`:     true,
-	`{"error":"unauthorized","status":401}`:                  true,
-	`{"error":"auth required","status":401}`:                 true,
-	`{"error":"internal route not configured","status":503}`: true,
+	`{"error":"org not found","status":404}`:                                                    true,
+	`{"error":"insufficient permissions","status":403}`:                                         true,
+	`{"error":"only org owner can delete","status":403}`:                                        true,
+	`{"error":"unauthorized","status":401}`:                                                     true,
+	`{"error":"auth required","status":401}`:                                                    true,
+	`{"error":"internal route not configured","status":503}`:                                    true,
+	`{"error":"the admin console needs a signed-in session, not an access token","status":403}`: true,
 	// The in-cluster-only gate answers like an unmounted route.
 	`404 page not found`: true,
 	// The end-user function gate: no studio credential is an end-user JWT.
@@ -148,6 +151,9 @@ func policyRouterWith(t *testing.T, shape func(*domain.DatabaseInstance)) (*poli
 
 	cfg := config.AppConfig{DeploymentMode: "cloud", AppHostingEnabled: true}
 	deps := policyDeps(t, instances, platform, functions)
+	// The matrix tests who each route admits, not the admin host's fence, which
+	// admin_host_wiring_test.go covers: leave the console reachable on any host.
+	deps.adminGateOverride = &adminaccess.GateConfig{}
 	router := buildRouter(cfg, platform, instances, deps)
 	principals := policyPrincipals(platform)
 	reseed := func() {
@@ -228,6 +234,7 @@ func policyPrincipals(platform *fakePlatform) []principal {
 	add(routepolicy.Principal{Name: "metricsKey", OrgRole: domain.OrgRoleAdmin, ReadOnly: true, Restricted: true, MetricsKey: true},
 		policyAdminID, "user", domain.AccessToken{Scopes: auth.ScopeMetricsRead, ProjectID: matrixProjectA})
 	addCapability(platform, &out, "svcAuthToken", policySvcAuthID, chartPermissions[svcAuth])
+	addCapability(platform, &out, "svcBootstrapToken", policySvcBootID, chartPermissions[svcBootstrap])
 	addCapability(platform, &out, "svcGraphqlToken", policySvcGqlID, chartPermissions[svcGraphql])
 	return out
 }

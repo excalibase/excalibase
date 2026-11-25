@@ -16,12 +16,12 @@ describe('EnvVarEditor', () => {
     const onChange = mount([]);
     expect(screen.getByText(/no variables yet/i)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('env-add'));
-    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ name: '', kind: 'literal' })]);
+    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ name: '', kind: 'secret' })]);
   });
 
   test('editing a name or value changes only that row', () => {
-    const first = row({ name: 'A', value: '1' });
-    const second = row({ name: 'B', value: '2' });
+    const first = row({ name: 'A', kind: 'literal', value: '1' });
+    const second = row({ name: 'B', kind: 'literal', value: '2' });
     const onChange = mount([first, second]);
     fireEvent.change(screen.getByTestId('env-name-1'), { target: { value: 'API_URL' } });
     expect(onChange).toHaveBeenLastCalledWith([first, { ...second, name: 'API_URL' }]);
@@ -102,9 +102,22 @@ describe('EnvVarEditor', () => {
   });
 
   test('changing the kind of a row', () => {
-    const literal = row({ name: 'A' });
+    const literal = row({ name: 'A', kind: 'literal' });
     const onChange = mount([literal]);
     fireEvent.change(screen.getByTestId('env-kind-0'), { target: { value: 'secret' } });
     expect(onChange).toHaveBeenCalledWith([{ ...literal, kind: 'secret' }]);
+  });
+
+  // EXC-761: a credential-looking name is always a Secret, never a plain value.
+  test('a name like API_KEY switches a plain value to a Secret and refuses the plain option', () => {
+    const plain = row({ name: 'A', kind: 'literal', value: 'x' });
+    const onChange = mount([plain]);
+    fireEvent.change(screen.getByTestId('env-name-0'), { target: { value: 'STRIPE_API_KEY' } });
+    expect(onChange).toHaveBeenLastCalledWith([{ ...plain, name: 'STRIPE_API_KEY', kind: 'secret' }]);
+  });
+
+  test('the plain option is disabled for a credential-looking name', () => {
+    mount([row({ name: 'DB_PASSWORD', kind: 'secret' })]);
+    expect(screen.getByTestId('env-kind-0').querySelector('option[value="literal"]')).toBeDisabled();
   });
 });

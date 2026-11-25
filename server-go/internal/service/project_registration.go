@@ -26,6 +26,8 @@ const (
 	roleWatcher   = "cdc_watcher"
 	// roleReader is the SELECT-only login the read address names (EXC-675).
 	roleReader = pgroles.ReaderRole
+	// roleRuntime is the login apps and functions connect with (EXC-765).
+	roleRuntime = pgroles.RuntimeRole
 )
 
 // ErrProjectRegistrationInvalid is returned when a caller asks to register a
@@ -318,6 +320,8 @@ type projectRoleCredentials struct {
 	schedulerPassword string
 	// readerPassword is empty unless the project gets the SELECT-only login.
 	readerPassword string
+	// runtimePassword is empty unless the project's apps get a login of their own (EXC-765).
+	runtimePassword string
 }
 
 // newProjectRoleCredentials mints the platform roles' passwords; the reader
@@ -331,6 +335,9 @@ func (s *ProvisioningService) newProjectRoleCredentials(ctx context.Context) pro
 	}
 	if features.Enabled(ctx, s.flags, features.DBReadRole) {
 		creds.readerPassword = generatePassword(32)
+	}
+	if features.Enabled(ctx, s.flags, features.AppRuntimeLogin) {
+		creds.runtimePassword = generatePassword(32)
 	}
 	return creds
 }
@@ -410,8 +417,9 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, spec proje
 		roleWatcher:   creds.watcherPassword,
 		roleScheduler: creds.schedulerPassword,
 		roleReader:    creds.readerPassword,
+		roleRuntime:   creds.runtimePassword,
 	}
-	for _, role := range []string{roleAuthAdmin, roleApp, roleWatcher, roleScheduler, roleReader} {
+	for _, role := range []string{roleAuthAdmin, roleApp, roleWatcher, roleScheduler, roleReader, roleRuntime} {
 		if passwords[role] == "" {
 			continue
 		}
@@ -469,7 +477,8 @@ func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicat
 		realtimeIdentitySQL(publicationName) +
 		pgroles.CustomerRoleSQL(spec.adminUsername) +
 		pgroles.OwnerAccessSQL(spec.adminUsername) +
-		readerSQL(spec.adminUsername, verifiers.reader)
+		readerSQL(spec.adminUsername, verifiers.reader) +
+		runtimeSQL(spec.adminUsername, verifiers.runtime)
 	if spec.resetPasswords {
 		targets, err := roleVerifiers(resetTargets(spec, creds))
 		if err != nil {
@@ -485,7 +494,7 @@ func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicat
 
 // projectRoleVerifiers are the platform roles' passwords as SCRAM verifiers.
 type projectRoleVerifiers struct {
-	auth, app, watcher, scheduler, reader string
+	auth, app, watcher, scheduler, reader, runtime string
 }
 
 // verifiers hashes the credentials. A role with no password has no verifier:
@@ -498,6 +507,7 @@ func (c projectRoleCredentials) verifiers() (projectRoleVerifiers, error) {
 	}{
 		{c.authPassword, &verifiers.auth}, {c.appPassword, &verifiers.app}, {c.watcherPassword, &verifiers.watcher},
 		{c.schedulerPassword, &verifiers.scheduler}, {c.readerPassword, &verifiers.reader},
+		{c.runtimePassword, &verifiers.runtime},
 	} {
 		if role.password == "" {
 			continue
@@ -523,6 +533,9 @@ func resetTargets(spec projectRoleSpec, creds projectRoleCredentials) []RolePass
 	if creds.readerPassword != "" {
 		targets = append(targets, RolePassword{Role: roleReader, Password: creds.readerPassword})
 	}
+	if creds.runtimePassword != "" {
+		targets = append(targets, RolePassword{Role: roleRuntime, Password: creds.runtimePassword})
+	}
 	if spec.resetAdmin {
 		targets = append(targets, RolePassword{Role: spec.adminUsername, Password: spec.adminPassword})
 	}
@@ -536,6 +549,16 @@ func readerSQL(owner, verifier string) string {
 		return pgroles.ReaderLockSQL()
 	}
 	return pgroles.ReaderRoleSQL(owner, verifier)
+}
+
+// runtimeSQL creates the login apps and functions use when the project has
+// one, and otherwise locks one a restored copy brought. It follows the
+// reader's SQL, whose login it shares new tables with.
+func runtimeSQL(owner, verifier string) string {
+	if verifier == "" {
+		return pgroles.RuntimeLockSQL()
+	}
+	return pgroles.RuntimeRoleSQL(owner, verifier)
 }
 
 // assertNoStoredCredentials refuses to register a project whose vault prefix

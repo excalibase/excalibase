@@ -28,7 +28,7 @@ func mountDBReadAddress(r *chi.Mux, sqlStore storage.OrgStore, store storage.Ins
 		r.Use(readAddressGate(d.features))
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(projectAccess(store, sqlStore, d)...)
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
 		r.Use(custommw.RequireProjectDatabase(store))

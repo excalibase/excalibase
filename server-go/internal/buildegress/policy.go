@@ -12,6 +12,8 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/registryblock"
 )
 
 // ErrRefused wraps every destination the policy turns away.
@@ -78,6 +80,9 @@ func allowKey(entry string) (string, error) {
 func (p Policy) Resolve(ctx context.Context, resolver Resolver, host, port string) (netip.AddrPort, error) {
 	host = strings.ToLower(strings.Trim(host, "[]"))
 	target := net.JoinHostPort(host, port)
+	if registryblock.IsHostOrSubdomain(host) {
+		return netip.AddrPort{}, fmt.Errorf("%w: %s is a blocked registry; push the image to a registry such as Docker Hub or GHCR", ErrRefused, target)
+	}
 	allowed := p.allowed[target]
 	number, err := strconv.Atoi(port)
 	if err != nil || number < 1 || number > 65535 || (!allowed && !webPorts[port]) {

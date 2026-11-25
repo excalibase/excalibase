@@ -225,7 +225,7 @@ services:
       # Project watchers alone reach NATS on the bus network (EXC-612).
       PROXY_CDC_NETWORK: excalibase-cdc
       PROXY_CDC_IMAGES: *watcher_image
-      PROXY_NETNS_JOIN_IMAGES: ${DOCUMENTDB_ENABLED:+ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:8a5c7e533dc0fbed8ed780b22e31001a6b12ae0eb670f4aac62c1ded782742ed}
+      PROXY_NETNS_JOIN_IMAGES: ${DOCUMENTDB_ENABLED:+excalibase/documentdb-gateway:0.117.0@sha256:893e6085f202fa0c4b65f3205c84f9b343aa9defe978cf1650577040ef755e6c}
       PROXY_STATS_CONTAINERS: *platform_containers
       # Each platform network's real bridge, for the host firewall (EXC-683).
       PROXY_BRIDGE_NETWORKS: *bridge_networks
@@ -286,6 +286,8 @@ services:
       # Accounts by invitation; the first admin registers with the setup token.
       REGISTRATION_MODE: ${REGISTRATION_MODE:-invite}
       STUDIO_URL: https://studio.${EXCALIBASE_DOMAIN:?run ./init.sh first}
+      # Insecure: only for a plain-http install; never with an https STUDIO_URL (the server refuses it).
+      STUDIO_INSECURE_COOKIES: ${STUDIO_INSECURE_COOKIES:-false}
       # Studio's SDK key routes relay here with a key-admin token provisioning signs.
       AUTH_INTERNAL_URL: http://auth:24000
       # Features that ship dark (EXC-554): off unless the env file says "true".
@@ -317,6 +319,19 @@ services:
       FEATURE_HOSTMETRICS: ${FEATURE_HOSTMETRICS:-false}
       # A preview per branch or pull request of a git-connected site (EXC-660); needs site git builds.
       FEATURE_SITEPREVIEWS: ${FEATURE_SITEPREVIEWS:-false}
+      # Security guards (EXC-755): on unless set to false.
+      FEATURE_PROXYBLOCK: ${FEATURE_PROXYBLOCK:-true}
+      FEATURE_SIGNUPGUARD: ${FEATURE_SIGNUPGUARD:-true}
+      # Database passwords are shown once and never read back (EXC-759); on by default.
+      FEATURE_ONETIMECREDENTIALS: ${FEATURE_ONETIMECREDENTIALS:-true}
+      # MCP's destructive tools ask twice: on unless set to false.
+      FEATURE_MCPCONFIRM: ${FEATURE_MCPCONFIRM:-true}
+      # Studio's cloud-console layout (EXC-762).
+      # Functions cannot serve HTML, XHTML or SVG pages from the shared API origin (EXC-810); on by default.
+      FEATURE_FUNCTIONHTMLGUARD: ${FEATURE_FUNCTIONHTMLGUARD:-true}
+      FEATURE_STUDIO_V2: ${FEATURE_STUDIO_V2:-false}
+      # MCP invoke_function, off until chosen. Not a safeguard: deployed function code can already read the project's function secrets; this only removes one way of running it (EXC-684).
+      FEATURE_FUNCTIONINVOKE: ${FEATURE_FUNCTIONINVOKE:-false}
       HOST_METRICS_CONTAINERS: *platform_containers
       HOST_METRICS_NET_DEV: /host/proc-net-dev
       # Stored project log search in the bundled Loki (EXC-672; init.sh --host-logs).
@@ -456,6 +471,8 @@ services:
       APP_DOMAIN: ${APP_DOMAIN:-apps.${EXCALIBASE_DOMAIN:?run ./init.sh first}}
       # gVisor's runsc, or "none" to run apps without a sandbox (the operator's choice).
       APP_SANDBOX_RUNTIME: ${APP_SANDBOX_RUNTIME:-runsc}
+      # Apps run without a sandbox on rootless Podman: auto, per-app or shared user ranges (EXC-682).
+      APP_USERNS: ${APP_USERNS:-auto}
       # "internet" lets apps call out; by default they reach only their project.
       APP_EGRESS: ${APP_EGRESS:-none}
       # Rootless Podman's egress reaches the LAN and metadata, unguardable: accept takes that knowingly.
@@ -566,6 +583,10 @@ services:
   studio:
     image: docker.io/excalibase/studio:${TAG:-1.5.0}
     container_name: excalibase-studio
+    environment:
+      # Studio uploads files straight to the signed URL, so its page policy must
+      # allow that origin: the same value provisioning signs for (EXC-809).
+      STORAGE_PUBLIC_ORIGIN: ${STORAGE_ENDPOINT:-${FILES_PUBLIC_URL:?run ./init.sh first}}
     depends_on:
       provisioning:
         condition: service_started

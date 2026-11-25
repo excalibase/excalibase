@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/go-chi/chi/v5"
 )
@@ -224,12 +225,17 @@ func sitePathID(w http.ResponseWriter, r *http.Request, param string) (string, b
 
 // writeSiteError maps the service's refusals; anything else is logged and answered without detail.
 func writeSiteError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	var archiveErr *sites.ArchiveError
 	var inputErr *sites.InputError
 	var publishErr *sites.PublishError
 	var tooLarge *http.MaxBytesError
 	var rateErr *sites.RateLimitError
 	switch {
+	case orgguard.IsRefusal(err):
+		writeOrgGuardError(w, err)
 	case errors.Is(err, sites.ErrServerSitesOff):
 		// As an unmounted route answers (EXC-554), so a dark feature is not advertised.
 		http.Error(w, "404 page not found", http.StatusNotFound)

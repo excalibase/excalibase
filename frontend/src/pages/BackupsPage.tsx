@@ -1,3 +1,4 @@
+import { describeBackupSchedule } from '../utils/backupSchedule';
 import { useState } from 'react';
 import { useInstance, useListBackups, useTriggerBackup } from '../hooks/useProvisioning';
 import { isMySQLProject } from '../utils/engine';
@@ -10,6 +11,7 @@ import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { Archive, Copy, RefreshCw, RotateCcw, type LucideIcon } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
 import { formatBytes } from '../utils/formatBytes';
+import { backupView } from '../utils/backupView';
 
 type Tab = 'backups' | 'restore' | 'copy';
 
@@ -19,8 +21,10 @@ export function BackupsPage() {
 
   const { data: backupData, isLoading } = useListBackups(projectId);
   // MySQL restores within its backup window only (ADR 0041).
-  const mysql = isMySQLProject(useInstance(projectId).data);
-  const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
+  const instance = useInstance(projectId).data;
+  const mysql = isMySQLProject(instance);
+  const paused = instance?.status === 'PAUSED';
+  const { backups, newestCompleted, isPauseBackup } = backupView(backupData?.backups, paused, instance?.pauseBackupId);
   const triggerBackup = useTriggerBackup();
   // Copying into a new project ships dark (EXC-667).
   const { enabled: copyOn } = useFeatureEnabled('dbcopy');
@@ -46,6 +50,17 @@ export function BackupsPage() {
         </div>
       )}
 
+      {paused && (
+        <div data-testid="paused-backups" className="px-4 py-3 rounded-lg text-sm border border-border-primary bg-surface-card text-text-secondary">
+          Paused: nightly backups stop while paused
+          {newestCompleted
+            ? isPauseBackup
+              ? `; the pause took a final backup ${newestCompleted.id}`
+              : `; the latest completed backup is ${newestCompleted.id}`
+            : ''}
+        </div>
+      )}
+
       {backupData && (
         <div className="grid grid-cols-3 gap-4">
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
@@ -56,7 +71,7 @@ export function BackupsPage() {
           </div>
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
             <p className="text-xs text-text-tertiary mb-1">Schedule</p>
-            <p className="text-sm font-medium text-text-primary font-mono">{backupData.schedule ?? '—'}</p>
+            <p className="text-sm font-medium text-text-primary">{describeBackupSchedule(backupData.schedule)}</p>
           </div>
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
             <p className="text-xs text-text-tertiary mb-1">Retention</p>

@@ -62,20 +62,9 @@ func (d dispatcher) send(ctx context.Context, method, path string, query url.Val
 // the context and no raw credential is attached, so ExtractAuth leaves them
 // as they are and every gate judges the narrowed token.
 func (d dispatcher) do(ctx context.Context, req request, out any) error {
-	httpReq, err := d.build(ctx, req)
+	reply, err := d.serve(ctx, req)
 	if err != nil {
 		return err
-	}
-	reply := newBufferedReply()
-	d.router.ServeHTTP(reply, httpReq)
-	if reply.overflow {
-		return fmt.Errorf("the answer from %s is larger than %d bytes", req.path, maxReplyBytes)
-	}
-	if reply.status == 0 {
-		reply.status = http.StatusOK
-	}
-	if d.answered != nil {
-		*d.answered = append(*d.answered, routeReply{path: req.path, status: reply.status})
 	}
 	if reply.status < 200 || reply.status > 299 {
 		return &RouteError{Status: reply.status, Message: errorMessage(reply.body.Bytes(), reply.status)}
@@ -87,6 +76,26 @@ func (d dispatcher) do(ctx context.Context, req request, out any) error {
 		return fmt.Errorf("read the answer from %s: %w", req.path, err)
 	}
 	return nil
+}
+
+// serve runs req through the router and hands back the whole reply, whatever its status.
+func (d dispatcher) serve(ctx context.Context, req request) (*bufferedReply, error) {
+	httpReq, err := d.build(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	reply := newBufferedReply()
+	d.router.ServeHTTP(reply, httpReq)
+	if reply.overflow {
+		return nil, fmt.Errorf("the answer from %s is larger than %d bytes", req.path, maxReplyBytes)
+	}
+	if reply.status == 0 {
+		reply.status = http.StatusOK
+	}
+	if d.answered != nil {
+		*d.answered = append(*d.answered, routeReply{path: req.path, status: reply.status})
+	}
+	return reply, nil
 }
 
 func (d dispatcher) build(ctx context.Context, req request) (*http.Request, error) {

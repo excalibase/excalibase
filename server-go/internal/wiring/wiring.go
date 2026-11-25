@@ -82,6 +82,8 @@ func table(deps Deps) map[string][]Dependency {
 		"KUBE_INSECURE_SKIP_VERIFY": {},
 		"DOCKER_DB_PUBLIC":          {},
 		"DOCKER_TLS_VERIFY":         {},
+		// Changes only how cookies are named and flagged; checked by CheckCookieIsolation.
+		"STUDIO_INSECURE_COOKIES": {},
 		// The app handler is always constructed; the flag only decides
 		// whether its routes are mounted.
 		"APP_HOSTING_ENABLED": {},

@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/features"
 )
@@ -15,8 +16,46 @@ func TestLoad_DarkFeaturesDefaultOff(t *testing.T) {
 	}
 	flags := Load().Features()
 	for _, feature := range features.All() {
-		if flags.Enabled(context.Background(), feature) {
-			t.Errorf("%s is on with nothing set", feature)
+		if flags.Enabled(context.Background(), feature) != defaultOn[feature] {
+			t.Errorf("%s is %v with nothing set", feature, !defaultOn[feature])
+		}
+	}
+}
+
+// EXC-755: the abuse guards are security fixes, so they are on until an install says "false".
+func TestLoad_AbuseGuardsAreOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	for _, feature := range []features.Feature{features.ProxyBlock, features.SignupGuard} {
+		env := featureEnv[feature]
+		for value, want := range map[string]bool{"": true, "true": true, "yes": true, "false": false} {
+			t.Setenv(env, value)
+			if got := Load().Features().Enabled(context.Background(), feature); got != want {
+				t.Errorf("%s=%q: enabled=%v, want %v", env, value, got, want)
+			}
+		}
+	}
+}
+
+// EXC-759: showing a password once is a security fix, so it is on unless switched off.
+func TestLoad_OneTimeCredentialsAreOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	t.Setenv("FEATURE_ONETIMECREDENTIALS", "")
+	if !Load().Features().Enabled(context.Background(), features.OneTimeCredentials) {
+		t.Error("one-time credentials are off with nothing set")
+	}
+	t.Setenv("FEATURE_ONETIMECREDENTIALS", "false")
+	if Load().Features().Enabled(context.Background(), features.OneTimeCredentials) {
+		t.Error("FEATURE_ONETIMECREDENTIALS=false did not switch them off")
+	}
+}
+
+// MCP's destructive tools asking twice is a safety rail, so it is on unless an install says "false".
+func TestLoad_MCPConfirmIsOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	for value, want := range map[string]bool{"": true, "true": true, "yes": true, "false": false} {
+		t.Setenv("FEATURE_MCPCONFIRM", value)
+		if got := Load().Features().Enabled(context.Background(), features.MCPConfirm); got != want {
+			t.Errorf("FEATURE_MCPCONFIRM=%q: enabled=%v, want %v", value, got, want)
 		}
 	}
 }
@@ -28,18 +67,21 @@ func TestLoad_EachDarkFeatureIsTurnedOnByItsOwnVariable(t *testing.T) {
 			for _, other := range featureEnv {
 				t.Setenv(other, "")
 			}
+			if defaultOn[feature] {
+				t.Skip("on without its variable; covered by TestLoad_AbuseGuardsAreOnUnlessSwitchedOff")
+			}
 			t.Setenv(env, "true")
 			if feature == features.HostMetrics || feature == features.HostLogs {
 				t.Setenv("PROVISIONER_MODE", "docker")
 			}
 			flags := Load().Features()
 			for _, each := range features.All() {
-				if got := flags.Enabled(context.Background(), each); got != (each == feature) {
+				if got := flags.Enabled(context.Background(), each); got != (each == feature || defaultOn[each]) {
 					t.Errorf("%s=true: %s enabled=%v", env, each, got)
 				}
 			}
 			t.Setenv(env, "yes")
-			if Load().Features().Enabled(context.Background(), feature) {
+			if !defaultOn[feature] && Load().Features().Enabled(context.Background(), feature) {
 				t.Errorf("%s=yes: only the exact value \"true\" turns a dark feature on", env)
 			}
 		})
@@ -162,5 +204,48 @@ func TestDarkFeatures_HostLogsIsOnOnlyOnASingleHost(t *testing.T) {
 func TestDarkFeatures_SingleHostBuildsVariable(t *testing.T) {
 	if got := featureEnv[features.SingleHostBuilds]; got != "FEATURE_SINGLEHOSTBUILDS" {
 		t.Errorf("single-host builds variable = %q", got)
+	}
+}
+
+func TestLoad_SignupsPerHour(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	if got := Load().SignupsPerHour; got != 10 {
+		t.Errorf("default = %d, want 10", got)
+	}
+	t.Setenv("SIGNUPS_PER_NETWORK_PER_HOUR", "3")
+	if got := Load().SignupsPerHour; got != 3 {
+		t.Errorf("SIGNUPS_PER_NETWORK_PER_HOUR=3: %d", got)
+	}
+}
+
+// EXC-784: the archive alert and Free's hourly upload are safety fixes, so they are on unless switched off.
+func TestLoad_WALGuardsAreOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	for feature, env := range map[features.Feature]string{
+		features.WALArchiveAlert:   "FEATURE_WALARCHIVEALERT",
+		features.FreeWALUpload:     "FEATURE_FREEWALUPLOAD",
+		features.AppRuntimeLogin:   "FEATURE_APPRUNTIMELOGIN",
+		features.FunctionHTMLGuard: "FEATURE_FUNCTIONHTMLGUARD",
+	} {
+		t.Setenv(env, "")
+		if !Load().Features().Enabled(context.Background(), feature) {
+			t.Errorf("%s is off with nothing set", feature)
+		}
+		t.Setenv(env, "false")
+		if Load().Features().Enabled(context.Background(), feature) {
+			t.Errorf("%s=false did not switch it off", env)
+		}
+	}
+}
+
+func TestLoad_WALArchiveAlertThreshold(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	t.Setenv("EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER", "")
+	if got := Load().WALArchiveAlertAfter; got != 30*time.Minute {
+		t.Errorf("default = %v, want 30m", got)
+	}
+	t.Setenv("EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER", "45m")
+	if got := Load().WALArchiveAlertAfter; got != 45*time.Minute {
+		t.Errorf("configured = %v, want 45m", got)
 	}
 }

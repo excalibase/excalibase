@@ -6,7 +6,8 @@
 #   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
 #             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none] [--documentdb] [--host-metrics]
 #             [--host-logs] [--log-drains]
-#             [--auth-hooks] [--no-host-firewall]
+#             [--auth-hooks] [--no-host-firewall] [--app-userns auto|per-app|shared]
+#   ./init.sh --grow-subids <platform user> [--max-apps 100]      (as root, once; see below)
 #
 # Studio:     https://studio.<domain>
 # Data plane: https://api.<domain>   (/{projectId}/graphql, /{projectId}/api/v1, /auth)
@@ -38,6 +39,19 @@
 # yourself, for each bridge (docker network inspect: br-<first 12 of the id>):
 # iptables -I INPUT -i <bridge> -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP,
 # and in DOCKER-USER for the tenants' bridge, the same toward those ranges.
+# --app-userns: how apps on rootless Podman, run with --app-sandbox none, are kept from each
+# other's files. per-app: each app gets its own range of the platform user's subuid/subgid pool,
+# so an app that escapes its container owns nothing of another's volume. shared: one range for
+# all (an escape owns every app's files). auto (default): per-app when the pool has room, else
+# shared with one warning at startup. gVisor (--app-sandbox runsc) separates apps more strongly;
+# this does not apply to it, nor to Docker.
+# --grow-subids USER [--max-apps N]: run this as root, once, on a host with rootless Podman. It
+# adds to /etc/subuid and /etc/subgid for USER (the platform's unprivileged user) so the pool
+# holds 65536 ids for the shared range and 65536 per app, N apps (default 100). It only ever adds
+# a line (under /etc/subuid.lock, so two runs cannot hand out the same ids): an entry is never shrunk, rewritten
+# or removed, and a rerun adds nothing it already has.
+# Then, as USER, run `podman system migrate` (it restarts that user's containers) and restart
+# the platform. It writes no .env.
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu
@@ -94,6 +108,9 @@ host_firewall=1
 app_domain=
 app_sandbox=runsc
 auth_hooks=
+app_userns=auto
+grow_user=
+max_apps=100
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -115,9 +132,62 @@ HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev"; shift ;;
     --no-host-firewall) host_firewall=; shift ;;
     --app-domain) app_domain=$2; shift 2 ;;
     --app-sandbox) app_sandbox=$2; shift 2 ;;
+    --app-userns) app_userns=$2; shift 2 ;;
+    --grow-subids) grow_user=$2; shift 2 ;;
+    --max-apps) max_apps=$2; shift 2 ;;
     *) usage ;;
   esac
 done
+
+# One range of 65536 ids per app, after the shared one. Only ever appends a line after
+# every other entry of the file, so no id is handed out twice and nothing is rewritten.
+grow_subid_file() {
+  file=$1 user=$2 uid=$3 needed=$4
+  have=0
+  next=100000
+  if [ -e "$file" ]; then
+    have=$(awk -F: -v u="$user" -v n="$uid" '$1 == u || $1 == n {sum += $3} END {printf "%.0f", sum}' "$file")
+    next=$(awk -F: -v m=100000 'NF >= 3 && $2 + $3 > m {m = $2 + $3} END {printf "%.0f", m}' "$file")
+  fi
+  if [ "$have" -ge "$needed" ]; then
+    echo "init.sh: $file already gives $user $have ids (needs $needed); left as it is"
+    return 0
+  fi
+  missing=$((needed - have))
+  if [ $((next + missing)) -gt 4294967295 ]; then
+    echo "init.sh: $file has no room for $missing more ids after $next" >&2
+    return 1
+  fi
+  if [ -s "$file" ] && [ -n "$(tail -c1 "$file")" ]; then
+    printf '\n' >>"$file"
+  fi
+  printf '%s:%s:%s\n' "$user" "$next" "$missing" >>"$file"
+  echo "init.sh: $file: added $user:$next:$missing ($have + $missing = $needed ids)"
+}
+
+if [ -n "$grow_user" ]; then
+  case $max_apps in
+    '' | *[!0-9]* | 0*) echo "init.sh: --max-apps must be a positive number" >&2; exit 2 ;;
+  esac
+  [ "${#max_apps}" -le 6 ] || { echo "init.sh: --max-apps $max_apps is more than any host holds" >&2; exit 2; }
+  subid_dir=${SUBID_DIR:-/etc}
+  if [ -z "${SUBID_DIR:-}" ] && [ "$(id -u)" != 0 ]; then
+    echo "init.sh: --grow-subids edits /etc/subuid and /etc/subgid: run it as root (sudo ./init.sh --grow-subids $grow_user --max-apps $max_apps)" >&2
+    exit 1
+  fi
+  user_id=$(id -u "$grow_user" 2>/dev/null) || { echo "init.sh: no user $grow_user on this host" >&2; exit 2; }
+  [ "$user_id" != 0 ] || { echo "init.sh: the platform user is not root: rootful Podman is not supported" >&2; exit 2; }
+  needed=$((65536 * (max_apps + 1)))
+  [ "$needed" -le 4000000000 ] || { echo "init.sh: --max-apps $max_apps needs more ids than a host has" >&2; exit 2; }
+  # One run at a time: two reading the same end of the file would hand out the same ids twice.
+  command -v flock >/dev/null 2>&1 || { echo "init.sh: --grow-subids needs flock (util-linux)" >&2; exit 1; }
+  exec 9>>"$subid_dir/subuid.lock"
+  flock -w 60 9 || { echo "init.sh: $subid_dir/subuid.lock is held by another run" >&2; exit 1; }
+  grow_subid_file "$subid_dir/subuid" "$grow_user" "$user_id" "$needed"
+  grow_subid_file "$subid_dir/subgid" "$grow_user" "$user_id" "$needed"
+  echo "init.sh: now, as $grow_user: podman system migrate (it restarts that user's containers), then restart the platform"
+  exit 0
+fi
 
 [ -n "$domain" ] && [ -n "$admin_email" ] || usage
 if [ -e "$env_file" ]; then
@@ -132,6 +202,10 @@ esac
 case $app_sandbox in
   runsc | none) ;;
   *) echo "init.sh: --app-sandbox must be runsc (gVisor) or none" >&2; exit 2 ;;
+esac
+case $app_userns in
+  auto | per-app | shared) ;;
+  *) echo "init.sh: --app-userns must be auto, per-app or shared" >&2; exit 2 ;;
 esac
 
 case $engine in
@@ -292,6 +366,8 @@ ENGINE_SOCKET_GID=$engine_socket_gid
 # Apps are served at <app>-<project>.$app_domain; point *.$app_domain at this host.
 APP_DOMAIN=$app_domain
 APP_SANDBOX_RUNTIME=$app_sandbox
+# Rootless Podman without a sandbox: per-app user ranges (auto, per-app or shared). See init.sh --grow-subids.
+APP_USERNS=$app_userns
 ENV
 # Rootless Podman's bridges are in the user's own namespace: no host firewall to set.
 # On Docker, either the firewall or an explicit off, which preflight requires (EXC-683).

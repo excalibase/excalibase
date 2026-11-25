@@ -46,7 +46,7 @@ section(){ echo ""; cyan "=== $* ==="; }
 ADMIN_PASS=${ADMIN_PASSWORD:-$( [ -n "${ADMIN_PASSWORD_FILE:-}" ] && cat "$ADMIN_PASSWORD_FILE" )}
 if [ -z "$ADMIN_PASS" ]; then red "set ADMIN_PASSWORD or ADMIN_PASSWORD_FILE to the platform admin's password"; exit 1; fi
 
-BOOT_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H 'Content-Type: application/json' \
+BOOT_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}")
 ADMIN_PAT=$(echo "$BOOT_LOGIN" | jq -r '.token' 2>/dev/null)
 [ -z "$ADMIN_PAT" ] || [ "$ADMIN_PAT" = "null" ] && { red "Initial admin login failed: $BOOT_LOGIN"; exit 1; }
@@ -67,28 +67,30 @@ curl -sf "$API_GQL_MGMT/actuator/health" | grep -q '"status":"UP"' \
 section "F2. Cookie auth, scope, expiry, security headers"
 COOKIE_JAR=$(mktemp); trap "rm -f $COOKIE_JAR" EXIT
 
-LOGIN_RESP=$(curl -s -i -c "$COOKIE_JAR" -X POST "$API_PROV/api/auth/login" \
+LOGIN_RESP=$(curl -s -i -c "$COOKIE_JAR" -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}")
 
-echo "$LOGIN_RESP" | grep -qi 'Set-Cookie: excali_session' && pass "Set-Cookie excali_session" || fail "Set-Cookie" "missing"
+echo "$LOGIN_RESP" | grep -qi 'Set-Cookie: __Host-excali_session' && pass "Set-Cookie __Host-excali_session" || fail "Set-Cookie" "missing"
+echo "$LOGIN_RESP" | grep -i 'Set-Cookie: __Host-excali_session' | grep -qi 'Secure' && pass "session cookie Secure" || fail "Secure" "missing"
+echo "$LOGIN_RESP" | grep -qi 'Set-Cookie: excali_session=;.*Max-Age=0' && pass "login clears the legacy cookie" || fail "legacy cookie" "not cleared on login"
 echo "$LOGIN_RESP" | grep -qi 'HttpOnly' && pass "HttpOnly" || fail "HttpOnly" "missing"
 echo "$LOGIN_RESP" | grep -qi 'SameSite=Strict' && pass "SameSite=Strict" || fail "SameSite" "missing"
 echo "$LOGIN_RESP" | grep -qi 'Strict-Transport-Security' && pass "HSTS" || fail "HSTS" "missing"
 echo "$LOGIN_RESP" | grep -qi 'Content-Security-Policy' && pass "CSP" || fail "CSP" "missing"
 echo "$LOGIN_RESP" | grep -qi 'X-Frame-Options: DENY' && pass "X-Frame-Options DENY" || fail "X-Frame-Options" "missing"
 
-SESSION_TOKEN=$(grep excali_session "$COOKIE_JAR" | awk '{print $7}')
-curl -sf -b "excali_session=$SESSION_TOKEN" "$API_PROV/api/auth/me" | grep -q '"role":"platform_admin"' \
+SESSION_TOKEN=$(grep __Host-excali_session "$COOKIE_JAR" | awk '{print $7}')
+curl -sf -b "__Host-excali_session=$SESSION_TOKEN" "$API_PROV/api/auth/me" | grep -q '"role":"platform_admin"' \
   && pass "cookie-only /me works" || fail "cookie auth" "/me rejected"
 
 TOKENS=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/auth/tokens" 2>/dev/null)
 echo "$TOKENS" | jq -e 'type == "array"' >/dev/null 2>&1 && pass "token list readable" || fail "token list" "$TOKENS"
 echo "$TOKENS" | jq -r '.[].scopes' 2>/dev/null | grep -q session && fail "token list" "a sign-in session is listed as an access token" || pass "sessions not listed as access tokens"
 
-LOGOUT=$(curl -s -i -b "excali_session=$SESSION_TOKEN" -X POST "$API_PROV/api/auth/logout" 2>/dev/null)
-echo "$LOGOUT" | grep -qi 'Set-Cookie: excali_session=;.*Max-Age=0' && pass "logout clears cookie" || fail "logout cookie clear" "no Max-Age=0"
-ME_AFTER=$(curl -s -o /dev/null -w "%{http_code}" -b "excali_session=$SESSION_TOKEN" "$API_PROV/api/auth/me")
+LOGOUT=$(curl -s -i -b "__Host-excali_session=$SESSION_TOKEN" -X POST "$API_PROV/api/auth/logout" 2>/dev/null)
+echo "$LOGOUT" | grep -qi 'Set-Cookie: __Host-excali_session=;.*Max-Age=0' && pass "logout clears cookie" || fail "logout cookie clear" "no Max-Age=0"
+ME_AFTER=$(curl -s -o /dev/null -w "%{http_code}" -b "__Host-excali_session=$SESSION_TOKEN" "$API_PROV/api/auth/me")
 [ "$ME_AFTER" = "401" ] && pass "revoked cookie 401" || fail "revoked cookie" "got $ME_AFTER"
 
 ###############################################################################
@@ -109,7 +111,7 @@ EXISTING=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/provision/" 2>/dev/null | jq -r
 for pid in $EXISTING; do
   [ -z "$pid" ] || [ "$pid" = "null" ] && continue
   echo "    cleaning leftover $pid"
-  curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/admin/projects/$pid" > /dev/null 2>&1
+  curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' -H "$PAT_HDR" "$API_PROV/api/admin/projects/$pid" > /dev/null 2>&1
 done
 sleep 2
 
@@ -197,7 +199,7 @@ if [ -z "${SKIP_PROVISIONED:-}" ]; then
   curl -sf -X POST -H "$PAT_HDR" -H 'Content-Type: application/json' \
     -d '{"username":"alice","email":"alice@e2e.test","password":"AliceP@ss123","role":"user"}' \
     "$API_PROV/api/auth/users" > /dev/null 2>&1 || true
-  ALICE_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H 'Content-Type: application/json' \
+  ALICE_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
     -d '{"username":"alice","password":"AliceP@ss123"}' 2>/dev/null)
   ALICE_PAT=$(echo "$ALICE_LOGIN" | jq -r '.token' 2>/dev/null)
   if [ -n "$ALICE_PAT" ] && [ "$ALICE_PAT" != "null" ]; then
@@ -383,7 +385,7 @@ if [ -z "${SKIP_PROVISIONED:-}" ]; then
       else
         skip "cross-project replay" "couldn't reg in $PROJECT2_ID"
       fi
-      curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT2_ID" > /dev/null 2>&1
+      curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT2_ID" > /dev/null 2>&1
     else
       skip "cross-project replay" "couldn't provision proj2: $PROV2"
     fi
@@ -460,7 +462,7 @@ curl -s --get --data-urlencode 'query={namespace=\"excalibase-platform\",app=\"g
 
   ###############################################################################
   section "F21. Deprovision — vault prefix purge"
-  curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT_ID" > /dev/null
+  curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT_ID" > /dev/null
   sleep 3
   VLIST_AFTER=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/vault/secrets-list?prefix=projects/$PROJECT_ID/" 2>/dev/null)
   PATHS_LEFT=$(echo "$VLIST_AFTER" | jq '.paths | length' 2>/dev/null || echo "?")
@@ -558,7 +560,7 @@ if [ -n "$EMAIL_E2E" ]; then
   TEST_PASS="EmailTest@Pass123"
 
   # Register a new platform user with the sandbox-allowed email.
-  REG_RESP=$(curl -s -X POST "$API_PROV/api/auth/register" \
+  REG_RESP=$(curl -s -X POST "$API_PROV/api/auth/register" -H "X-Return-Session-Token: true" \
     -H 'Content-Type: application/json' \
     -d "{\"username\":\"$TEST_USER\",\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASS\"}")
   if echo "$REG_RESP" | jq -e '.token // .access_token' > /dev/null 2>&1; then
@@ -630,7 +632,7 @@ fi
 section "F22. Rate limiting (runs last)"
 HITS_429=0
 for i in $(seq 1 60); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_PROV/api/auth/login" \
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" \
     -H 'Content-Type: application/json' \
     -d '{"username":"nope","password":"wrong"}')
   [ "$code" = "429" ] && HITS_429=$((HITS_429+1))

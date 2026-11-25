@@ -126,7 +126,7 @@ function refused({ siteId }, reason, host, message) {
   return refusal(403, message);
 }
 
-// A project API path: /<p>/graphql, /<p>/api/..., /auth/<p>/..., /functions/v1/<p>/...,
+// A project API path: /<p>/graphql, /<p>/api/..., /auth/<org>/<p>/..., /functions/v1/<p>/...,
 // /storage/v1/<p>/...; only plain segments, so no proxy can read it as another path.
 const PLAIN_SEGMENT = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/;
 
@@ -142,7 +142,8 @@ function ownProjectPath(pathname, projectId) {
     return second === "graphql" || second === "api";
   }
   if (first === "auth") {
-    return second === projectId;
+    // /auth/<org slug>/<project id>/...: the project id is the third segment.
+    return third === projectId;
   }
   if ((first === "functions" || first === "storage") && second === "v1") {
     return third === projectId;

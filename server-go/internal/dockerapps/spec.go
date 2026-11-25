@@ -56,6 +56,8 @@ type containerSpec struct {
 	CPURequestMilli, MemoryRequest int64
 	DiskClaim, DiskMountPath       string
 	Pull                           *registryAuth
+	// Userns is the app's own user range; nil runs it in the shared one.
+	Userns *usernsRange
 }
 
 // specFromWorkload reads what Kubernetes would run from the rendered objects;

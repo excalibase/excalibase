@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { projectOperationMessage } from '../hooks/projectFollow';
 import { useInstances, useDeprovisionDatabase } from '../hooks/useProvisioning';
@@ -8,6 +9,9 @@ import { Database, DatabaseZap, Loader2, Trash2, Eye, Sprout, Star, Crown } from
 import { useAuthStore } from '../stores/auth-store';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { engineIcon, engineLabel } from '../utils/engine';
+import { LayoutLoading } from '../components/layout/v2/LayoutLoading';
+import { useStudioV2 } from '../hooks/useDeploymentMode';
+const ProjectsPage = lazy(() => import('./home/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
 
 const ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
 
@@ -15,7 +19,13 @@ function getInstanceCountLabel(count: number): string {
   return `${count} instance${count === 1 ? '' : 's'}`;
 }
 
+// With studio_v2 on, the shared table replaces this page.
 export function InstancesPage() {
+  const { enabled } = useStudioV2();
+  return enabled ? <Suspense fallback={<LayoutLoading />}><ProjectsPage /></Suspense> : <LegacyInstancesPage />;
+}
+
+function LegacyInstancesPage() {
   const { data: instances = [], isLoading } = useInstances();
   const deprovision = useDeprovisionDatabase();
   const navigate = useNavigate();
@@ -86,7 +96,6 @@ function renderInstancesContent(args: InstancesContentArgs) {
           <th className="text-left px-6 py-3 font-medium">Project</th>
           <th className="text-left px-6 py-3 font-medium">Type</th>
           <th className="text-left px-6 py-3 font-medium">Tier</th>
-          <th className="text-left px-6 py-3 font-medium">Namespace</th>
           <th className="text-left px-6 py-3 font-medium">Status</th>
           <th className="text-left px-6 py-3 font-medium">Created</th>
           <th className="px-6 py-3" />
@@ -109,7 +118,6 @@ function renderInstancesContent(args: InstancesContentArgs) {
             <td className="px-6 py-4">
               <TierBadge tier={inst.tier} />
             </td>
-            <td className="px-6 py-4 text-text-tertiary font-mono text-xs">{inst.namespace}</td>
             <td className="px-6 py-4"><StatusBadge status={inst.status} stage={inst.currentStage} deletionDueAt={inst.deletionDueAt} /></td>
             <td className="px-6 py-4 text-text-tertiary">{new Date(inst.createdAt).toLocaleDateString()}</td>
             <td className="px-6 py-4">

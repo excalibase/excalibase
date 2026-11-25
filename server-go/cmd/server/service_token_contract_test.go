@@ -62,11 +62,20 @@ var chartPermissions = map[string][]string{
 		"projects:info:read",
 		"policies:read",
 	},
+	// svc-bootstrap: platform-aio.bootstrapPermissions with the plaintext
+	// unseal provider, the widest list the chart gives it.
+	svcBootstrap: {
+		"service-tokens:manage:svc-auth",
+		"service-tokens:manage:svc-graphql",
+		"vault:init",
+		"vault:unseal",
+	},
 }
 
 const (
-	svcAuth    = "svcAuth"
-	svcGraphql = "svcGraphql"
+	svcAuth      = "svcAuth"
+	svcGraphql   = "svcGraphql"
+	svcBootstrap = "svcBootstrap"
 
 	contractProject = "proj-a"
 	// contractProviderSecretPath is where the auth service reads a project's

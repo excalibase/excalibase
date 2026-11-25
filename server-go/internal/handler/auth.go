@@ -4,19 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/abuse"
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/loginguard"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
+
+// msgInternalError is the only detail a caller gets for an unexpected failure.
+const msgInternalError = "internal error"
 
 const errNotAuthenticated = "not authenticated"
 
@@ -25,29 +31,49 @@ type AuthHandler struct {
 	tokenStore    storage.TokenStore
 	orgStore      storage.OrgStore      // optional — joins an org through an invite token at registration
 	instanceStore storage.InstanceStore // optional — lets CreateToken bind a PAT to a project the caller can see
-	auditLog      auditWriter           // optional — records PAT rotations
-	inviteOnly    bool                  // when true, only an invite token (or the first admin) may register
+	orgGuard      *orgguard.Guard
+	auditLog      auditWriter        // optional — records PAT rotations
+	signupGuard   *abuse.SignupGuard // optional — EXC-755
+	inviteOnly    bool               // when true, only an invite token (or the first admin) may register
 	setupTokens   storage.SetupTokenStore
 	// ceilings bound what a service token may mint or rotate for each
 	// principal it manages (EXC-485); a principal without one gets nothing.
 	ceilings   map[string][]string
 	verifier   *EmailVerifier
 	loginGuard *loginguard.Guard
+	// accountSlowdown makes guessing at one account across many addresses cost
+	// time; it never refuses, so it cannot lock the owner out.
+	accountSlowdown *loginguard.Slowdown
+	// sleep waits out a delay; tests replace it.
+	sleep func(context.Context, time.Duration) error
 	// personalOrgs gives every account its personal org when it signs in
 	// (EXC-553); nil in self-hosted mode, which keeps its one default org.
 	personalOrgs auth.PersonalOrgStore
+	// background runs the work a sign-up does off its request, so a taken and a
+	// new account cost the same: the default is a goroutine.
+	background func(func())
 }
 
 // SetPersonalOrgs makes every sign-in ensure the account's personal org.
 func (h *AuthHandler) SetPersonalOrgs(s auth.PersonalOrgStore) { h.personalOrgs = s }
 
-// Five guesses per account per quarter hour, whatever address they come from.
+// Five guesses per account and address per quarter hour (IPv6 per /64):
+// whoever is guessing locks only their own address, never the owner signing in
+// from another. Past 20 wrong guesses at one account from anywhere, each further
+// one adds a wait before the password is checked, up to five seconds.
 const (
 	defaultLoginAttempts = 5
-	defaultLoginWindow   = 15 * time.Minute
+	accountFreeFailures  = 20
+	// DefaultAccountFailureCap is how many failed sign-ins one account takes in a
+	// window, from all addresses together, before it refuses every attempt: ten
+	// times the old cap, so locking an owner out takes hundreds of addresses.
+	DefaultAccountFailureCap = 1000
+	accountDelayStep         = 250 * time.Millisecond
+	accountDelayCap          = 5 * time.Second
+	defaultLoginWindow       = 15 * time.Minute
 )
 
-// SetLoginGuard replaces the per-account sign-in budget.
+// SetLoginGuard replaces the per-account-and-address sign-in budget.
 func (h *AuthHandler) SetLoginGuard(g *loginguard.Guard) { h.loginGuard = g }
 
 // SetEmailVerifier wires the verification mail every Studio account must
@@ -64,13 +90,19 @@ func (h *AuthHandler) SetSetupTokenStore(s storage.SetupTokenStore) { h.setupTok
 
 // SetInstanceStore wires the instance store CreateToken uses to confirm the
 // caller may see the project a new PAT is bound to.
+// SetOrgGuard makes an invite into a suspended owner's org refuse at sign-up (EXC-845).
+func (h *AuthHandler) SetOrgGuard(guard *orgguard.Guard) { h.orgGuard = guard }
+
 func (h *AuthHandler) SetInstanceStore(s storage.InstanceStore) { h.instanceStore = s }
 
 func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) *AuthHandler {
 	return &AuthHandler{
-		userStore:  userStore,
-		tokenStore: tokenStore,
-		loginGuard: loginguard.New(defaultLoginAttempts, defaultLoginWindow),
+		userStore:       userStore,
+		tokenStore:      tokenStore,
+		loginGuard:      loginguard.New(defaultLoginAttempts, defaultLoginWindow),
+		accountSlowdown: newAccountSlowdown(DefaultAccountFailureCap),
+		sleep:           sleepContext,
+		background:      func(task func()) { go task() },
 	}
 }
 
@@ -82,6 +114,9 @@ func (h *AuthHandler) SetAuditLog(auditLog auditWriter) { h.auditLog = auditLog 
 // admin, only a registration carrying a live org invite token may proceed. Default (false)
 // keeps registration open for back-compat / self-hosted single-tenant use.
 func (h *AuthHandler) SetInviteOnly(v bool) { h.inviteOnly = v }
+
+// SetSignupGuard refuses throwaway mail and floods of sign-ups from one network (EXC-755); nil allows all.
+func (h *AuthHandler) SetSignupGuard(guard *abuse.SignupGuard) { h.signupGuard = guard }
 
 func (h *AuthHandler) SetOrgStore(orgStore storage.OrgStore) {
 	h.orgStore = orgStore
@@ -115,7 +150,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
-		httpError(w, "internal error", http.StatusInternalServerError)
+		writePasswordBusy(w, err)
 		return
 	}
 
@@ -123,18 +158,44 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// in CreateFirstAdmin decides who actually becomes admin (EXC-451).
 	allUsers, err := h.userStore.FindAllUsers(r.Context())
 	if err != nil {
-		httpError(w, "internal error", http.StatusInternalServerError)
+		httpError(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	isFirstUser := len(domain.HumanUsers(allUsers)) == 0
+
+	if !isFirstUser {
+		if err := h.signupGuard.CheckEmail(r.Context(), req.Email); err != nil {
+			writeSignupRefusal(w, err)
+			return
+		}
+	}
 
 	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, req.Email, isFirstUser)
 	if status != 0 {
 		httpError(w, msg, status)
 		return
 	}
+	// The network's budget is spent only by a sign-up nothing has refused, and
+	// never by a live invite, which names the address it is for.
+	if !isFirstUser && inviteHash == "" && !h.signupGuard.AllowSignup(r.Context(), clientaddr.FromRequest(r)) {
+		writeSignupRefusal(w, abuse.ErrSignupRateLimited)
+		return
+	}
 	if !isFirstUser && !h.verifier.Available() {
 		httpError(w, "sign-up is unavailable: verification email cannot be sent", http.StatusServiceUnavailable)
+		return
+	}
+
+	if usernameTaken, emailTaken := h.registrationTaken(r.Context(), req.Username, req.Email); usernameTaken || emailTaken {
+		if isFirstUser {
+			httpError(w, "username or email already in use", http.StatusConflict)
+			return
+		}
+		// The same answer and the same work as a new sign-up, so the form cannot
+		// be used to learn which usernames and addresses already have an account:
+		// the outcome goes to the address by mail, off the request path.
+		h.background(func() { h.mailAccountExists(req.Email, emailTaken) })
+		writeRegistrationPending(w, req.Email)
 		return
 	}
 
@@ -164,7 +225,7 @@ func (h *AuthHandler) registerFirstAdmin(w http.ResponseWriter, r *http.Request,
 	if !h.createFirstAdmin(w, r, setupToken, user) {
 		return
 	}
-	if !h.joinInviteIfAny(w, r, inviteHash, user) {
+	if _, ok := h.joinInviteIfAny(w, r, inviteHash, user); !ok {
 		return
 	}
 	h.issueRegistrationToken(w, r, user)
@@ -177,32 +238,75 @@ func (h *AuthHandler) registerMember(w http.ResponseWriter, r *http.Request, inv
 	if !h.createSubsequentUser(w, r, user) {
 		return
 	}
-	if err := h.verifier.Send(r.Context(), user); err != nil {
-		log.Printf("ERROR: registration of %s: %v", user.ID, err)
-		if derr := h.userStore.DeleteUser(r.Context(), user.ID); derr != nil {
-			log.Printf("WARN: remove account %s after a failed verification mail: %v", user.ID, derr)
-		}
-		httpError(w, "sign-up is unavailable: verification email could not be sent", http.StatusServiceUnavailable)
+	invite, ok := h.joinInviteIfAny(w, r, inviteHash, user)
+	if !ok {
 		return
 	}
-	if !h.joinInviteIfAny(w, r, inviteHash, user) {
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]string{"status": "verification_required", "email": user.Email})
+	h.background(func() { h.mailVerification(user, inviteHash, invite) })
+	writeRegistrationPending(w, user.Email)
 }
 
+// writeRegistrationPending is the one answer to a sign-up that needs its address checked.
+func writeRegistrationPending(w http.ResponseWriter, address string) {
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{"status": "verification_required", "email": address})
+}
+
+const registrationMailTimeout = 30 * time.Second
+
+// mailVerification sends the link off the request path. An account whose link
+// could not be sent is removed again, so the address stays free to try again,
+// and the invite it spent goes back to pending for the invited person.
+func (h *AuthHandler) mailVerification(user *domain.User, inviteHash string, spent *domain.PendingInvite) {
+	ctx, cancel := context.WithTimeout(context.Background(), registrationMailTimeout)
+	defer cancel()
+	if err := h.verifier.Send(ctx, user); err != nil {
+		log.Printf("ERROR: registration of %s: %v", user.ID, err)
+		if derr := h.userStore.DeleteUser(ctx, user.ID); derr != nil {
+			log.Printf("WARN: remove account %s after a failed verification mail: %v", user.ID, derr)
+			return
+		}
+		h.restoreInvite(ctx, inviteHash, spent)
+	}
+}
+
+// restoreInvite files the invite an account spent again, once the account is gone.
+func (h *AuthHandler) restoreInvite(ctx context.Context, hash string, spent *domain.PendingInvite) {
+	if spent == nil {
+		return
+	}
+	restored := *spent
+	restored.TokenHash = hash
+	if err := h.orgStore.RestorePendingInvite(ctx, &restored); err != nil {
+		log.Printf("WARN: restore the invite for %s after a failed verification mail: %v", spent.Email, err)
+	}
+}
+
+// mailAccountExists tells the address's owner why no account was made.
+func (h *AuthHandler) mailAccountExists(address string, emailTaken bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), registrationMailTimeout)
+	defer cancel()
+	if err := h.verifier.NotifyAccountExists(ctx, address, !emailTaken); err != nil {
+		log.Printf("WARN: sign-up notice: %v", err)
+	}
+}
+
+// SetBackground replaces how mail is sent off the request path; tests hold it back.
+func (h *AuthHandler) SetBackground(run func(func())) { h.background = run }
+
 // joinInviteIfAny spends the registration's invite, writing the refusal and
-// returning false when it cannot be spent.
-func (h *AuthHandler) joinInviteIfAny(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User) bool {
+// returning false when it cannot be spent. The spent invite is returned so a
+// rolled-back sign-up can restore it.
+func (h *AuthHandler) joinInviteIfAny(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User) (*domain.PendingInvite, bool) {
 	if inviteHash == "" {
-		return true
+		return nil, true
 	}
-	if status, msg := h.joinInvitedOrg(r.Context(), inviteHash, user); status != 0 {
+	invite, status, msg := h.joinInvitedOrg(r.Context(), inviteHash, user)
+	if status != 0 {
 		httpError(w, msg, status)
-		return false
+		return nil, false
 	}
-	return true
+	return invite, true
 }
 
 // createFirstAdmin handles the very first registration: it requires the
@@ -270,11 +374,22 @@ func (h *AuthHandler) issueRegistrationToken(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]interface{}{
-		"token":     raw,
-		"expiresAt": expiry,
-		"user":      user,
-	})
+	writeJSON(w, sessionBody(r, raw, expiry, user))
+}
+
+// ReturnSessionTokenHeader opts a caller into receiving the session secret in
+// the JSON body, for a CLI or script that has no cookie jar. Browsers never
+// send it: the secret stays in the httpOnly cookie, out of reach of page script.
+const ReturnSessionTokenHeader = "X-Return-Session-Token"
+
+// sessionBody is the sign-in answer. The 12-hour session secret is in it only
+// when the caller asked for it (EXC-761).
+func sessionBody(r *http.Request, raw string, expiry time.Time, user *domain.User) map[string]interface{} {
+	body := map[string]interface{}{"expiresAt": expiry, "user": user}
+	if r.Header.Get(ReturnSessionTokenHeader) == "true" {
+		body["token"] = raw
+	}
+	return body
 }
 
 // sessionTokenTTL is how long the studio's auto-issued login PAT lives.
@@ -283,18 +398,48 @@ func (h *AuthHandler) issueRegistrationToken(w http.ResponseWriter, r *http.Requ
 // "Create token" UI which sets ExpiresAt=nil.
 const sessionTokenTTL = 12 * time.Hour
 
-// checkPassword is swapped in tests to count password checks.
-var checkPassword = auth.CheckPassword
+// verifyPassword is swapped in tests to count password checks.
+var verifyPassword = auth.VerifyPassword
+
+// writePasswordBusy answers a password check the gate refused with a fast 503
+// and Retry-After; any other error is an internal one.
+func writePasswordBusy(w http.ResponseWriter, err error) {
+	if errors.Is(err, auth.ErrBusy) {
+		w.Header().Set(headerRetryAfter, strconv.Itoa(passwordBusyRetrySeconds))
+		httpError(w, "server is busy; try again shortly", http.StatusServiceUnavailable)
+		return
+	}
+	httpError(w, msgInternalError, http.StatusInternalServerError)
+}
+
+const (
+	headerRetryAfter         = "Retry-After"
+	passwordBusyRetrySeconds = 2
+)
+
+// refundAttempt gives back an attempt whose password was never checked, so a
+// flood cannot lock an account by crowding it out.
+func (h *AuthHandler) refundAttempt(addressKey, guardKey string, known bool) {
+	h.loginGuard.Refund(addressKey)
+	h.accountSlowdown.Refund(guardKey, known)
+}
 
 // dummyPasswordHash is checked when no account matches, so an unknown
-// identifier costs the same hash as a wrong password.
-var dummyPasswordHash = sync.OnceValue(func() string {
+// identifier costs the same hash as a wrong password. A refused or failed
+// hash is not remembered; the next sign-in tries again.
+var dummyHashCache atomic.Pointer[string]
+
+func dummyHash() (string, error) {
+	if cached := dummyHashCache.Load(); cached != nil {
+		return *cached, nil
+	}
 	hash, err := auth.HashPassword(auth.GenerateToken())
 	if err != nil {
-		log.Printf("ERROR: dummy password hash: %v", err)
+		return "", err
 	}
-	return hash
-})
+	dummyHashCache.Store(&hash)
+	return hash, nil
+}
 
 // Login signs in with a username or an e-mail address in the username field.
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -320,23 +465,51 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		guardKey = "user:" + user.ID
 	}
-	if !h.loginGuard.Attempt(guardKey) {
-		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
+	addressKey := guardKey + "@" + loginAddress(clientIP(r))
+	if !h.loginGuard.Attempt(addressKey) {
+		w.Header().Set(headerRetryAfter, strconv.Itoa(int(defaultLoginWindow.Seconds())))
 		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
+	delay, within := h.accountSlowdown.Begin(guardKey, user != nil)
+	if !within {
+		w.Header().Set(headerRetryAfter, strconv.Itoa(int(defaultLoginWindow.Seconds())))
+		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
+	if err := h.sleep(r.Context(), delay); err != nil {
 		return
 	}
 	// A service principal has no password and must never hold a session: its
 	// only credential is a capability token minted by a platform admin. Every
 	// refusal hashes once and reads the same, so the form confirms nothing.
-	hash := dummyPasswordHash()
+	hash, err := dummyHash()
+	if err != nil {
+		h.refundAttempt(addressKey, guardKey, user != nil)
+		writePasswordBusy(w, err)
+		return
+	}
 	if user != nil && !user.IsService() {
 		hash = user.PasswordHash
 	}
-	if !checkPassword(req.Password, hash) || user == nil || user.IsService() {
+	matched, err := verifyPassword(req.Password, hash, loginAddress(clientIP(r)))
+	if err != nil {
+		h.refundAttempt(addressKey, guardKey, user != nil)
+		writePasswordBusy(w, err)
+		return
+	}
+	if !matched || user == nil || user.IsService() {
 		httpError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	h.loginGuard.Succeeded(guardKey)
+	h.loginGuard.Succeeded(addressKey)
+	h.accountSlowdown.Succeeded(guardKey)
+	// A suspended or revoked account holds no session: it would only meet 401s.
+	// The right password has proved who is asking, so saying why is no leak.
+	if !user.Active {
+		httpError(w, "this account is suspended", http.StatusForbidden)
+		return
+	}
 	if user.EmailVerifiedAt == nil {
 		writeEmailNotVerified(w)
 		return
@@ -347,15 +520,26 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "token creation failed", http.StatusInternalServerError)
 		return
 	}
+	h.recordLogin(r, user)
 
-	writeJSON(w, map[string]interface{}{
-		// Token is also returned in the body so SDK / curl callers can
-		// pin to header auth. Browser clients should rely on the cookie
-		// and ignore this field.
-		"token":     raw,
-		"expiresAt": expiry,
-		"user":      user,
-	})
+	writeJSON(w, sessionBody(r, raw, expiry, user))
+}
+
+// LoginRecorder is the optional store capability that remembers the last sign-in.
+type LoginRecorder interface {
+	RecordUserLogin(ctx context.Context, userID, ip string, at time.Time) error
+}
+
+// recordLogin stores when and from where the account signed in, for the admin
+// console. Best effort: a failed bookkeeping write never fails a sign-in.
+func (h *AuthHandler) recordLogin(r *http.Request, user *domain.User) {
+	recorder, ok := h.userStore.(LoginRecorder)
+	if !ok {
+		return
+	}
+	if err := recorder.RecordUserLogin(r.Context(), user.ID, clientIP(r), time.Now()); err != nil {
+		log.Printf("WARN: record sign-in for %s: %v", user.ID, err)
+	}
 }
 
 // findLoginUser resolves a sign-in identifier. One with "@" is an address,
@@ -428,40 +612,37 @@ func writeEmailNotVerified(w http.ResponseWriter) {
 }
 
 // Logout revokes the caller's current PAT and clears the session cookie.
-// Returns 200 even if no token is present so client logout is idempotent.
+// Returns 200 even if no token is present so client logout is idempotent. If
+// the token cannot be deleted it is still alive, so the answer is a 500 (the
+// cookie is cleared either way).
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	var revokeErr error
 	if t := auth.GetToken(r.Context()); t != nil {
-		_ = h.tokenStore.DeleteToken(r.Context(), t.TokenHash)
+		revokeErr = h.tokenStore.DeleteToken(r.Context(), t.TokenHash)
 	}
 	clearSessionCookie(w)
+	if revokeErr != nil {
+		log.Printf("ERROR: logout could not revoke the session token: %v", revokeErr)
+		httpError(w, msgInternalError, http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// writeSessionCookie sets the session PAT as an httpOnly cookie. The cookie
-// is the studio's auth path; XSS in the React app cannot read it.
+// writeSessionCookie sets the session PAT as an httpOnly __Host- cookie. The
+// cookie is the studio's auth path; XSS in the React app cannot read it. The
+// unprefixed cookie an earlier release set is cleared alongside.
 func writeSessionCookie(w http.ResponseWriter, raw string, expiry time.Time) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    raw,
-		Path:     "/",
-		Expires:  expiry,
-		HttpOnly: true,
-		Secure:   true, // requires HTTPS in production; browsers ignore Secure on http://localhost during dev
-		SameSite: http.SameSiteStrictMode,
-	})
+	cookie := auth.NewCookie(auth.LegacySessionCookieName, raw, 0, http.SameSiteStrictMode)
+	cookie.Expires = expiry
+	http.SetCookie(w, cookie)
+	auth.ClearLegacyCookie(w, auth.LegacySessionCookieName)
 }
 
 // clearSessionCookie tells the browser to drop the cookie immediately.
 func clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
+	http.SetCookie(w, auth.NewCookie(auth.LegacySessionCookieName, "", -1, http.SameSiteStrictMode))
+	auth.ClearLegacyCookie(w, auth.LegacySessionCookieName)
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
@@ -510,6 +691,10 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid email format", http.StatusBadRequest)
 		return
 	}
+	if err := h.signupGuard.CheckEmail(r.Context(), req.Email); err != nil {
+		writeSignupRefusal(w, err)
+		return
+	}
 	if msg := isValidPassword(req.Password); msg != "" {
 		httpError(w, msg, http.StatusBadRequest)
 		return
@@ -517,7 +702,7 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
-		httpError(w, "failed to hash password", http.StatusInternalServerError)
+		writePasswordBusy(w, err)
 		return
 	}
 
@@ -548,9 +733,9 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, user)
 }
 
-// checkRegistration validates the submitted fields and refuses a name or
-// address already in use. A service principal occupies its name too:
-// registration can never take over a service identity.
+// checkRegistration validates the submitted fields. It says nothing about
+// whether the name or address is in use: that is registrationTaken's question,
+// asked only once the caller is allowed to register at all.
 func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, password string) (int, string) {
 	if username == "" || email == "" || password == "" {
 		return http.StatusBadRequest, "username, email, and password are required"
@@ -564,13 +749,16 @@ func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, pa
 	if msg := isValidPassword(password); msg != "" {
 		return http.StatusBadRequest, msg
 	}
-	if existing, _ := h.userStore.FindUserByUsername(ctx, username); existing != nil {
-		return http.StatusConflict, "username already taken"
-	}
-	if existing, _ := h.userStore.FindUserByEmail(ctx, email); existing != nil {
-		return http.StatusConflict, "email already registered"
-	}
 	return 0, ""
+}
+
+// registrationTaken reports whether the username and the address already have an
+// account; both lookups always run. A service principal occupies its name too:
+// registration can never take over a service identity.
+func (h *AuthHandler) registrationTaken(ctx context.Context, username, email string) (usernameTaken, emailTaken bool) {
+	byName, _ := h.userStore.FindUserByUsername(ctx, username)
+	byEmail, _ := h.userStore.FindUserByEmail(ctx, email)
+	return byName != nil, byEmail != nil
 }
 
 // checkRegistrationInvite validates an invite token before any account is
@@ -594,21 +782,24 @@ func (h *AuthHandler) checkRegistrationInvite(ctx context.Context, token, addres
 	if !strings.EqualFold(invite.Email, address) {
 		return "", http.StatusForbidden, errInviteForAnotherAddress
 	}
+	if err := h.orgGuard.CheckOrg(ctx, invite.OrgID); err != nil {
+		return "", http.StatusForbidden, orgguard.Message
+	}
 	return hash, 0, ""
 }
 
 // joinInvitedOrg spends the invite for the account just created. If the token
 // was spent in between, the account is removed again so a refused invite
 // leaves nothing behind.
-func (h *AuthHandler) joinInvitedOrg(ctx context.Context, hash string, user *domain.User) (int, string) {
-	_, err := h.orgStore.AcceptPendingInvite(ctx, hash, user.ID, time.Now())
+func (h *AuthHandler) joinInvitedOrg(ctx context.Context, hash string, user *domain.User) (*domain.PendingInvite, int, string) {
+	invite, err := h.orgStore.AcceptPendingInvite(ctx, hash, user.ID, time.Now())
 	if err == nil {
-		return 0, ""
+		return invite, 0, ""
 	}
 	if derr := h.userStore.DeleteUser(ctx, user.ID); derr != nil {
 		log.Printf("WARN: remove account %s after a refused invite: %v", user.ID, derr)
 	}
-	return inviteErrorStatus(err), inviteErrorMessage(err)
+	return nil, inviteErrorStatus(err), inviteErrorMessage(err)
 }
 
 const (

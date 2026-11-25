@@ -1,5 +1,7 @@
 import { ProvisioningStage } from '../../types';
 import { cn } from '../../utils/cn';
+import { STAGE_LABELS } from '../../utils/stageLabels';
+import { ProvisionFailure } from './ProvisionFailure';
 import {
   CheckCircle, XCircle, Loader2,
   ShieldCheck, FolderPlus, Package, Clock, KeyRound, Archive, Activity,
@@ -8,17 +10,18 @@ import {
 interface StageTimelineProps {
   readonly currentStage: ProvisioningStage;
   readonly failureReason?: string;
+  readonly failureKind?: string;
 }
 
 const STAGES = [
-  { key: ProvisioningStage.VALIDATING,            label: 'Validating',  icon: ShieldCheck },
-  { key: ProvisioningStage.NAMESPACE_CREATION,    label: 'Namespace',   icon: FolderPlus  },
-  { key: ProvisioningStage.CRD_DEPLOYMENT,        label: 'Deploy CRD',  icon: Package     },
-  { key: ProvisioningStage.WAITING_FOR_READY,     label: 'Waiting',     icon: Clock       },
-  { key: ProvisioningStage.CREDENTIAL_GENERATION, label: 'Credentials', icon: KeyRound    },
-  { key: ProvisioningStage.BACKUP_CONFIGURATION,  label: 'Backup',      icon: Archive     },
-  { key: ProvisioningStage.METRICS_SETUP,         label: 'Metrics',     icon: Activity    },
-  { key: ProvisioningStage.COMPLETED,             label: 'Completed',   icon: CheckCircle },
+  { key: ProvisioningStage.VALIDATING,            icon: ShieldCheck },
+  { key: ProvisioningStage.NAMESPACE_CREATION,    icon: FolderPlus  },
+  { key: ProvisioningStage.CRD_DEPLOYMENT,        icon: Package     },
+  { key: ProvisioningStage.WAITING_FOR_READY,     icon: Clock       },
+  { key: ProvisioningStage.CREDENTIAL_GENERATION, icon: KeyRound    },
+  { key: ProvisioningStage.BACKUP_CONFIGURATION,  icon: Archive     },
+  { key: ProvisioningStage.METRICS_SETUP,         icon: Activity    },
+  { key: ProvisioningStage.COMPLETED,             icon: CheckCircle },
 ];
 
 type StageState = 'done' | 'running' | 'failed' | 'pending';
@@ -30,7 +33,7 @@ function getLabelClass(state: StageState): string {
   return 'text-text-tertiary';
 }
 
-export function StageTimeline({ currentStage, failureReason }: StageTimelineProps) {
+export function StageTimeline({ currentStage, failureReason, failureKind }: StageTimelineProps) {
   const currentIndex = STAGES.findIndex((s) => s.key === currentStage);
   const isFailed = currentStage === ProvisioningStage.FAILED;
 
@@ -65,7 +68,7 @@ export function StageTimeline({ currentStage, failureReason }: StageTimelineProp
                   {state === 'pending' && <StageIcon className="w-4 h-4 text-text-tertiary" />}
                 </div>
                 <p className={cn('mt-2 text-xs text-center w-20', getLabelClass(state))}>
-                  {stage.label}
+                  {STAGE_LABELS[stage.key]}
                 </p>
               </div>
               {index < STAGES.length - 1 && (
@@ -79,10 +82,10 @@ export function StageTimeline({ currentStage, failureReason }: StageTimelineProp
         })}
       </div>
 
-      {isFailed && failureReason && (
+      {isFailed && (
         <div className="bg-red-900/20 border border-color-error rounded-lg p-4 mt-2">
-          <p className="text-color-error font-medium text-sm">Provisioning Failed</p>
-          <p className="text-text-secondary text-xs mt-1">{failureReason}</p>
+          <p className="text-color-error font-medium text-sm">Provisioning failed</p>
+          <ProvisionFailure reason={failureReason} kind={failureKind} className="text-text-secondary text-xs mt-1" />
         </div>
       )}
     </div>

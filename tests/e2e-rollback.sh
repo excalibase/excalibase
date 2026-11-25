@@ -22,7 +22,7 @@ kubectl -n $NS port-forward svc/provisioning 24005:24005 > /dev/null 2>&1 &
 sleep 4
 
 # Login
-TOKEN=$(curl -s http://localhost:24005/api/auth/login \
+TOKEN=$(curl -s http://localhost:24005/api/auth/login -H "X-Return-Session-Token: true" \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin123"}' | jq -r '.token')
 if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
@@ -78,7 +78,7 @@ PROJECT_ID=$(echo "$R" | jq -r '.projectId')
 if [[ "$PROJECT_ID" == proj-* ]]; then
   pass "valid request accepted (ref=$PROJECT_ID)"
   # Clean up
-  curl -s -X DELETE "http://localhost:24005/api/admin/projects/$PROJECT_ID" \
+  curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' "http://localhost:24005/api/admin/projects/$PROJECT_ID" \
     -H "Authorization: Bearer $TOKEN" > /dev/null
 else
   fail "valid pg 17 rejected" "$R"

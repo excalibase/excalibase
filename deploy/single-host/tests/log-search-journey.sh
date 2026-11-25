@@ -59,7 +59,7 @@ case "$(lapi "/provision/$PID2/logs?lines=500&since=1h&q=$MARK")" in *"$MARK"*) 
 # API, for its own project_id alone; the other project's lines stay.
 echo "== stored log deletion"
 loki_deletes() { $DOCKER exec excalibase-provisioning wget -qO- "http://loki:3100/loki/api/v1/delete" 2>/dev/null; }
-DD=$(c -X DELETE -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/admin/projects/$PID2" -w ' %{http_code}')
+DD=$(c -X DELETE -H "Authorization: Bearer $T" -H "Content-Type: application/json" -d '{"reason":"journey cleanup"}' "https://studio.localhost:$PORT/api/admin/projects/$PID2" -w ' %{http_code}')
 case "$DD" in *" 200"|*" 202"|*" 204") ok "the second project is deleted" ;; *) ko "delete $PID2: ${DD:0:300}" ;; esac
 LD=
 for i in $(seq 60); do LD=$(loki_deletes); case "$LD" in *"project_id=\\\"$PID2\\\""*) break ;; esac; sleep 5; done

@@ -3,11 +3,12 @@ import { Routes, Route } from 'react-router-dom';
 import { AuthLayout } from './components/layout/AuthLayout';
 import { AuthGuard } from './components/auth/AuthGuard';
 import { VaultGuard } from './components/auth/VaultGuard';
-import { PlatformLayout } from './components/layout/PlatformLayout';
-import { ProjectLayout } from './components/layout/ProjectLayout';
+import { PlatformLayoutSwitch, ProjectLayoutSwitch } from './components/layout/v2/LayoutSwitch';
 import { DatabaseRequired } from './components/DatabaseRequired';
 import { DatabaseRunning } from './components/DatabaseRunning';
 import { FeatureGate } from './components/FeatureGate';
+import { ProjectIndex } from './components/layout/v2/ProjectIndex';
+import { AdminRouteGuard } from './components/admin/AdminRouteGuard';
 
 // Lazy-loaded pages
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
@@ -20,7 +21,6 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ de
 const OrgsPage = lazy(() => import('./pages/OrgsPage').then(m => ({ default: m.OrgsPage })));
 const OrgDetailPage = lazy(() => import('./pages/OrgDetailPage').then(m => ({ default: m.OrgDetailPage })));
 const InstancesPage = lazy(() => import('./pages/InstancesPage').then(m => ({ default: m.InstancesPage })));
-const ProjectOverviewPage = lazy(() => import('./pages/ProjectOverviewPage').then(m => ({ default: m.ProjectOverviewPage })));
 const AddDatabasePage = lazy(() => import('./pages/AddDatabasePage').then(m => ({ default: m.AddDatabasePage })));
 const InstanceDetailPage = lazy(() => import('./pages/InstanceDetailPage').then(m => ({ default: m.InstanceDetailPage })));
 const ProvisionPage = lazy(() => import('./pages/ProvisionPage').then(m => ({ default: m.ProvisionPage })));
@@ -69,6 +69,9 @@ const ContainerPipelinePage = lazy(() => import('./pages/ContainerPipelinePage')
 const ConnectAiToolPage = lazy(() => import('./pages/ConnectAiToolPage').then(m => ({ default: m.ConnectAiToolPage })));
 const SdkKeysPage = lazy(() => import('./pages/SdkKeysPage').then(m => ({ default: m.SdkKeysPage })));
 const AccessTokensPage = lazy(() => import('./pages/AccessTokensPage').then(m => ({ default: m.AccessTokensPage })));
+const AccountPage = lazy(() => import('./pages/AccountPage').then(m => ({ default: m.AccountPage })));
+const ProjectVariablesPage = lazy(() => import('./pages/ProjectVariablesPage').then(m => ({ default: m.ProjectVariablesPage })));
+const UsagePage = lazy(() => import('./pages/UsagePage').then(m => ({ default: m.UsagePage })));
 const StoragePage = lazy(() => import('./pages/StoragePage').then(m => ({ default: m.StoragePage })));
 
 function PageLoader() {
@@ -101,20 +104,22 @@ export default function App() {
 
           {/* Platform pages */}
           <Route element={<AuthGuard />}>
-          <Route element={<PlatformLayout />}>
+          <Route element={<PlatformLayoutSwitch />}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/orgs" element={<OrgsPage />} />
             <Route path="/orgs/:orgId" element={<OrgDetailPage />} />
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
-            <Route path="/admin" element={<PlatformAdminPage />} />
-            <Route path="/admin/host" element={<FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate>} />
+            <Route path="/admin" element={<AdminRouteGuard><PlatformAdminPage /></AdminRouteGuard>} />
+            <Route path="/admin/host" element={<AdminRouteGuard><FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate></AdminRouteGuard>} />
+            <Route path="/usage" element={<FeatureGate feature="studio_v2"><UsagePage /></FeatureGate>} />
+            <Route path="/account" element={<FeatureGate feature="studio_v2"><AccountPage /></FeatureGate>} />
             <Route path="/account/tokens" element={<AccessTokensPage />} />
           </Route>
 
           {/* Project-scoped pages */}
-          <Route path="/project/:projectId" element={<ProjectLayout />}>
-            <Route index element={<ProjectOverviewPage />} />
+          <Route path="/project/:projectId" element={<ProjectLayoutSwitch />}>
+            <Route index element={<ProjectIndex />} />
             <Route path="database/add" element={<AddDatabasePage />} />
             {/* Pages that work on the project's database: a project created
                 without one gets a notice instead (EXC-426). */}
@@ -183,6 +188,7 @@ export default function App() {
             <Route path="edge-functions" element={<EdgeFunctionsPage />} />
             {/* Storage */}
             <Route path="storage" element={<StoragePage />} />
+            <Route path="variables" element={<FeatureGate feature="studio_v2"><ProjectVariablesPage /></FeatureGate>} />
             <Route path="ai-tools" element={<FeatureGate feature="mcp"><ConnectAiToolPage /></FeatureGate>} />
             <Route path="monitoring/alerts" element={<AlertsPage />} />
             {/* Settings */}

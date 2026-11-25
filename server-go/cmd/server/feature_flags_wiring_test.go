@@ -169,9 +169,33 @@ var darkWork = map[features.Feature]string{
 	features.SingleHostBuilds: "TestSiteBuildMode",
 	features.AppGitBuilds:     "TestAppBuilds_NothingWiredWhileTheFlagIsOff",
 	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
+	// Off, credentials keep their old shape (internal/service, internal/handler).
+	features.OneTimeCredentials: "TestCredentialsStillCarryThePasswordWhileOneTimeIsOff",
+	// Only MCP's invoke_function reads it; no route is gated (internal/mcpserver).
+	features.FunctionInvoke: "TestDarkToolsFollowTheirFeature",
 	// Off, rotation leaves sessions alone, credentials carry no reader and the
 	// read address names the owner (internal/service).
 	features.DBReadRole: "TestRotationLeavesSessionsAloneWhileTheFlagIsOff",
+	// On unless switched off: off, an app and a sign-up are not checked (internal/handler).
+	features.ProxyBlock:  "TestAppCreate_AllowsANormalAppAndAnOffFlag",
+	features.SignupGuard: "TestRegister_OffFlagAcceptsADisposableAddress",
+	// On unless switched off: off, no archive alert is raised and Free keeps the operator's interval.
+	features.WALArchiveAlert: "TestWALArchiveSampler_OffWhenTheGuardIsOff",
+	features.FreeWALUpload:   "TestTierConfig_GuardOffLeavesTheOperatorsInterval",
+	// On unless switched off: off, apps and functions keep the owner's login (internal/service).
+	features.AppRuntimeLogin: "TestAppRuntimeLogin_OffKeepsTheOwnerLogin",
+	// On unless switched off: off, a function's HTML answer keeps its type (internal/handler).
+	features.FunctionHTMLGuard: "TestRuntimeResponseGuardOffKeepsTheFunctionsType",
+	// On unless switched off: only MCP's destructive tools read it; no route is gated (internal/mcpserver).
+	features.MCPConfirm: "TestTheSwitchedOffGuardDeletesAtOnce",
+	// Off, apps deploy by tag and are pulled always (internal/service, internal/k8s).
+	features.AppImagePin: "TestDeployApp_FlagOffLeavesTheDeployUnchanged",
+	// Off, no guard is started (cmd/server).
+	features.CrashLoopGuard: "TestCrashGuard_WantedOnlyWithHostingAndTheFlag",
+	// Off, a suspension sends no mail (internal/adminconsole).
+	features.SuspensionEmails: "TestSuspendSendsNothingWhileTheFlagIsOff",
+	// Studio's layout only: the server reports it through /api/config.
+	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

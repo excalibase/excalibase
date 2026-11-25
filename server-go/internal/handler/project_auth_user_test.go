@@ -15,7 +15,7 @@ func TestAuthUser_InfoSaysTheUserAPIIsOnOnlyWhileTheFlagIs(t *testing.T) {
 	if w.Code != http.StatusOK || decodeObject(t, w.Body.Bytes())["userApiEnabled"] != true {
 		t.Fatalf("flag on: %d %s", w.Code, w.Body.String())
 	}
-	assertNoSignInKeys(t, w.Body.Bytes(), "redirectUrls", "allowNewUsers", "oauthProviders", "emailOtpEnabled")
+	assertNoSignInKeys(t, w.Body.Bytes(), "redirectUrls", "oauthProviders", "emailOtpEnabled")
 
 	for _, flags := range [][]features.Feature{nil, {features.AuthOAuth, features.AuthOTP}} {
 		off := setupSignInHandler(t, flags...)

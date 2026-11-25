@@ -115,10 +115,10 @@ func TestSiteGit_RoutesBesideTheSiteTree(t *testing.T) {
 	}
 }
 
-// The browser key rides only to the callback path, unreadable by scripts.
+// The browser key is a __Host- cookie, unreadable by scripts.
 func TestSiteGitCookie(t *testing.T) {
 	cookie := siteGitCookie("key", 600)
-	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/api/sites/github" {
+	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" || cookie.Name != "__Host-excali_site_git" {
 		t.Fatalf("cookie %+v", cookie)
 	}
 }

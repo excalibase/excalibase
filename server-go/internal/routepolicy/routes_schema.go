@@ -75,7 +75,8 @@ func schemaWriteRows() []Row {
 		refusedOnMySQL(schemaWrite(http.MethodPost, "/functions"), MySQLNoTrackedFunctions),
 		mysqlCapable(schemaWrite(http.MethodPost, "/indexes")),
 		refusedOnMySQL(schemaWrite(http.MethodPost, "/policies"), mysqlNoPolicies),
-		refusedOnMySQL(schemaWrite(http.MethodPost, "/roles"), mysqlNoRoles),
+		refusedOnMySQL(withNote(schemaWrite(http.MethodPost, "/roles"),
+			"a NOLOGIN role is Developer; a LOGIN role or one with a password is a credential and the handler refuses it below Admin (EXC-761)"), mysqlNoRoles),
 		mysqlCapable(schemaWrite(http.MethodPost, "/tables")),
 		refusedOnMySQL(schemaWrite(http.MethodPost, "/triggers"), mysqlNoTriggers),
 		mysqlCapable(schemaWrite(http.MethodPost, "/tables/{tableName}/columns")),
@@ -125,3 +126,9 @@ const (
 		"and note MySQL DDL is not transactional, so a failed migration is not rolled back"
 	mysqlNoRealtime = "realtime on MySQL reads the binlog through the watcher, which is not served yet"
 )
+
+// withNote records why a row's contract is what it is.
+func withNote(row Row, note string) Row {
+	row.Note = note
+	return row
+}

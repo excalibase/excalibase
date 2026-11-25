@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -23,6 +24,8 @@ const (
 // adapter for the project's DeploymentMode and forwards. CNPG, Docker,
 // and (future) MySQL adapters all live behind this dispatch.
 type BackupService struct {
+	// orgGuard refuses a restore for a suspended owner's organisation (EXC-845); nil allows all.
+	orgGuard *orgguard.Guard
 	store    storage.InstanceStore
 	adapters map[domain.DeploymentMode]BackupAdapter
 	// engineAdapters serve engines other than Postgres (backup_dispatch.go).
@@ -112,6 +115,9 @@ func (s *BackupService) SupportsInPlaceRestore(mode domain.DeploymentMode) bool 
 // RestoreInPlace replaces projectID's database with its own backups at the
 // point req names. The project keeps its id, so no project slot is needed.
 func (s *BackupService) RestoreInPlace(ctx context.Context, projectID string, req domain.RestoreRequest) error {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
 	if s.inPlace == nil {
 		return ErrInPlaceRestoreNotConfigured
 	}
@@ -164,6 +170,9 @@ func NewBackupService(store storage.InstanceStore, client k8s.KubeClient, storag
 func NewBackupServiceWithAdapters(store storage.InstanceStore, adapters map[domain.DeploymentMode]BackupAdapter, _ string) *BackupService {
 	return &BackupService{store: store, adapters: adapters}
 }
+
+// SetOrgGuard makes every restore refuse a suspended owner's organisation.
+func (s *BackupService) SetOrgGuard(guard *orgguard.Guard) { s.orgGuard = guard }
 
 // RegisterAdapter adds or replaces an adapter at runtime. Used when
 // the Docker client is wired post-construction (matches the rest of
@@ -384,6 +393,9 @@ func (s *BackupService) BackupStatus(ctx context.Context, projectID, backupID st
 }
 
 func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	inst, adapter, req, err := s.copySource(ctx, projectID, req)
 	if err != nil {
 		return nil, err
@@ -398,6 +410,9 @@ func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string,
 // slot when it was submitted (EXC-639). Counting slots again would count the
 // job against itself; registration still takes the slot atomically.
 func (s *BackupService) RestoreSubmittedCopy(ctx context.Context, projectID string, req domain.RestoreRequest) error {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
 	inst, adapter, req, err := s.copySource(ctx, projectID, req)
 	if err != nil {
 		return err

@@ -93,7 +93,16 @@ func (rt *restartableRuntime) script(id string) (edgefn.DeployRequest, bool) {
 // override panics — the replay path must never touch the cluster.
 type replayK8s struct {
 	k8s.KubeClient
-	ensured int
+	ensured    int
+	hasRuntime bool
+}
+
+func (f *replayK8s) GetDeployment(context.Context, string, string) (bool, error) {
+	return f.hasRuntime, nil
+}
+
+func (f *replayK8s) DenoRuntimeRollout(context.Context, string) (k8s.DenoRolloutState, error) {
+	return k8s.DenoRuntimeReady, nil
 }
 
 func (f *replayK8s) EnsureDenoRuntime(context.Context, string, k8s.DenoRuntimeSpec) error {
@@ -251,8 +260,8 @@ func TestFunctionHandler_Replayer_RestoresFunctionsAfterRuntimeRestart(t *testin
 	if !ok || after.Code != before.Code || after.Secrets["EXCALIBASE_PROJECT_ID"] != testReplayProject {
 		t.Fatalf("beta not restored identically after restart: ok=%v", ok)
 	}
-	if fake.ensured != 0 {
-		t.Fatalf("replay provisioned runtimes: %d", fake.ensured)
+	if fake.ensured != 2 {
+		t.Fatalf("replay brings the runtime under the sandbox before each push: %d calls, want 2", fake.ensured)
 	}
 }
 

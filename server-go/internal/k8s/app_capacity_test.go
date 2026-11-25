@@ -123,3 +123,11 @@ func TestGetClusterCapacity_PerNode(t *testing.T) {
 		t.Fatal("the headroom must be held back per node too")
 	}
 }
+
+func TestRuntimeClassPlacement_ReportsTheHandler(t *testing.T) {
+	c := newFakeClient(&nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: "gvisor"}, Handler: "runsc"})
+	placement, err := c.RuntimeClassPlacement(context.Background(), "gvisor")
+	if err != nil || placement.Handler != "runsc" {
+		t.Fatalf("placement = %+v %v, want handler runsc", placement, err)
+	}
+}

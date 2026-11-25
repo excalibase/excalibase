@@ -3,6 +3,8 @@ package provisioner
 import (
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 // ADR 0041 decision 5: the platform's own users, never MOCO's, each with
@@ -58,5 +60,102 @@ func TestMySQLPlatformUsersSQL_QuotesPasswords(t *testing.T) {
 func TestMySQLAlterUserSQL(t *testing.T) {
 	if got := MySQLAlterUserSQL("excalibase_app", "n3w'"); got != "ALTER USER 'excalibase_app'@'%' IDENTIFIED BY 'n3w''' REQUIRE SSL;" {
 		t.Errorf("got %s", got)
+	}
+}
+
+// EXC-765: the logins customer code can hold (the owner's and the runtime
+// login) are granted the project database and nothing global, so none can
+// create a user, grant a privilege onward or change the server.
+func TestMySQLCustomerFacingUsersHoldNoGlobalPrivilege(t *testing.T) {
+	sql := MySQLPlatformUsersSQL("app", MySQLPasswords{
+		Admin: "a1", App: "b2", AuthAdmin: "c3", Watcher: "d4", Reader: "e5", Runtime: "f6",
+	})
+	for _, want := range []string{
+		"CREATE USER IF NOT EXISTS 'excalibase_runtime'@'%' IDENTIFIED BY 'f6' REQUIRE SSL;",
+		"ALTER USER 'excalibase_runtime'@'%' ACCOUNT UNLOCK;",
+		"GRANT ALL PRIVILEGES ON `app`.* TO 'excalibase_runtime'@'%';",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	for _, line := range customerFacingGrants(sql) {
+		for _, forbidden := range []string{"GRANT OPTION", "CREATE USER", "SUPER", "*.*", "ROLE_ADMIN", "SYSTEM_VARIABLES_ADMIN"} {
+			if strings.Contains(line, forbidden) {
+				t.Errorf("a login customer code can hold has %s: %s", forbidden, line)
+			}
+		}
+	}
+}
+
+// customerFacingGrants are the GRANT lines of the owner's, the platform app's
+// and the runtime login.
+func customerFacingGrants(sql string) []string {
+	var grants []string
+	for _, line := range strings.Split(sql, "\n") {
+		for _, user := range []string{"'admin'", "'excalibase_app'", "'excalibase_runtime'"} {
+			if strings.HasPrefix(line, "GRANT") && strings.Contains(line, "TO "+user) {
+				grants = append(grants, line)
+			}
+		}
+	}
+	return grants
+}
+
+func TestMySQLRuntimeLoginIsLockedWithoutAPassword(t *testing.T) {
+	sql := MySQLPlatformUsersSQL("app", MySQLPasswords{Admin: "a1", App: "b2", AuthAdmin: "c3", Watcher: "d4"})
+	if !strings.Contains(sql, "ALTER USER IF EXISTS 'excalibase_runtime'@'%' ACCOUNT LOCK;") {
+		t.Error("a runtime login a restored copy brought is left open")
+	}
+	if strings.Contains(sql, "CREATE USER IF NOT EXISTS 'excalibase_runtime'") {
+		t.Error("a runtime login was created without a password")
+	}
+}
+
+// EXC-765 review: a database grant names a pattern, where _ and % match other
+// names, so "aut_" would reach "auth". The name is escaped in every grant, and
+// grants an earlier run made with the pattern are revoked first.
+func TestMySQLGrantsEscapeWildcardsInTheDatabaseName(t *testing.T) {
+	sql := MySQLPlatformUsersSQL("aut_", MySQLPasswords{Admin: "a", App: "b", AuthAdmin: "c", Watcher: "d", Reader: "e", Runtime: "f"})
+	if !strings.Contains(sql, "CREATE DATABASE IF NOT EXISTS `auth`;") {
+		t.Error("the auth database is created under its own name")
+	}
+	for _, user := range []string{"admin", "excalibase_app", "cdc_watcher", "excalibase_reader", "excalibase_runtime"} {
+		revoke := "REVOKE IF EXISTS ALL PRIVILEGES ON `aut_`.* FROM '" + user + "'@'%' IGNORE UNKNOWN USER;"
+		if !strings.Contains(sql, revoke) {
+			t.Errorf("missing %s", revoke)
+		}
+	}
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.HasPrefix(line, "GRANT") && strings.Contains(line, "`aut_`") {
+			t.Errorf("a grant names the database as a pattern: %s", line)
+		}
+	}
+	for _, want := range []string{
+		"GRANT ALL PRIVILEGES ON `aut\\_`.* TO 'admin'@'%';",
+		"GRANT ALL PRIVILEGES ON `aut\\_`.* TO 'excalibase_runtime'@'%';",
+		"GRANT SELECT ON `aut\\_`.* TO 'cdc_watcher'@'%';",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	// The revokes come before the grants, or they would take the new ones back.
+	if strings.Index(sql, "REVOKE IF EXISTS ALL PRIVILEGES ON `aut_`") > strings.Index(sql, "GRANT ALL PRIVILEGES ON `aut\\_`") {
+		t.Error("the pattern revokes run after the escaped grants")
+	}
+	if plain := MySQLPlatformUsersSQL("shop", MySQLPasswords{Admin: "a", App: "b", AuthAdmin: "c", Watcher: "d"}); strings.Contains(plain, "ON `shop`.* FROM") {
+		t.Error("a name with no wildcard needs no revoke")
+	}
+}
+
+func TestMySQLReservedDatabaseNamesAreRefused(t *testing.T) {
+	for _, name := range []string{"auth", "excalibase", "mysql", "sys", "information_schema", "performance_schema", "excalibase_x"} {
+		if _, _, err := validateMySQLRequest(domain.ProvisioningRequest{DatabaseName: name}); err == nil {
+			t.Errorf("%q was accepted as a project database", name)
+		}
+	}
+	if _, _, err := validateMySQLRequest(domain.ProvisioningRequest{DatabaseName: "aut_"}); err != nil {
+		t.Errorf("a name with an underscore is fine once escaped: %v", err)
 	}
 }

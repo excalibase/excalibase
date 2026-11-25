@@ -60,6 +60,19 @@ describe('end-user sign-in settings', () => {
     expect(api.get).not.toHaveBeenCalledWith(PROVIDERS_PATH);
   });
 
+  test('keep the new-user switch usable while every sign-in feature is off (EXC-457)', async () => {
+    const u = userEvent.setup();
+    serve(false);
+    vi.mocked(api.put).mockImplementation(async (_path: string, body: unknown) => ({ data: body }));
+    renderPage();
+    const card = await screen.findByTestId('allow-new-users-card');
+    expect(within(card).getByLabelText(/allow new users/i)).toBeChecked();
+    await u.click(within(card).getByLabelText(/allow new users/i));
+    await waitFor(() => expect(api.put).toHaveBeenCalledWith(SETTINGS_PATH, {
+      siteUrl: settings.siteUrl, requireEmailVerification: true, allowNewUsers: false,
+    }));
+  });
+
   test('show each provider with its callback URL and the secret only as set', async () => {
     serve(true);
     renderPage();

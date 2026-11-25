@@ -8,17 +8,18 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 )
 
 const (
-	envTestOwnerPassword = "owner-pass-4e1"
-	envTestSecretValue   = "sk_live_deploy_env_77"
+	envTestRuntimePassword = "runtime-pass-4e1"
+	envTestSecretValue     = "sk_live_deploy_env_77"
 )
 
 // envDeployFixture wires the deploy service to the production resolver over a
-// fake vault holding the project's owner login and one app secret.
+// fake vault holding the project's runtime login and one app secret.
 func envDeployFixture(t *testing.T) (*AppDeployService, *fakeDeployStore, *k8s.MockClient, *fakeVault, *apphost.App) {
 	t.Helper()
 	app := sampleDeployApp()
@@ -33,9 +34,9 @@ func envDeployFixture(t *testing.T) (*AppDeployService, *fakeDeployStore, *k8s.M
 		{Name: "API_KEY", Kind: apphost.KindSecret, Secret: &secret},
 	}
 	vault := newFakeVault()
-	vault.data[vaultCredentialPath(app.ProjectID, roleAdmin)] = map[string]string{
+	vault.data[vaultCredentialPath(app.ProjectID, roleRuntime)] = map[string]string{
 		"host": "db-rw." + testDeployNamespace + ".svc.cluster.local", "port": "5432",
-		"database": "shopdb", "username": "shop_owner", "password": envTestOwnerPassword,
+		"database": "shopdb", "username": roleRuntime, "password": envTestRuntimePassword,
 	}
 	vault.data[secret.Path] = map[string]string{secret.Key: envTestSecretValue}
 	instances := fakestore.NewInstances()
@@ -46,8 +47,10 @@ func envDeployFixture(t *testing.T) (*AppDeployService, *fakeDeployStore, *k8s.M
 	deployStore := newFakeDeployStore()
 	kube := k8s.NewMockClient()
 	kube.Capacity = roomyCluster
+	resolver := NewAppEnvResolver(vault, instances)
+	resolver.SetFeatures(features.NewStatic(features.AppRuntimeLogin))
 	svc := NewAppDeployService(newFakeAppStoreForDeploy(app), deployStore, kube, instances,
-		NewAppEnvResolver(vault, instances), testDeployRender)
+		resolver, testDeployRender)
 	svc.SetPlanTiers(fixedPlan{tier: app.Tier})
 	svc.SetNamespaceQuotaTiers(quotaTestTiers)
 	svc.async = func(f func()) { f() }
@@ -65,7 +68,7 @@ func TestDeployApp_GivesTheContainerItsDatabaseAndSecretValues(t *testing.T) {
 	if workload == nil || workload.EnvSecret == nil {
 		t.Fatal("the workload must carry the app's env Secret")
 	}
-	wantURL := "postgresql://shop_owner:" + envTestOwnerPassword + "@db-rw." + testDeployNamespace +
+	wantURL := "postgresql://" + roleRuntime + ":" + envTestRuntimePassword + "@db-rw." + testDeployNamespace +
 		".svc.cluster.local:5432/shopdb?sslmode=require"
 	if got := string(workload.EnvSecret.Data["DATABASE_URL"]); got != wantURL {
 		t.Errorf("DATABASE_URL = %q, want %q", got, wantURL)
@@ -82,13 +85,13 @@ func TestDeployApp_GivesTheContainerItsDatabaseAndSecretValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, value := range []string{envTestOwnerPassword, envTestSecretValue} {
+	for _, value := range []string{envTestRuntimePassword, envTestSecretValue} {
 		if strings.Contains(string(encoded), value) {
 			t.Fatalf("the Deployment carries a secret value: %s", encoded)
 		}
 	}
 	record, _ := json.Marshal(deploy)
-	if strings.Contains(string(record), envTestSecretValue) || strings.Contains(string(record), envTestOwnerPassword) {
+	if strings.Contains(string(record), envTestSecretValue) || strings.Contains(string(record), envTestRuntimePassword) {
 		t.Fatalf("the deploy record carries a secret value: %s", record)
 	}
 }

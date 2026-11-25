@@ -9,13 +9,13 @@ var provisionRows = []Row{
 	{Methods: post, Pattern: "/api/provision/estimate", Auth: AuthSession, Owner: OwnerNone},
 
 	{Methods: get, Pattern: "/api/provision/{projectId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
-	{Methods: get, Pattern: "/api/provision/{projectId}/logs", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, MySQL: true, Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/provision/{projectId}/logs", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "runtime logs can hold request data and secrets; developer, like build logs", Database: true, MySQL: true, Discloses: NoSecret},
 	{Methods: get, Pattern: "/api/provision/{projectId}/maintenance-window", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, Discloses: NoSecret},
 	{Methods: put, Pattern: "/api/provision/{projectId}/maintenance-window", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
 
 	{Methods: del, Pattern: "/api/provision/{projectId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "stops the project and hard-deletes it after the grace period"},
 	{Methods: post, Pattern: "/api/provision/{projectId}/deletion/cancel", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleOwner},
-	{Methods: get, Pattern: "/api/provision/{projectId}/credentials", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Discloses: Secret, Note: "hands out the tenant database's superuser password", Database: true, MySQL: true},
+	{Methods: get, Pattern: "/api/provision/{projectId}/credentials", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Discloses: Secret, Note: "no password: host, port, user and a <password> template (EXC-759); with the flag off it still hands out the owner password", Database: true, MySQL: true},
 	{Methods: post, Pattern: "/api/provision/{projectId}/credentials/rotate", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true, MySQL: true},
 	{Methods: get, Pattern: "/api/provision/{projectId}/documentdb/users/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Discloses: NoSecret, Note: "names and roles only; a password is shown once, at create or rotate", Database: true},
 	{Methods: post, Pattern: "/api/provision/{projectId}/documentdb/users/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "creates a Mongo-only login in the project's cluster", Database: true},
@@ -93,7 +93,7 @@ var projectRows = []Row{
 	{Methods: get, Pattern: "/api/projects/{projectId}/functions/_metadata", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
 	{Methods: get, Pattern: "/api/projects/{projectId}/functions/runtime/status", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
 	{Methods: get, Pattern: "/api/projects/{projectId}/functions/{fnId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "the function is read as (projectId, fnId)"},
-	{Methods: get, Pattern: "/api/projects/{projectId}/functions/{fnId}/logs", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/projects/{projectId}/functions/{fnId}/logs", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Discloses: NoSecret, Note: "runtime logs; developer, like build logs"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/functions/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: del, Pattern: "/api/projects/{projectId}/functions/{fnId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: post, Pattern: "/api/projects/{projectId}/functions/{fnId}/invoke", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "the studio's test-run path; end users invoke via /functions/v1"},
@@ -124,8 +124,8 @@ var projectRows = []Row{
 	{Methods: post, Pattern: "/api/projects/{projectId}/metrics-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "mints a PAT holding only metrics:read, bound to this project; kept only as its SHA-256"},
 	{Methods: del, Pattern: "/api/projects/{projectId}/metrics-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "revokes only a metrics key bound to this project"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/sdk-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, Discloses: NoSecret, Note: "prefixes and dates only; the key itself is shown once, at creation"},
-	{Methods: post, Pattern: "/api/projects/{projectId}/sdk-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "relayed to auth with the control plane's own short key-admin token"},
-	{Methods: del, Pattern: "/api/projects/{projectId}/sdk-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: post, Pattern: "/api/projects/{projectId}/sdk-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "a publishable key is Developer; a secret (service-role) key is refused below Admin by the handler; relayed to auth with the control plane's own short key-admin token"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/sdk-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "a publishable key is Developer; revoking a secret (service-role) key is refused below Admin by the handler"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/ai-activity/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Discloses: NoSecret, Note: "MCP calls of the project; the revoke id is a token hash, shown for the caller's own tokens, or every member's to an org owner or admin"},
 	{Methods: del, Pattern: "/api/projects/{projectId}/ai-activity/tokens/{tokenHash}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "only a token the project's feed shows; another member's needs org owner or admin, checked in the handler"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/end-users/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Discloses: NoSecret, Note: "end users' emails and roles, read from auth with a user-admin token naming the caller"},
@@ -180,8 +180,8 @@ var projectRows = []Row{
 	{Methods: put, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/access", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "decides what the project's app users may do in the bucket"},
 	// S3 access keys (EXC-630): ids, scopes and dates only; the secret is in the create answer alone.
 	{Methods: get, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "access key ids, scopes and dates; never a secret"},
-	{Methods: post, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "issues a credential for the project's buckets; the secret is answered once"},
-	{Methods: del, Pattern: "/api/projects/{projectId}/storage/s3-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: post, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "issues a credential for the project's buckets; the secret is answered once"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/storage/s3-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
 
 	// tus mounts every method on two patterns. HEAD reports an upload's
 	// offset (a read); everything else creates, appends to or terminates an

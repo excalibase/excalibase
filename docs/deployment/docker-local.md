@@ -350,6 +350,7 @@ Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
 | `APP_HOSTING_ENABLED` | `false` (`true` with `--apps`) | Containers on this host |
 | `APP_DOMAIN` | `apps.<domain>` | Parent of every app hostname |
 | `APP_SANDBOX_RUNTIME` | `runsc` | `none` runs apps without gVisor |
+| `APP_USERNS` | `auto` | Rootless Podman without a sandbox only: `per-app` gives each app its own user range, `shared` one for all; Docker and gVisor are unchanged, and `per-app` there refuses to start ([podman.md](podman.md#apps-containers)) |
 | `APP_EGRESS` | `none` | `internet` lets apps call out |
 | `APP_DOMAIN_RESOLVER` | the host's | `host:port` of the DNS server custom domains' CNAMEs are checked against |
 
@@ -621,6 +622,22 @@ restart. DocumentDB projects have no slow-queries page on a single host.
 |---|---|---|
 | `FEATURE_REQUESTMETRICS` | unset (off) | request counting in graphql and auth, and the Requests page |
 | `FEATURE_SLOWQUERIES` | unset (off) | statement statistics for new Postgres projects, and the Slow queries page |
+
+## MCP function invoke
+
+`FEATURE_FUNCTIONINVOKE=true` in `.env` offers the MCP tool `invoke_function`,
+which runs one edge function and returns its answer. It is off by default. It
+is not a safeguard: code deployed to a project's functions can already read that
+project's function secrets and database URL and return them through its error
+text or logs, so anyone who may deploy a function (Developer and above) can read
+them. The setting only decides whether an AI tool gets this one way of running
+the code.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_FUNCTIONINVOKE` | unset (off) | the MCP `invoke_function` tool |
+| `FEATURE_MCPCONFIRM` | on (set `false` to switch off) | MCP's six destructive tools (`delete_app`, `delete_function`, `delete_site`, `delete_function_secret`, `revoke_publishable_key`, `revoke_s3_key`) delete nothing on the first call and need a second call with the token it returns |
+| `FEATURE_STUDIO_V2` | unset (off) | the cloud-console layout of Studio: new top bar, side navigation, command palette (⌘K) and shared table |
 
 ## Refusals you may see
 
