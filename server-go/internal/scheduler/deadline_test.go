@@ -23,6 +23,8 @@ func TestFanout_SlowProjectDoesNotStallTheOthers(t *testing.T) {
 
 	inv := &recordingInvoker{}
 	f := fanoutOver(map[string]*projectMock{"slow": slow, "proj_a": fast}, inv, alwaysLeader{})
+	// The slow project goes first, so a sweep that gave up at its timeout would never reach the other.
+	f.projects = func(context.Context) ([]string, error) { return []string{"slow", "proj_a"}, nil }
 	// The deadline covers the fast project's sweep as well as the slow one's, so it has to
 	// outlast a loaded runner; only the slow project's 30 s statement can reach it.
 	f.projectTimeout = time.Second
