@@ -9,6 +9,13 @@ on:
   pull_request:
     branches: [main, "release/**"]
 
+# A new push to a pull request cancels the older run of that PR (a run uses ~15
+# runner slots). Push runs on main/develop/release are keyed by run id, so each is
+# unique and never cancelled: cd.yml reads each push run's result.
+concurrency:
+  group: ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   pull-requests: read
