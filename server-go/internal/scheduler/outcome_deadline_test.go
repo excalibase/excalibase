@@ -143,7 +143,11 @@ func TestFanout_ProjectConcurrencyHoldsAcrossTicks(t *testing.T) {
 	release := make(chan struct{})
 	inv := bodyInvoker(func(context.Context) error {
 		n := inFlight.Add(1)
-		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
 		}
 		select {
 		case <-release:
