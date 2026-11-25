@@ -34,9 +34,9 @@ type ProjectInfo struct {
 	// UserAPIEnabled is sent, as true, only while the authuser flag is on;
 	// nil keeps the key off the wire.
 	UserAPIEnabled *bool `json:"userApiEnabled,omitempty"`
-	// StableSubject is sent, as true, only while the authguest flag is on.
-	// The auth service now signs sub as the account id whatever the flag says;
-	// the field stays for the guest-only guide text.
+	// StableSubject is sent, as true, only while the authguest flag is on. It
+	// tells the auth service to add the is_guest claim; sub is the account id
+	// whatever the flag says. The MCP guide reads the feature flag instead.
 	StableSubject *bool `json:"stableSubject,omitempty"`
 	// MFAEnabled is sent, as true, only while the authmfa flag is on and the
 	// project switched MFA on; the key is in the vault, never here.

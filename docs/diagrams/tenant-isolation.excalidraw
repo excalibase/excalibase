@@ -602,13 +602,13 @@
       "height": 107,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
-      "text": "CNPG DB (namespace isolated)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\npublic.*   \u2192 RLS: request.user_id\nauth.users \u2192 managed by auth svc\nauth.sessions \u2192 refresh tokens",
+      "text": "CNPG DB (namespace isolated)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\npublic.*   \u2192 RLS: X-Excalibase-User-Id\nauth.users \u2192 managed by auth svc\nauth.sessions \u2192 refresh tokens",
       "fontSize": 10,
       "fontFamily": 2,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "db-a1",
-      "originalText": "CNPG DB (namespace isolated)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\npublic.*   \u2192 RLS: request.user_id\nauth.users \u2192 managed by auth svc\nauth.sessions \u2192 refresh tokens",
+      "originalText": "CNPG DB (namespace isolated)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\npublic.*   \u2192 RLS: X-Excalibase-User-Id\nauth.users \u2192 managed by auth svc\nauth.sessions \u2192 refresh tokens",
       "lineHeight": 1.35
     },
     {
@@ -1218,13 +1218,13 @@
       "height": 542,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
-      "text": "Isolation Mechanisms\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n1. Namespace (K8s)\n   each project in own ns\n   NetworkPolicy denies cross-ns\n\n2. Database\n   separate CNPG cluster per project\n   no shared state\n\n3. Credentials\n   vault path scoped by org/project\n   PAT authorization\n\n4. JWT claims\n   token bound to {orgSlug}/{project}\n   rejected for other projects\n\n5. RLS (row level)\n   request.user_id set per query\n   CREATE POLICY enforces scope\n\n6. Org membership\n   user must be org member\n   checked on every request",
+      "text": "Isolation Mechanisms\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n1. Namespace (K8s)\n   each project in own ns\n   NetworkPolicy denies cross-ns\n\n2. Database\n   separate CNPG cluster per project\n   no shared state\n\n3. Credentials\n   vault path scoped by org/project\n   PAT authorization\n\n4. JWT claims\n   token bound to {orgSlug}/{project}\n   rejected for other projects\n\n5. RLS (row level)\n   X-Excalibase-User-Id set per query\n   CREATE POLICY enforces scope\n\n6. Org membership\n   user must be org member\n   checked on every request",
       "fontSize": 11,
       "fontFamily": 2,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "mechanisms",
-      "originalText": "Isolation Mechanisms\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n1. Namespace (K8s)\n   each project in own ns\n   NetworkPolicy denies cross-ns\n\n2. Database\n   separate CNPG cluster per project\n   no shared state\n\n3. Credentials\n   vault path scoped by org/project\n   PAT authorization\n\n4. JWT claims\n   token bound to {orgSlug}/{project}\n   rejected for other projects\n\n5. RLS (row level)\n   request.user_id set per query\n   CREATE POLICY enforces scope\n\n6. Org membership\n   user must be org member\n   checked on every request",
+      "originalText": "Isolation Mechanisms\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n1. Namespace (K8s)\n   each project in own ns\n   NetworkPolicy denies cross-ns\n\n2. Database\n   separate CNPG cluster per project\n   no shared state\n\n3. Credentials\n   vault path scoped by org/project\n   PAT authorization\n\n4. JWT claims\n   token bound to {orgSlug}/{project}\n   rejected for other projects\n\n5. RLS (row level)\n   X-Excalibase-User-Id set per query\n   CREATE POLICY enforces scope\n\n6. Org membership\n   user must be org member\n   checked on every request",
       "lineHeight": 1.35
     },
     {

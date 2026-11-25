@@ -517,8 +517,8 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     // __buildAuthCtx — Phase 12: typed ctx.auth surface mirroring Convex's
     // Auth interface. Carries the legacy raw claims plus a typed
     // getUserIdentity() helper that surfaces standard OIDC claims under
-    // their Convex-documented names (sub -> subject, which is the account id,
-    // not the email; iss -> issuer, email,
+    // their Convex-documented names (sub -> subject, which for a signed-in
+    // user is the account id, not the email; iss -> issuer, email,
     // email_verified -> emailVerified, picture -> pictureUrl, name,
     // given_name, family_name, etc.). Custom claims pass through via the
     // spread so handler code can access them by their JWT key.
