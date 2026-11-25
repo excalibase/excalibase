@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/imageref"
 )
 
 const (
@@ -72,8 +73,8 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("check existing deployment: %w", err)
 	}
-	if spec.Image == "" {
-		spec.Image = "excalibase/deno-runtime:latest"
+	if err := imageref.RequirePinned(spec.Image); err != nil {
+		return fmt.Errorf("deno runtime image: %w", err)
 	}
 
 	// The fence first: the runtime's pod must never start without it.

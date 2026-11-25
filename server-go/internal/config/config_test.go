@@ -55,8 +55,8 @@ func TestLoadDenoDefaults(t *testing.T) {
 	if cfg.DenoNamespace != "serverless" {
 		t.Errorf("DenoNamespace: got %s", cfg.DenoNamespace)
 	}
-	if cfg.DenoRuntimeImage != "excalibase/deno-runtime:latest" {
-		t.Errorf("DenoRuntimeImage: got %s", cfg.DenoRuntimeImage)
+	if cfg.DenoRuntimeImage != "" {
+		t.Errorf("DenoRuntimeImage: got %s, want no default", cfg.DenoRuntimeImage)
 	}
 	if cfg.DenoRuntimeSecret != "" {
 		t.Errorf("DenoRuntimeSecret: expected empty default, got %s", cfg.DenoRuntimeSecret)

@@ -128,6 +128,35 @@ func writeRuntimeUnavailable(w http.ResponseWriter, action string, err error) {
 	httpError(w, msgRuntimeUnavailable, http.StatusServiceUnavailable)
 }
 
+const (
+	msgSecretsUnavailable = "function secrets are temporarily unavailable; try again"
+	msgRedeployFailed     = "your change was saved, but the functions could not be redeployed to pick it up; try again"
+)
+
+// writeSecretsUnavailable answers a vault failure with a 503 that names no
+// vault address; the cause goes to the log.
+func writeSecretsUnavailable(w http.ResponseWriter, action string, err error) {
+	log.Printf("ERROR: %s: %v", action, err)
+	httpError(w, msgSecretsUnavailable, http.StatusServiceUnavailable)
+}
+
+// writeSecretWriteFailure separates a vault failure (503) from a secret the
+// store refused (400, its message is meant for the customer).
+func writeSecretWriteFailure(w http.ResponseWriter, action string, err error) {
+	if errors.Is(err, edgefn.ErrSecretsUnavailable) {
+		writeSecretsUnavailable(w, action, err)
+		return
+	}
+	httpError(w, safeError(err), http.StatusBadRequest)
+}
+
+// writeRedeployFailure tells the caller the change is stored but the running
+// functions did not take it, instead of answering as if they had.
+func writeRedeployFailure(w http.ResponseWriter, projectID string, err error) {
+	log.Printf("ERROR: redeploy functions of %s: %v", projectID, err)
+	httpError(w, msgRedeployFailed, http.StatusBadGateway)
+}
+
 // invokeDeployed invokes fn and, when the runtime no longer holds it (a
 // restarted pod before the periodic replay reaches it), deploys it again
 // from the store and invokes once more.
