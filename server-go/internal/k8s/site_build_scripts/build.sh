@@ -18,8 +18,9 @@ refuse() {
 # build_failed leaves with 11 (or the code given second), except for a command the kernel killed (bash reports 137): that stays 137, because
 # on a single host the engine's out-of-memory flag can lag the exit and the code is what still names the limit.
 build_failed() {
-  [[ "$1" == 137 ]] && exit 137
-  exit "${2:-11}"
+  local status=$1 fallback=${2:-11}
+  [[ "$status" == 137 ]] && exit 137
+  exit "$fallback"
 }
 
 package_manager() {
