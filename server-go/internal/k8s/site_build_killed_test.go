@@ -19,6 +19,13 @@ func TestBuildScript_ACommandKilledByTheKernelExits137(t *testing.T) {
 		{"failed", `exit 3`, 11},
 		{"passed", `true`, 0},
 	}
+	t.Run("a failed install is 10, not the build's 11", func(t *testing.T) {
+		work, scripts := t.TempDir(), scriptDir(t)
+		mustMkdir(t, filepath.Join(work, "src"))
+		if code, out := runScript(t, work, scripts, "build.sh", "ROOT_DIR=", "INSTALL_COMMAND=exit 3"); code != 10 {
+			t.Errorf("exit %d, want 10:\n%s", code, out)
+		}
+	})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			work, scripts := t.TempDir(), scriptDir(t)
