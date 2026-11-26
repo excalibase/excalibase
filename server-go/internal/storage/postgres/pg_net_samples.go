@@ -28,8 +28,8 @@ func (s *Store) AppendNetSamples(ctx context.Context, samples []netmeter.Sample)
 	}
 	defer func() { _ = tx.Rollback() }()
 	statement, err := tx.PrepareContext(ctx, `INSERT INTO app_net_samples
-		(ts, project_id, app_id, instances, rx_bps, tx_bps, max_instance_tx_bps)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		(ts, project_id, app_id, instances, rx_bps, tx_bps, max_instance_tx_bps, owner_id, tier)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		ON CONFLICT (project_id, app_id, ts) DO NOTHING`)
 	if err != nil {
 		return fmt.Errorf("prepare net samples: %w", err)
@@ -37,7 +37,7 @@ func (s *Store) AppendNetSamples(ctx context.Context, samples []netmeter.Sample)
 	defer statement.Close()
 	for _, sample := range samples {
 		if _, err := statement.ExecContext(ctx, sample.At.UTC(), sample.ProjectID, sample.AppID, sample.Instances,
-			sample.RxBps, sample.TxBps, sample.MaxInstanceTxBps); err != nil {
+			sample.RxBps, sample.TxBps, sample.MaxInstanceTxBps, sample.OwnerID, sample.Tier); err != nil {
 			return fmt.Errorf("insert net sample: %w", err)
 		}
 	}
@@ -66,7 +66,7 @@ func (s *Store) ListNetSamples(ctx context.Context, projectID, appID string, sin
 
 // ListNetHourly reads an app's hourly rollups since a time, oldest first.
 func (s *Store) ListNetHourly(ctx context.Context, projectID, appID string, since time.Time) ([]netmeter.Hourly, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT hour, project_id, app_id, samples, avg_rx_bps, avg_tx_bps, max_tx_bps, max_instance_tx_bps
+	rows, err := s.db.QueryContext(ctx, `SELECT hour, project_id, app_id, samples, avg_rx_bps, avg_tx_bps, max_tx_bps, max_instance_tx_bps, owner_id, tier
 		FROM app_net_hourly WHERE project_id = $1 AND app_id = $2 AND hour >= $3 ORDER BY hour`, projectID, appID, since)
 	if err != nil {
 		return nil, fmt.Errorf("list net hourly: %w", err)
@@ -75,7 +75,7 @@ func (s *Store) ListNetHourly(ctx context.Context, projectID, appID string, sinc
 	var out []netmeter.Hourly
 	for rows.Next() {
 		var hour netmeter.Hourly
-		if err := rows.Scan(&hour.Hour, &hour.ProjectID, &hour.AppID, &hour.Samples, &hour.AvgRxBps, &hour.AvgTxBps, &hour.MaxTxBps, &hour.MaxInstanceTxBps); err != nil {
+		if err := rows.Scan(&hour.Hour, &hour.ProjectID, &hour.AppID, &hour.Samples, &hour.AvgRxBps, &hour.AvgTxBps, &hour.MaxTxBps, &hour.MaxInstanceTxBps, &hour.OwnerID, &hour.Tier); err != nil {
 			return nil, err
 		}
 		hour.Hour = hour.Hour.UTC()
@@ -89,9 +89,9 @@ func (s *Store) ListNetHourly(ctx context.Context, projectID, appID string, sinc
 // be partly gone by then, and a rebuild from what is left would overwrite the
 // complete row, so a conflict does nothing.
 const rollupNetHoursSQL = `
-	INSERT INTO app_net_hourly (hour, project_id, app_id, samples, avg_rx_bps, avg_tx_bps, max_tx_bps, max_instance_tx_bps)
+	INSERT INTO app_net_hourly (hour, project_id, app_id, samples, avg_rx_bps, avg_tx_bps, max_tx_bps, max_instance_tx_bps, owner_id, tier)
 	SELECT date_trunc('hour', ts AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', project_id, app_id,
-	       COUNT(*), AVG(rx_bps), AVG(tx_bps), MAX(tx_bps), MAX(max_instance_tx_bps)
+	       COUNT(*), AVG(rx_bps), AVG(tx_bps), MAX(tx_bps), MAX(max_instance_tx_bps), MAX(owner_id), MAX(tier)
 	FROM app_net_samples
 	WHERE ts >= COALESCE((SELECT MAX(hour) + INTERVAL '1 hour' FROM app_net_hourly), '-infinity'::timestamptz)
 	  AND ts < $1

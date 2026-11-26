@@ -335,6 +335,7 @@ services:
       # Failed purges, pauses and resumes retry themselves and alert the admins when they keep failing (EXC-873); off until chosen.
       FEATURE_SELFHEAL: ${FEATURE_SELFHEAL:-false}
       FEATURE_NETMETER: ${FEATURE_NETMETER:-false}
+      FEATURE_BEHAVIOURREVIEW: ${FEATURE_BEHAVIOURREVIEW:-false}
       EXCALIBASE_SELFHEAL_ALERT_AFTER: ${EXCALIBASE_SELFHEAL_ALERT_AFTER:-5}
       # Limited trial until verified (EXC-899); off until chosen. Only the trust state exists so far; the verify flow and the limits come later.
       FEATURE_LIMITEDTRIAL: ${FEATURE_LIMITEDTRIAL:-false}

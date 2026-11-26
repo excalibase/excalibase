@@ -200,6 +200,8 @@ var darkWork = map[features.Feature]string{
 	features.NetMeter: "TestNetMeterSampler_OffWhileTheFlagIsOff",
 	// Off, every account resolves as full and the trust tables are never read; no route is gated yet (internal/trust).
 	features.LimitedTrial: "TestFlagOffEveryoneIsFullAndNothingIsRead",
+	// Off, nothing is evaluated or stored (cmd/server).
+	features.BehaviourReview: "TestBehaviourSampler_OffWhileTheFlagIsOff",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }

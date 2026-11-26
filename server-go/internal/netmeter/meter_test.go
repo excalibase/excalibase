@@ -212,3 +212,65 @@ func (f *flakySource) Read(context.Context) ([]Reading, error) {
 	f.calls++
 	return round.readings, round.err
 }
+
+type fixedOwners struct {
+	owners map[string]Owner
+	err    error
+}
+
+func (f fixedOwners) ProjectOwners(context.Context) (map[string]Owner, error) { return f.owners, f.err }
+
+func twoRounds(project string) *scriptedSource {
+	one := func(at time.Time, tx uint64) []Reading {
+		return []Reading{{Key: "a", ProjectID: project, AppID: "x", At: at, Tx: tx}}
+	}
+	return &scriptedSource{rounds: [][]Reading{one(t0, 0), one(t0.Add(time.Minute), 6000)}}
+}
+
+func sampleTwice(meter *Meter, c *clock) {
+	meter.Sample(context.Background())
+	c.now = t0.Add(time.Minute)
+	meter.Sample(context.Background())
+}
+
+// The owner and tier are stamped on the minute when it is taken, so the row
+// keeps them after the project is deleted.
+func TestMeter_StampsEachSampleWithTheOwnerAndTierOfItsProject(t *testing.T) {
+	store := &memoryStore{}
+	c := &clock{now: t0}
+	meter := newTestMeter(twoRounds("p"), store, c).WithOwners(fixedOwners{owners: map[string]Owner{"p": {ID: "u1", Tier: "Free"}, "q": {ID: "u2", Tier: "standard"}}})
+	sampleTwice(meter, c)
+	got := store.appended[0][0]
+	if got.OwnerID != "u1" || got.Tier != "free" {
+		t.Fatalf("sample = %+v", got)
+	}
+}
+
+func TestMeter_AProjectTheLookupDoesNotKnowIsStoredWithoutAnOwner(t *testing.T) {
+	store := &memoryStore{}
+	c := &clock{now: t0}
+	meter := newTestMeter(twoRounds("p"), store, c).WithOwners(fixedOwners{owners: map[string]Owner{"other": {ID: "u1", Tier: "free"}}})
+	sampleTwice(meter, c)
+	if got := store.appended[0][0]; got.OwnerID != "" || got.Tier != "" || got.TxBps != 100 {
+		t.Fatalf("the sample is still stored: %+v", got)
+	}
+}
+
+func TestMeter_ALookupFailureStillStoresTheSamples(t *testing.T) {
+	store := &memoryStore{}
+	c := &clock{now: t0}
+	meter := newTestMeter(twoRounds("p"), store, c).WithOwners(fixedOwners{err: errors.New("db")})
+	sampleTwice(meter, c)
+	if len(store.appended) != 1 || store.appended[0][0].OwnerID != "" {
+		t.Fatalf("stored = %+v", store.appended)
+	}
+}
+
+func TestMeter_WithoutALookupSamplesCarryNoOwner(t *testing.T) {
+	store := &memoryStore{}
+	c := &clock{now: t0}
+	sampleTwice(newTestMeter(twoRounds("p"), store, c), c)
+	if got := store.appended[0][0]; got.OwnerID != "" || got.Tier != "" {
+		t.Fatalf("sample = %+v", got)
+	}
+}

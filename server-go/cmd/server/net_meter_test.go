@@ -68,6 +68,23 @@ func TestNetMeterSampler_KubernetesWithCAAndCluster(t *testing.T) {
 	}
 }
 
+type ownedNetStore struct{ nullNetStore }
+
+func (ownedNetStore) ProjectOwners(context.Context) (map[string]netmeter.Owner, error) {
+	return nil, nil
+}
+
+func TestNetMeterSampler_StampsOwnersWhenTheStoreCanNameThem(t *testing.T) {
+	t.Setenv("NETMETER_KUBELET_CA_FILE", writeTestCA(t))
+	cfg := netMeterConfig(t, "", "true")
+	stamping := netMeterSampler(cfg, ownedNetStore{}, nullCluster{}).(*netmeter.Meter)
+	plain := netMeterSampler(cfg, nullNetStore{}, nullCluster{}).(*netmeter.Meter)
+	if !stamping.StampsOwners() || plain.StampsOwners() {
+		t.Fatalf("stamping %v, plain %v", stamping.StampsOwners(), plain.StampsOwners())
+	}
+	var _ netmeter.Owners = (*postgres.Store)(nil)
+}
+
 func TestNetMeterSampler_SingleHostNeedsNoKubeletAndNoHostMetricsFlag(t *testing.T) {
 	cfg := netMeterConfig(t, "docker", "true")
 	if netMeterSampler(cfg, nullNetStore{}, nil) == nil {

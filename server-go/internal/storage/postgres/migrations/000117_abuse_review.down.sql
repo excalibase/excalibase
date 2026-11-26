@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS abuse_review;
+ALTER TABLE app_net_hourly DROP COLUMN IF EXISTS tier, DROP COLUMN IF EXISTS owner_id;
+ALTER TABLE app_net_samples DROP COLUMN IF EXISTS tier, DROP COLUMN IF EXISTS owner_id;

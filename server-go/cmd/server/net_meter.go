@@ -43,7 +43,13 @@ func netMeterSampler(cfg config.AppConfig, store, cluster any) service.LoopSampl
 	}
 	log.Printf("net meter: on (%s)", cfg.ProvisionerMode)
 	netMeterStarted.Store(true)
-	return netmeter.NewMeter(source, tables, metricsSampleInterval)
+	meter := netmeter.NewMeter(source, tables, metricsSampleInterval)
+	if owners, ok := store.(netmeter.Owners); ok {
+		meter = meter.WithOwners(owners)
+	} else {
+		log.Printf("net meter: the platform store cannot name project owners; samples carry no owner")
+	}
+	return meter
 }
 
 func netMeterSource(cfg config.AppConfig, cluster any) netmeter.Source {
