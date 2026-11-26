@@ -4,13 +4,10 @@ replicaCount: 1
 
 image:
   # The repository provisioning installs this chart with. It was
-  # ghcr.io/excalibase/watcher, which does not exist — the registry answers
-  # 404 — so anyone installing the chart without provisioning's values got a
-  # pod that could never pull (EXC-432).
+  # ghcr.io/excalibase/watcher, which does not exist (EXC-432).
   repository: excalibase/excalibase-watcher-go
   pullPolicy: IfNotPresent
-  # Pin to a specific tag in production. Empty = falls back to .Chart.AppVersion,
-  # which is what release-pipeline-built charts ship with.
+  # Pin to a specific tag in production. Empty = falls back to .Chart.AppVersion.
   tag: ""
 
 imagePullSecrets: []
@@ -80,6 +77,22 @@ postgres:
   # Schema history directory (empty = disabled)
   schemaHistoryDir: ""
 
+  # How often pg_replication_slots is sampled for the cdc_slot_* gauges and
+  # cdc_lag_seconds is refreshed
+  slotStatsIntervalSeconds: 15
+
+  # Orphaned replication slot cleanup. Slots matching slotPattern that are
+  # inactive and whose owner (excalibase_cdc_slot_owners registry) released
+  # them or stopped heartbeating for staleAfterMinutes are dropped.
+  slotCleanup:
+    enabled: true
+    intervalMinutes: 10
+    staleAfterMinutes: 30
+    retainedWalThresholdBytes: 0     # 0 = any retained WAL qualifies
+    dryRun: false                    # log "would drop" only
+    slotPattern: "^cdc_"
+    heartbeatSeconds: 30
+
 # ---------------------------------------------------------------------------
 # MySQL CDC
 # ---------------------------------------------------------------------------
@@ -97,6 +110,10 @@ mysql:
   existingSecret: ""
   existingSecretUsernameKey: "mysql-username"
   existingSecretPasswordKey: "mysql-password"
+  # PEM of the CA the server certificate is signed by. The watcher connects
+  # only over TLS verified against it and the host name above.
+  caCert: ""
+  existingSecretCACertKey: "mysql-ca-cert"
 
   # Database schema
   schema: ""
@@ -108,13 +125,26 @@ mysql:
   snapshotMode: "none"          # none | chunked | backup_file
   snapshotChunkSize: 10000
 
-  # Offset persistence file path (default: /data/binlog.offset)
-  # Critical: if empty, restart replays binlog from current position and may lose events.
-  offsetFile: "/data/binlog.offset"
+  # Where the resume offset (a GTID set) is kept. Empty (the default) keeps it
+  # in the NATS JetStream bucket below, so the pod needs no volume. Set a file
+  # path and enable persistence to keep it on a PVC instead.
+  offsetFile: ""
+  offsetBucket: "WATCHER_MYSQL_OFFSETS"
 
-  # Persistent volume for offset storage (strongly recommended in production)
+  # Replicas of the offset bucket in NATS (1 to 5). A cluster with fewer
+  # servers gets one replica and the watcher logs a warning: the offset is then
+  # lost with that server.
+  offsetReplicas: 3
+
+  # A token. A start that sees one it has not used yet discards the saved offset
+  # and streams from the server's current position: the way out of a purged,
+  # lost or foreign offset. The token is stored with the offset, so leaving it
+  # set does not reset again; change it to reset again.
+  resetOffset: ""
+
+  # Persistent volume for the offset file (only with offsetFile)
   persistence:
-    enabled: true
+    enabled: false
     # existingClaim: ""        # use existing PVC instead of creating one
     storageClass: ""           # empty = use cluster default
     size: 1Gi
@@ -129,19 +159,15 @@ nats:
   streamName: "CDC"
   subjectPrefix: "cdc"
 
-  # Project-scoped bus credential (EXC-324). The control plane mints these
-  # per project and the watcher may then publish ONLY under its own
-  # cdc.<projectId>.> prefix. Delivered through a Secret, never as a literal
-  # in the rendered Deployment. NATS itself does not check them; network
-  # policy is what limits who reaches it.
+  # Project-scoped bus credential (EXC-324), delivered through a Secret. NATS
+  # itself does not check it; network policy limits who reaches the bus.
   username: ""
   password: ""
   existingSecret: ""
   existingSecretUsernameKey: "nats-username"
   existingSecretPasswordKey: "nats-password"
 
-  # Request/reply inbox prefix. Per-principal reply subject space
-  # (_INBOX_tw_<projectId>), so replies never share the default _INBOX.
+  # Per-principal request/reply inbox prefix.
   inboxPrefix: ""
   storage: "memory"             # memory | file
   maxAgeMinutes: 60

@@ -13,6 +13,7 @@ x-edge-aliases: &edge_aliases studio.${EXCALIBASE_DOMAIN:?run ./init.sh first},a
 # The CDC watcher every Postgres project runs (EXC-612), as Kubernetes pins it:
 # provisioning starts it and the engine proxy admits this image, and only it,
 # to the bus network NATS listens on.
+# watcher 1.5.1
 x-watcher-image: &watcher_image docker.io/excalibase/excalibase-watcher-go@sha256:7b2f9feb21b2a92b34c3f7b136399c619d460bf5d296215b8662a7a334126d9e
 # The networks the host firewall guards (EXC-683): their bridges drop new
 # connections to the host; the tenants' also drop metadata and private ranges.
@@ -110,7 +111,8 @@ services:
     restart: unless-stopped
 
   # One-shot: the CDC stream every project's watcher publishes to and graphql
-  # reads realtime from, or its limits brought up to date. Kubernetes runs the
+  # reads realtime from, or its limits brought up to date; and the bucket a
+  # MySQL watcher keeps its resume offset in. Kubernetes runs the
   # same as the platform chart's nats-stream-init Job.
   nats-stream-init:
     image: docker.io/natsio/nats-box:0.14.5@sha256:0784ab710aefaf6ef037ed797ee7dcde613c6ad208c4dbff1945fc7c1b5b5375
@@ -131,6 +133,7 @@ services:
           nats stream add CDC --subjects='cdc.>' --storage=file --replicas=1 --discard=old --retention=limits \
             --max-age="$$CDC_STREAM_MAX_AGE" --max-bytes="$$CDC_STREAM_MAX_BYTES" --max-msgs=-1 --max-msg-size=-1 --dupe-window=15m --defaults
         fi
+        nats kv info WATCHER_MYSQL_OFFSETS >/dev/null 2>&1 || nats kv add WATCHER_MYSQL_OFFSETS --storage=file --history=1 --replicas=1
         nats stream info CDC >/dev/null && echo "CDC STREAM READY"
     depends_on:
       nats:
