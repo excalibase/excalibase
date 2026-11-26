@@ -40,6 +40,10 @@ type WorkerConfig struct {
 	// Global, when set, caps them platform-wide across every project.
 	MaxConcurrent int
 	Global        *Semaphore
+	// Local, when set, is the project's limiter and replaces MaxConcurrent.
+	// The sweep passes the same one every tick, because a function can
+	// outlive the tick that started it.
+	Local *Semaphore
 	// Logger is optional; defaults to the std log package.
 	Logger *log.Logger
 }
@@ -93,6 +97,10 @@ func NewWorker(c WorkerConfig) *Worker {
 	if lease <= 0 {
 		lease = DefaultClaimLease
 	}
+	local := c.Local
+	if local == nil {
+		local = NewSemaphore(concurrent)
+	}
 	return &Worker{
 		db:           c.DB,
 		projectID:    c.ProjectID,
@@ -103,7 +111,7 @@ func NewWorker(c WorkerConfig) *Worker {
 		maxAttempts:  maxAttempts,
 		maxArgsBytes: maxArgs,
 		claimLease:   lease,
-		local:        NewSemaphore(concurrent),
+		local:        local,
 		global:       c.Global,
 		logger:       logger,
 	}
@@ -139,6 +147,7 @@ func (w *Worker) Tick(ctx context.Context) error {
 		return nil
 	}
 	var wg sync.WaitGroup
+	launched := 0
 	for _, r := range rows {
 		if reason := w.reject(r); reason != "" {
 			w.markRefused(ctx, r, reason)
@@ -151,6 +160,7 @@ func (w *Worker) Tick(ctx context.Context) error {
 			break
 		}
 		wg.Add(1)
+		launched++
 		go func(t pendingRow) {
 			defer wg.Done()
 			defer w.release()
@@ -166,8 +176,45 @@ func (w *Worker) Tick(ctx context.Context) error {
 			w.dispatch(ctx, t)
 		}(r)
 	}
-	wg.Wait()
-	return nil
+	return w.drain(ctx, &wg, launched)
+}
+
+// OutcomeTimeout bounds one write that records a task's outcome.
+const OutcomeTimeout = 10 * time.Second
+
+// InvokeTimeout bounds one scheduled invocation. The runtime stops a worker
+// at 30s and the runtime client gives up at 35s, so anything beyond this is a
+// runtime that stopped answering rather than a slow function.
+const InvokeTimeout = 40 * time.Second
+
+// drain waits for the batch's invocations. A function already running is not
+// ours to cancel: the project deadline would kill it, or let it finish and
+// then refuse to record that it did, and the row would run a second time
+// once its claim lease ran out. So when the deadline passes the sweep stops
+// waiting and reports it, and each invocation still records its own outcome.
+func (w *Worker) drain(ctx context.Context, wg *sync.WaitGroup, launched int) error {
+	if launched == 0 {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("stopped waiting for running tasks: %w", ctx.Err())
+	}
+}
+
+// outcomeContext is the context for writing what happened to a task. It
+// outlives the sweep deadline, because a function that ran must have its
+// outcome recorded whatever the sweep did, and has its own bound so a
+// tenant database that hangs cannot hold the goroutine forever.
+func outcomeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), OutcomeTimeout)
 }
 
 // acquire takes a slot in the per-project pool and, when one is wired, the
@@ -231,6 +278,8 @@ func (w *Worker) reject(r pendingRow) string {
 // markRefused closes a row the platform will not run. The recorded reason
 // is fixed platform text — tenant content is never echoed back.
 func (w *Worker) markRefused(ctx context.Context, r pendingRow, reason string) {
+	ctx, cancel := outcomeContext(ctx)
+	defer cancel()
 	if _, err := w.db.ExecContext(ctx, `
 		UPDATE excalibase.excalibase_scheduled_functions
 		   SET status = 'failed', last_error = $2
@@ -391,8 +440,11 @@ func (w *Worker) claimDue(ctx context.Context) ([]pendingRow, error) {
 // either bumps `attempts` + reschedules with exponential backoff, or is
 // marked `failed` when MaxAttempts is reached.
 func (w *Worker) dispatch(ctx context.Context, r pendingRow) {
-	// The project id comes from the sweep, never from the row.
-	err := w.invoker.Invoke(ctx, w.projectID, r.ModuleName, r.ExportName, r.Args)
+	// The project id comes from the sweep, never from the row. The sweep
+	// deadline does not reach the invocation: the invoker's own timeout does.
+	err := w.invoker.Invoke(context.WithoutCancel(ctx), w.projectID, r.ModuleName, r.ExportName, r.Args)
+	ctx, cancel := outcomeContext(ctx)
+	defer cancel()
 	if err == nil {
 		if _, dbErr := w.db.ExecContext(ctx, `
 			UPDATE excalibase.excalibase_scheduled_functions
@@ -435,6 +487,8 @@ func (w *Worker) dispatch(ctx context.Context, r pendingRow) {
 // is not counted: nothing was dispatched, and the reason is recorded so an
 // operator reading the row sees why it never ran.
 func (w *Worker) markSkipped(ctx context.Context, r pendingRow, cause error) {
+	ctx, cancel := outcomeContext(ctx)
+	defer cancel()
 	if _, dbErr := w.db.ExecContext(ctx, `
 		UPDATE excalibase.excalibase_scheduled_functions
 		   SET status = 'skipped', last_error = $2
