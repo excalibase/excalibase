@@ -24,6 +24,8 @@ import {
 import { DeployHistory } from '../components/containers/DeployHistory';
 import { AppDomains, HostCertificateBadge } from '../components/containers/AppDomains';
 import { useCustomDomainsEnabled, useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { isTrustRequired } from '../api/trust';
+import { VerifyAccountCard } from '../components/trust/VerifyAccountCard';
 import { CrashLoopNotice } from '../components/containers/CrashLoopNotice';
 import { LifecycleActions } from '../components/containers/LifecycleActions';
 import { AppLogs } from '../components/containers/AppLogs';
@@ -249,6 +251,7 @@ function Detail({
           )}
         </div>
       )}
+      {isTrustRequired(actionError) && <div className="mb-4"><VerifyAccountCard /></div>}
       <DiskStopBanner reason={diskStopReason(app, newest)} />
       <CrashLoopNotice app={app} canStart={canDevelop} onError={setLifecycleError} />
       <RestartsBanner app={app} />

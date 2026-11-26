@@ -57,6 +57,8 @@ type Service struct {
 	callbackBase string
 	http         *http.Client
 	now          func() time.Time
+	// ActivityWindowDays is how far back public events count as activity (EXC-899).
+	ActivityWindowDays int
 }
 
 // New builds the sign-in service. Client ids and secrets are read from the
@@ -117,7 +119,7 @@ func (s *Service) Finish(ctx context.Context, provider, queryState, browserState
 	if err != nil {
 		return Identity{}, "", ErrStateInvalid
 	}
-	if record.Provider != provider {
+	if record.Provider != provider || record.Purpose != "" {
 		return Identity{}, "", ErrStateInvalid
 	}
 	cfg, err := s.config(provider)

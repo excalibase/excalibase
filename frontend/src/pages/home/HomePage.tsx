@@ -9,6 +9,7 @@ import { useOrgCredits } from '../../api/credits';
 import { useAppHostingEnabled, useFeatureEnabled, useSitesEnabled } from '../../hooks/useDeploymentMode';
 import { useCurrentOrg, useMyProjects } from '../../hooks/useMemberOrgs';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { VerifyAccountCard } from '../../components/trust/VerifyAccountCard';
 import { AttentionBar } from './AttentionBar';
 import { BuildWidget, CreditsWidget, HealthWidget, RecentlyVisitedWidget, SecurityWidget, type BuildLink } from './HomeWidgets';
 import { attentionItems, healthCounts, securitySummary, type AppInfo } from './model';
@@ -111,6 +112,7 @@ export function HomePage() {
 
       {customizing && <CustomizePanel hidden={hidden} onToggle={toggle} />}
       <AttentionBar items={attention} />
+      <VerifyAccountCard />
 
       {Boolean(error) && (
         <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">

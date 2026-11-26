@@ -1189,9 +1189,11 @@ type handlerDeps struct {
 	adminGateOverride *adminaccess.GateConfig
 	authHandler       *handler.AuthHandler
 	oauthHandler      *handler.StudioOAuthHandler
-	ssoHandler        *handler.SSOProvidersHandler
-	svcAcctHandler    *handler.ServiceAccountHandler
-	orgHandler        *handler.OrgHandler
+	// trustVerifyHandler is how a limited account verifies with GitHub (EXC-899); nil leaves the routes unmounted.
+	trustVerifyHandler *handler.TrustVerifyHandler
+	ssoHandler         *handler.SSOProvidersHandler
+	svcAcctHandler     *handler.ServiceAccountHandler
+	orgHandler         *handler.OrgHandler
 	// creditsHandler serves credits (EXC-866); nil when the store keeps no ledger.
 	creditsHandler *handler.CreditsHandler
 	// credits is the credit service the sweeper and the verification paths use.
@@ -1226,7 +1228,9 @@ type handlerDeps struct {
 	capDeps             *capacityDeps
 	rlUnauth            func(http.Handler) http.Handler
 	rlAuthed            func(http.Handler) http.Handler
-	rlDataPlane         func(http.Handler) http.Handler
+	// rlTrustVerify caps the trust card's calls per account; the wait between two checks is the real limit (EXC-899).
+	rlTrustVerify func(http.Handler) http.Handler
+	rlDataPlane   func(http.Handler) http.Handler
 	// appDomainSvc and appDomainHandler are nil while custom domains are off.
 	appDomainSvc     *service.AppDomainService
 	appDomainHandler *handler.AppDomainHandler
@@ -2016,6 +2020,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	servingGuard := newOrgGuard(store, sqlStore)
 	suspensions.AddServingSteps(service.NewSuspendedSites(sitesSvc, store, servingGuard), service.NewSuspendedWorkloads(appDeploySvc, store, servingGuard))
 	creditsService := buildCreditsService(cfg, sqlStore)
+	oauthHandler, trustVerify := buildStudioOAuthHandlers(cfg, vc, sqlStore, authHandler)
 	return &handlerDeps{
 		orgGuard:              newOrgGuard(store, sqlStore),
 		trustGate:             newTrustGate(cfg, store, sqlStore),
@@ -2047,7 +2052,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		adminAttentionHandler: handler.NewAdminAttentionHandler(adminconsole.NewAttention(pgstore.NewAdminConsole(sqlStore.DB()))),
 		adminAnalyticsHandler: handler.NewAdminAnalyticsHandler(pgstore.NewAdminConsole(sqlStore.DB()), cfg.Features()),
 		authHandler:           authHandler,
-		oauthHandler:          buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
+		oauthHandler:          oauthHandler,
+		trustVerifyHandler:    trustVerify,
 		ssoHandler:            buildSSOProvidersHandler(cfg, vc, sqlStore),
 		svcAcctHandler:        handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
 		orgHandler:            newOrgHandler(sqlStore, store, provSvc, planChanged),
@@ -2095,6 +2101,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlDataPlane:            custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
 		rlMailSend:             custommw.RateLimit(custommw.PerUser, 5, time.Hour),
 		rlTokenCreate:          newTokenCreateLimiter(),
+		rlTrustVerify:          custommw.RateLimit(custommw.PerUser, trustVerifyBudget, time.Minute),
 		rlOrgCreate:            newOrgCreateLimiter(),
 		rlMetricsScrape:        newMetricsScrapeLimiter(),
 		metricsKeysHandler:     newMetricsKeysHandler(sqlStore),
@@ -2222,6 +2229,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	mountProvisioningRoutes(r, sqlStore, store, d)
 	mountSimpleAuthRoutes(r, sqlStore, store, d)
 	mountAuthRoutes(r, d)
+	mountTrustRoutes(r, d)
 	mountOrgAndAdminRoutes(r, cfg, d)
 	mountVaultAndSchemaRoutes(r, sqlStore, store, d)
 	mountProjectScopedRoutes(r, cfg, sqlStore, store, d)
@@ -2411,11 +2419,41 @@ func mountSimpleAuthRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 	})
 }
 
-// buildStudioOAuthHandler offers Google and GitHub sign-in for the providers
-// whose client id and secret are in the vault at oauth/studio/<provider>.
-func buildStudioOAuthHandler(cfg config.AppConfig, vc vaultclient.VaultClient, sqlStore storage.PlatformStore, authHandler *handler.AuthHandler) *handler.StudioOAuthHandler {
+// buildStudioOAuthHandlers offers Google and GitHub sign-in for the providers
+// whose client id and secret are in the vault at oauth/studio/<provider>, and,
+// beside it, builds the GitHub verification of the limited trial (EXC-899). Both use the one GitHub
+// callback, so the sign-in handler hands verification callbacks over.
+func buildStudioOAuthHandlers(cfg config.AppConfig, vc vaultclient.VaultClient, sqlStore storage.PlatformStore, authHandler *handler.AuthHandler) (*handler.StudioOAuthHandler, *handler.TrustVerifyHandler) {
 	signIn := studiooauth.New(studioSignInProviders(), vc, sqlStore, cfg.StudioURL, &http.Client{Timeout: 15 * time.Second})
-	return handler.NewStudioOAuthHandler(signIn, authHandler, sqlStore, cfg.StudioURL)
+	signIn.ActivityWindowDays = cfg.Trust.GitHubActivityWindowDays
+	oauth := handler.NewStudioOAuthHandler(signIn, authHandler, sqlStore, cfg.StudioURL)
+	holder, ok := sqlStore.(interface {
+		Verifications(cooldownDays int) trust.VerificationStore
+	})
+	if !ok {
+		return oauth, nil
+	}
+	verifications := holder.Verifications(cfg.Trust.ClaimCooldownDays)
+	wait := time.Duration(cfg.Trust.VerifyRetryMinutes) * time.Minute
+	verifier := trust.NewVerifier(cfg.Features(), signIn, verifications, trustPolicy(cfg), wait)
+	verify := handler.NewTrustVerifyHandler(verifier, signIn, verifications, trustPolicy(cfg), wait, cfg.StudioURL)
+	oauth.SetVerifyCallback(verify.Callback)
+	return oauth, verify
+}
+
+// mountTrustRoutes serves the verify-with-GitHub card's API. The flag goes
+// first, so while it is off these answer as never mounted.
+func mountTrustRoutes(r *chi.Mux, d *handlerDeps) {
+	if d.trustVerifyHandler == nil {
+		return
+	}
+	r.Route("/api/trust", func(r chi.Router) {
+		r.Use(features.Require(d.features, features.LimitedTrial))
+		r.Use(auth.RequireAuth)
+		r.Use(d.rlTrustVerify)
+		r.Use(auth.RequireUnrestrictedCredentialForWrites)
+		d.trustVerifyHandler.Routes(r)
+	})
 }
 
 func studioSignInProviders() []studiooauth.Provider {
@@ -2455,6 +2493,9 @@ func newTokenCreateLimiter() func(http.Handler) http.Handler {
 // hour. An account owns one free org, so a few attempts cover typos and
 // taken slugs.
 const orgCreateBudget = 10
+
+// trustVerifyBudget is the trust card's requests per user per minute: it reads status on each Home visit and starts one check.
+const trustVerifyBudget = 30
 
 func newOrgCreateLimiter() func(http.Handler) http.Handler {
 	return custommw.RateLimit(custommw.PerUser, orgCreateBudget, time.Hour)

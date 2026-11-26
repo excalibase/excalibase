@@ -51,7 +51,13 @@ type StudioOAuthHandler struct {
 	auth       *AuthHandler
 	identities studioIdentities
 	studioURL  string
+	// verifyCallback finishes a GitHub verification (EXC-899): GitHub has one
+	// registered callback, so it hands such a round trip over; nil when off.
+	verifyCallback http.HandlerFunc
 }
+
+// SetVerifyCallback routes the callbacks of GitHub verifications to fn.
+func (h *StudioOAuthHandler) SetVerifyCallback(fn http.HandlerFunc) { h.verifyCallback = fn }
 
 func NewStudioOAuthHandler(signIn studioSignIn, authHandler *AuthHandler, identities studioIdentities, studioURL string) *StudioOAuthHandler {
 	return &StudioOAuthHandler{signIn: signIn, auth: authHandler, identities: identities, studioURL: strings.TrimRight(studioURL, "/")}
@@ -85,6 +91,10 @@ func (h *StudioOAuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StudioOAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
+	if h.verifyCallback != nil && chi.URLParam(r, "provider") == "github" && studiooauth.IsVerifyState(r.URL.Query().Get("state")) {
+		h.verifyCallback(w, r)
+		return
+	}
 	http.SetCookie(w, auth.NewCookie(oauthStateCookie, "", -1, http.SameSiteLaxMode))
 	query := r.URL.Query()
 	if query.Get("error") != "" {

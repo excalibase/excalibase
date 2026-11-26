@@ -35,6 +35,8 @@ export type Feature =
   | 'adminanalytics'
   // The credit ledger: the sign-up credit, the balance and the statement (EXC-866).
   | 'credits'
+  // Unverified accounts cannot run containers until they verify with GitHub (EXC-899).
+  | 'limitedtrial'
   // The cloud-console layout of Studio (EXC-762); off until the owner turns it on.
   | 'studio_v2';
 

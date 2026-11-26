@@ -17,8 +17,8 @@ func (s *Store) SaveOAuthState(ctx context.Context, stateHash string, state doma
 		return err
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO studio_oauth_states (state_hash, provider, code_verifier, invite_hash, expires_at) VALUES ($1, $2, $3, $4, $5)`,
-		stateHash, state.Provider, state.CodeVerifier, state.InviteHash, expiresAt.UTC())
+		`INSERT INTO studio_oauth_states (state_hash, provider, code_verifier, invite_hash, purpose, user_id, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		stateHash, state.Provider, state.CodeVerifier, state.InviteHash, state.Purpose, state.UserID, expiresAt.UTC())
 	return err
 }
 
@@ -26,8 +26,8 @@ func (s *Store) ConsumeOAuthState(ctx context.Context, stateHash string, now tim
 	var state domain.OAuthState
 	err := s.db.QueryRowContext(ctx,
 		`DELETE FROM studio_oauth_states WHERE state_hash = $1 AND expires_at > $2
-		 RETURNING provider, code_verifier, invite_hash`, stateHash, now.UTC()).
-		Scan(&state.Provider, &state.CodeVerifier, &state.InviteHash)
+		 RETURNING provider, code_verifier, invite_hash, purpose, user_id`, stateHash, now.UTC()).
+		Scan(&state.Provider, &state.CodeVerifier, &state.InviteHash, &state.Purpose, &state.UserID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, storage.ErrOAuthStateInvalid
 	}
