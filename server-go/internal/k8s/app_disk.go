@@ -87,13 +87,14 @@ func buildAppDiskClaim(namespace string, app *apphost.App, disk apphost.AppDisk,
 func mountAppDisk(deployment *appsv1.Deployment, claim *corev1.PersistentVolumeClaim, mountPath string) {
 	deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
 	pod := &deployment.Spec.Template.Spec
-	pod.Volumes = []corev1.Volume{{
+	pod.Volumes = append(pod.Volumes, corev1.Volume{
 		Name: appDiskVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim.Name},
 		},
-	}}
-	pod.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: appDiskVolumeName, MountPath: mountPath}}
+	})
+	pod.Containers[0].VolumeMounts = append(pod.Containers[0].VolumeMounts,
+		corev1.VolumeMount{Name: appDiskVolumeName, MountPath: mountPath})
 }
 
 // ensureAppDisk creates the claim once and never changes it: growing is
@@ -182,4 +183,26 @@ func (c *Client) deleteAppDisks(ctx context.Context, namespace, selector string,
 		return err
 	}
 	return waitUntilNoneLeft(ctx, timeout, list)
+}
+
+const (
+	appTmpVolumeName = "tmp"
+	appTmpMountPath  = "/tmp"
+)
+
+// mountAppTmp gives the read-only root a scratch /tmp. It is a memory emptyDir
+// so the kernel enforces the size (a disk emptyDir is only checked by eviction
+// after the fact) and the bytes are charged to the container's memory limit,
+// which matches the single host's tmpfs. percent is of that memory limit.
+func mountAppTmp(deployment *appsv1.Deployment, resources corev1.ResourceRequirements, percent int) {
+	size := resource.NewQuantity(resources.Limits.Memory().Value()*int64(percent)/100, resource.BinarySI)
+	pod := &deployment.Spec.Template.Spec
+	pod.Volumes = append(pod.Volumes, corev1.Volume{
+		Name: appTmpVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: size},
+		},
+	})
+	pod.Containers[0].VolumeMounts = append(pod.Containers[0].VolumeMounts,
+		corev1.VolumeMount{Name: appTmpVolumeName, MountPath: appTmpMountPath})
 }

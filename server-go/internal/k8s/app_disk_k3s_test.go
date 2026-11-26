@@ -102,7 +102,7 @@ func stringPointer(value string) *string { return &value }
 
 func (g *gvisorCluster) deployDiskApp(t *testing.T, namespace string, app *apphost.App, deployID string) error {
 	t.Helper()
-	workload, err := RenderAppWorkload(namespace, app, nil, AppRenderOptions{
+	workload, err := RenderAppWorkload(namespace, app, nil, AppRenderOptions{TmpPercent: 25,
 		RuntimeClass: gvisorRuntimeClass, Route: liveRoute, DeployID: deployID, DiskStorageClass: liveDiskStorageClass})
 	if err != nil {
 		t.Fatalf("render: %v", err)

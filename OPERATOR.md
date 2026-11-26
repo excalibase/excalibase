@@ -1093,6 +1093,10 @@ Tenant credentials are minted at provision time, rotated on re-provision and
 deleted on deprovision. Only bcrypt hashes are stored; the plaintext exists
 once, in the watcher's Secret in the tenant namespace.
 
+## 6.5e. App filesystems on Kubernetes (EXC-732)
+
+An app pod runs with a read-only root filesystem. It writes to two places: its disk (a PVC, writable and sized by the plan) and `/tmp`, an in-memory emptyDir. `/tmp` is a percentage of the app's memory limit, `APP_TMP_PERCENT` (default 25, 1 to 100), because a memory emptyDir is charged to the container's memory limit and the kernel enforces its size at write time; a disk emptyDir is only checked by eviction after the fact. The tier's `ephemeral-storage` limit still caps logs and anything else the node holds for the pod. Raise `APP_TMP_PERCENT` for apps that unpack large archives; the memory limit is still the ceiling for `/tmp` plus the app's own heap. The app's data volume has no byte cap beyond its claim size.
+
 ## 6.5b. WAL archive guards (EXC-784)
 
 Two guards, both **on unless switched off** (`FEATURE_WALARCHIVEALERT=false`, `FEATURE_FREEWALUPLOAD=false`), on Kubernetes and on a single host.

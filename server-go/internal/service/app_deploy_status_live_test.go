@@ -5,8 +5,8 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"io"
 	"net"
 	"net/http"
@@ -221,7 +221,7 @@ func (lab *appLiveLab) namespace(t *testing.T, name string) {
 }
 
 func (lab *appLiveLab) render() k8s.AppRenderOptions {
-	return k8s.AppRenderOptions{RuntimeClass: lab.runtimeClass, Route: appLiveRoute}
+	return k8s.AppRenderOptions{TmpPercent: 25, RuntimeClass: lab.runtimeClass, Route: appLiveRoute}
 }
 
 // app gives each case a project and namespace of its own.

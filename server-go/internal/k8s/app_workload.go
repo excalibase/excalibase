@@ -122,6 +122,10 @@ type AppRenderOptions struct {
 	// DiskStorageClass is the tenant storage class an app disk is made on;
 	// empty is the cluster's default, as for a database.
 	DiskStorageClass string
+	// TmpPercent sizes the scratch /tmp, in memory, as a percent of the app's
+	// memory limit (1..100). The root filesystem is read-only, so this and the
+	// disk are the only places an app can write.
+	TmpPercent int
 }
 
 // AppObjectName is the name the app's Deployment holds in the project namespace.
@@ -175,6 +179,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 	if disk != nil {
 		mountAppDisk(deployment, disk, app.Disk.MountPath)
 	}
+	mountAppTmp(deployment, resources, opts.TmpPercent)
 	pullSecret, err := buildAppPullSecret(namespace, app, opts.PullAuth)
 	if err != nil {
 		return nil, err
@@ -206,6 +211,9 @@ func validateRenderInputs(namespace string, app *apphost.App, opts AppRenderOpti
 	}
 	if opts.DeployID == "" {
 		return fmt.Errorf("%w: no deploy id", ErrRenderApp)
+	}
+	if opts.TmpPercent < 1 || opts.TmpPercent > 100 {
+		return fmt.Errorf("%w: tmp percent %d is outside 1..100", ErrRenderApp, opts.TmpPercent)
 	}
 	if !namespacePattern.MatchString(namespace) {
 		return fmt.Errorf("%w: %q is not a project namespace", ErrRenderApp, namespace)
@@ -482,10 +490,11 @@ func podSecurityContext() *corev1.PodSecurityContext {
 var appCapabilities = []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETUID", "SETGID",
 	"SETPCAP", "SETFCAP", "KILL", "NET_BIND_SERVICE", "SYS_CHROOT", "MKNOD", "AUDIT_WRITE"}
 
-// containerSecurityContext keeps a writable, ephemeral root filesystem.
+// containerSecurityContext makes the root filesystem read-only: an app writes
+// to its scratch /tmp (mountAppTmp) or its disk, both of which are capped.
 func containerSecurityContext() *corev1.SecurityContext {
 	noEscalation := false
-	readOnlyRoot := false
+	readOnlyRoot := true
 	return &corev1.SecurityContext{
 		AllowPrivilegeEscalation: &noEscalation,
 		ReadOnlyRootFilesystem:   &readOnlyRoot,

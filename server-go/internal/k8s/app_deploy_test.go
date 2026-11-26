@@ -35,7 +35,7 @@ func TestApplyAppWorkload_CreatesThenUpdates(t *testing.T) {
 	}
 
 	app.Replicas = 2
-	updated, err := RenderAppWorkload(testNamespace, app, newResolver(), AppRenderOptions{
+	updated, err := RenderAppWorkload(testNamespace, app, newResolver(), AppRenderOptions{TmpPercent: 25,
 		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32"}, Route: testRoute,
 		EnvRevision: "8", DeployID: "dep-8",
 	})

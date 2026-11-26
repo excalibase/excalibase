@@ -12,6 +12,8 @@ const singleHostEdge = "single-host-edge"
 func RenderOptions(domain, runtime string) k8s.AppRenderOptions {
 	return k8s.AppRenderOptions{
 		RuntimeClass: runtime,
+		// The engine mounts its own tmpfs; the rendered scratch volume is read past, not run.
+		TmpPercent: 100,
 		Route: k8s.AppRouteOptions{
 			Domain: domain, IngressClass: singleHostEdge, IngressFromNamespace: singleHostEdge, WildcardTLS: true,
 		},
