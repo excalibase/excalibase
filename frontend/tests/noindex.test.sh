@@ -26,6 +26,10 @@ for _ in $(seq 1 30); do curl -fs "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && b
 for path in /robots.txt / /some/deep/route /index.html; do
   if curl -si "http://127.0.0.1:$PORT$path" | tr -d '\r' | grep -qi '^x-robots-tag: noindex, nofollow$'; then pass "$path is noindex"; else fail "$path has no X-Robots-Tag"; fi
 done
+# The header belongs to the Studio page and its assets, not to the proxied API and MCP answers.
+for path in /api/health /mcp; do
+  if curl -si "http://127.0.0.1:$PORT$path" | tr -d '\r' | grep -qi '^x-robots-tag:'; then fail "$path carries X-Robots-Tag"; else pass "$path carries no X-Robots-Tag"; fi
+done
 body=$(curl -s "http://127.0.0.1:$PORT/robots.txt")
 if printf '%s' "$body" | grep -q '^User-agent: \*$' && printf '%s' "$body" | grep -q '^Disallow: /$'; then pass "robots.txt disallows everything"; else fail "robots.txt: '$body'"; fi
 if curl -si "http://127.0.0.1:$PORT/robots.txt" | tr -d '\r' | grep -qi '^content-type: text/plain'; then pass "robots.txt is text/plain"; else fail "robots.txt content type"; fi
