@@ -2662,6 +2662,13 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(d.activity)
 		r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore), custommw.RequireProjectDatabase(store)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
 	})
+	// What the caller may do on the project, for tools that confirm before a delete (EXC-824).
+	r.Route("/api/projects/{projectId}/access", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(projectAccess(store, sqlStore, d)...)
+		r.Get("/", handler.ProjectRightsHandler{}.Get)
+	})
 	r.Route("/api/projects/{projectId}/info", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)

@@ -241,6 +241,7 @@ var projectRoutes = []projectRoute{
 	{"functions egress write", http.MethodPut, "/api/projects/proj-a/functions/egress", domain.OrgRoleDeveloper},
 	{"schema apply", http.MethodPost, "/api/projects/proj-a/schema/apply", domain.OrgRoleDeveloper},
 	{"project info", http.MethodGet, "/api/projects/proj-a/info/", domain.OrgRoleViewer},
+	{"project access", http.MethodGet, "/api/projects/proj-a/access/", domain.OrgRoleViewer},
 	{"realtime tables", http.MethodGet, "/api/projects/proj-a/realtime/tables", domain.OrgRoleViewer},
 	{"realtime enable-all", http.MethodPost, "/api/projects/proj-a/realtime/enable-all", domain.OrgRoleViewer},
 	{"project alerts", http.MethodGet, "/api/alerts/project/proj-a", domain.OrgRoleViewer},

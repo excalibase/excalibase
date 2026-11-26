@@ -87,6 +87,7 @@ const (
 
 var projectRows = []Row{
 	{Methods: get, Pattern: "/api/projects/{projectId}/info/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Capability: "projects:info:read", Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/projects/{projectId}/access/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "the caller's own role and what it allows (EXC-824)"},
 	{Methods: get, Pattern: "/api/alerts/project/{projectId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
 
 	{Methods: get, Pattern: "/api/projects/{projectId}/functions/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
