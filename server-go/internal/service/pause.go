@@ -286,12 +286,19 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 // project healed, not a failure.
 var ErrNoLongerStuck = errors.New("the project is no longer stuck")
 
+// ErrNoLongerIdle is an idle pause finding, once it held the lease, that the
+// project is no longer one to pause: seen, resumed or moved off the plan since
+// the sweep listed it. The pause did nothing, and that is not a failure.
+var ErrNoLongerIdle = errors.New("the project is no longer idle")
+
 // stuckRetry is a retry of a pause or resume the sweep found stuck. It may act
 // only while the row still has the status the sweep saw, checked under the
 // lease; admitted then runs once, just before the work, to count the attempt.
 type stuckRetry struct {
 	expect   domain.ProvisioningStage
 	admitted func() error
+	// moved is what a row with another status answers; ErrNoLongerStuck when nil.
+	moved error
 }
 
 // confirm reads the row under the lease. A nil retry is an ordinary caller.
@@ -304,7 +311,11 @@ func (r *stuckRetry) confirm(instances storage.InstanceStore, projectID string) 
 		return fmt.Errorf("project not found: %s", projectID)
 	}
 	if inst.Status != string(r.expect) {
-		return fmt.Errorf("%w: %s is %s", ErrNoLongerStuck, projectID, inst.Status)
+		moved := r.moved
+		if moved == nil {
+			moved = ErrNoLongerStuck
+		}
+		return fmt.Errorf("%w: %s is %s", moved, projectID, inst.Status)
 	}
 	return r.admitted()
 }
@@ -313,6 +324,13 @@ func (r *stuckRetry) confirm(instances storage.InstanceStore, projectID string) 
 // a pause of a project that has since been resumed or settled.
 func (s *PauseService) PauseStuck(ctx context.Context, projectID, reason string, admitted func() error) error {
 	return s.pause(ctx, projectID, reason, &stuckRetry{expect: domain.StatusPausing, admitted: admitted})
+}
+
+// PauseIdle pauses a project the idle sweep judged idle, only while the row is
+// still ACTIVE under the lease. admitted runs once, just before the work, and
+// judges the project again: the sweep may have listed it long before its turn.
+func (s *PauseService) PauseIdle(ctx context.Context, projectID, reason string, admitted func() error) error {
+	return s.pause(ctx, projectID, reason, &stuckRetry{expect: domain.StatusActive, admitted: admitted, moved: ErrNoLongerIdle})
 }
 
 func (s *PauseService) pause(ctx context.Context, projectID, reason string, retry *stuckRetry) error {

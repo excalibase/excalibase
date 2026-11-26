@@ -26,6 +26,9 @@ type fakeIdlePauser struct {
 	tried int
 	// stuckErr answers PauseStuck without running it (busy, or no longer stuck).
 	stuckErr error
+	// afterPause runs once a pause is done: the time a slow pause gives the
+	// customers of the projects still waiting in the same sweep.
+	afterPause func(projectID string)
 }
 
 // PauseStuck is what the real service does once it holds the lease: count the
@@ -33,6 +36,19 @@ type fakeIdlePauser struct {
 func (f *fakeIdlePauser) PauseStuck(ctx context.Context, projectID, reason string, admitted func() error) error {
 	if f.stuckErr != nil {
 		return f.stuckErr
+	}
+	if err := admitted(); err != nil {
+		return err
+	}
+	return f.Pause(ctx, projectID, reason)
+}
+
+// PauseIdle is what the real service does once it holds the lease: confirm the
+// project is still ACTIVE, let the sweep judge it again, then pause.
+func (f *fakeIdlePauser) PauseIdle(ctx context.Context, projectID, reason string, admitted func() error) error {
+	inst, err := f.instances.FindByProjectID(projectID)
+	if err != nil || inst == nil || inst.Status != "ACTIVE" {
+		return ErrNoLongerIdle
 	}
 	if err := admitted(); err != nil {
 		return err
@@ -62,7 +78,13 @@ func (f *fakeIdlePauser) Pause(_ context.Context, projectID, reason string) erro
 	// double has to do the same or the sweep's view of it would drift.
 	inst.PauseAttempts = 0
 	inst.PauseLastAttemptAt = nil
-	return f.instances.Update(inst)
+	if err := f.instances.Update(inst); err != nil {
+		return err
+	}
+	if f.afterPause != nil {
+		f.afterPause(projectID)
+	}
+	return nil
 }
 
 func (f *fakeIdlePauser) count() int {
