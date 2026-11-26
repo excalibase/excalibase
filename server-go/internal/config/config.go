@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/behaviour"
 	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
@@ -142,6 +143,8 @@ type AppConfig struct {
 	HostMetrics HostMetrics
 	// NetMeter is where per-app network metering reads the kubelet (EXC-844).
 	NetMeter NetMeter
+	// Behaviour holds the thresholds of behaviour review (EXC-844).
+	Behaviour behaviour.Config
 	// HostLogs is a single host's stored log search (EXC-672).
 	HostLogs HostLogs
 
@@ -579,6 +582,7 @@ func load() AppConfig {
 		RequestMetricsTargets:          loadRequestMetricsTargets(),
 		HostMetrics:                    loadHostMetrics(),
 		NetMeter:                       loadNetMeter(),
+		Behaviour:                      loadBehaviour(),
 		HostLogs:                       loadHostLogs(),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),

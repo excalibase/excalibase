@@ -681,6 +681,9 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 	if meter := netMeterSampler(cfg, sqlStore, k8sClient); meter != nil {
 		checks = append(checks, meter)
 	}
+	if detector := behaviourSampler(cfg, sqlStore); detector != nil {
+		checks = append(checks, detector)
+	}
 	if len(checks) > 0 {
 		metrics.SetClusterSampler(checks)
 	}
@@ -700,7 +703,7 @@ func metricsLoopRuns(cfg config.AppConfig, k8sClient k8s.KubeClient, requests se
 	if k8sClient != nil && cfg.ProvisionerMode != "docker" {
 		return true
 	}
-	return hostMonitoringOn(cfg) || netMeterOn(cfg) || (cfg.ProvisionerMode == "docker" && requests != nil)
+	return hostMonitoringOn(cfg) || netMeterOn(cfg) || behaviourReviewOn(cfg) || (cfg.ProvisionerMode == "docker" && requests != nil)
 }
 
 // newRequestMetricsService reads the request_metrics table and scrapes the
