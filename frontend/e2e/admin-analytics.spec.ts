@@ -22,7 +22,7 @@ const ABUSE = {
   perDay: SIGNUPS.map((_, i) => ({ day: day(i), total: i > 21 ? [5, 0, 1, 4, 23, 78, 19, 19][i - 22] ?? 0 : 0, flagged: i > 21 ? [3, 0, 1, 4, 21, 54, 12, 6][i - 22] ?? 0 : 0 })),
   latest: [{ at: '2026-11-25T15:15:00Z', projectId: 'proj-7y14t3tmyi', userId: 'u9', email: 'builder@example.test', kind: 'proxy', details: 'surface=create name="web" image="registry.sslip.io/x"', suspended: false }],
 };
-const TRAFFIC = { windowDays: 30, peakConnections: 35, peakConnectionsPerDay: SIGNUPS.map((_, i) => ({ day: day(i), total: i > 21 ? 30 + (i % 5) : 0 })) };
+const TRAFFIC = { windowDays: 7, peakConnections: 35, peakConnectionsPerDay: [21, 22, 23, 24, 25, 26, 27].map((i) => ({ day: day(i), total: 30 + (i % 5) })) };
 
 async function stubAdmin(page: Page, analytics: boolean) {
   const analyticsCalls: string[] = [];

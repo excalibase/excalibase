@@ -15,9 +15,11 @@ describe('AdminTabs', () => {
 
   test('draws a separator only before a tab that starts a group', () => {
     render(<AdminTabs tabs={tabs} active="a" onChange={() => {}} />);
-    const separators = screen.getAllByRole('separator');
+    const separators = screen.getByRole('tablist').querySelectorAll('[data-tab-separator]');
     expect(separators).toHaveLength(1);
     expect(separators[0].nextElementSibling).toBe(screen.getByRole('tab', { name: 'C' }));
+    expect(separators[0]).toHaveAttribute('aria-hidden', 'true');
+    expect(separators[0]).not.toHaveAttribute('role');
   });
 
   test('brings the active tab into view when it changes', () => {

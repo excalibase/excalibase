@@ -45,7 +45,7 @@ export function AdminTabs({ tabs, active, onChange }: AdminTabsProps) {
       <div role="tablist" aria-label="Admin sections" className="flex flex-nowrap items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((tab, index) => (
           <Fragment key={tab.id}>
-            {tab.startsGroup && <span role="separator" aria-orientation="vertical" className="mx-2 h-5 w-px shrink-0 bg-border-primary" />}
+            {tab.startsGroup && <span aria-hidden="true" data-tab-separator className="mx-2 h-5 w-px shrink-0 bg-border-primary" />}
             <button
               ref={(el) => { refs.current[tab.id] = el; }}
               id={`admin-tab-${tab.id}`}

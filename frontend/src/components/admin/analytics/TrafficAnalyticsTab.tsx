@@ -25,10 +25,10 @@ export function TrafficAnalyticsTab() {
               { label: 'Peak DB connections', value: data.peakConnections, note: `all projects, last ${data.windowDays} days` },
             ]}
             />
-            <Panel title="Peak database connections per day" hint="The one traffic signal recorded today: the sum of each project's daily peak.">
+            <Panel title={`Peak database connections per day, last ${data.windowDays} days`} hint="The one traffic signal recorded today: the sum of each project's daily peak.">
               <BarChart
                 label="Peak database connections" labels={data.peakConnectionsPerDay.map((day) => shortDay(day.day))}
-                series={[data.peakConnectionsPerDay.map((day) => day.total)]} seriesClasses={['fill-accent-primary']} every={3}
+                series={[data.peakConnectionsPerDay.map((day) => day.total)]} seriesClasses={['fill-accent-primary']}
                 tip={(i) => `${data.peakConnectionsPerDay[i].total} connections`}
               />
             </Panel>

@@ -9,6 +9,10 @@ import (
 // bounded by it, so a growing audit log or user table never makes a tab slow.
 const AnalyticsWindowDays = 30
 
+// TrafficWindowDays is the traffic tab's window. Sampled metrics are kept for
+// seven days, so a longer window would show empty bars that read as "no traffic".
+const TrafficWindowDays = 7
+
 // DayCount is one calendar day (UTC) of a series; days with nothing are present with zero.
 type DayCount struct {
 	Day   string `json:"day"`

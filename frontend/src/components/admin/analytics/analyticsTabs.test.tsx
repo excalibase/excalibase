@@ -92,7 +92,7 @@ describe('Abuse tab', () => {
 
 describe('Traffic tab', () => {
   beforeEach(() => vi.clearAllMocks());
-  const traffic = { windowDays: 30, peakConnections: 35, peakConnectionsPerDay: days(30, (i) => ({ total: i === 10 ? 35 : 0 })) };
+  const traffic = { windowDays: 7, peakConnections: 35, peakConnectionsPerDay: days(7, (i) => ({ total: i === 3 ? 35 : 0 })) };
 
   test('dashes for what is not collected, the one real number, and a plain notice', async () => {
     renderTab(<TrafficAnalyticsTab />, { '/admin/analytics/traffic': traffic });
@@ -101,6 +101,8 @@ describe('Traffic tab', () => {
     for (const label of ['API requests', 'Egress', 'DB queries/s']) expect(screen.getByText(label).nextElementSibling).toHaveTextContent('—');
     expect(screen.getByRole('note')).toHaveTextContent('not collected yet');
     expect(screen.getByRole('note')).toHaveTextContent('off on this install');
+    expect(screen.getByText('Peak database connections per day, last 7 days')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^bar-hit-/)).toHaveLength(7);
   });
 
   test('the notice follows the request-metrics flag instead of claiming it is off', async () => {
