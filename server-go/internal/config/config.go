@@ -337,6 +337,8 @@ type AppConfig struct {
 	// operation alert the platform admins (EXCALIBASE_SELFHEAL_ALERT_AFTER,
 	// default 5, EXC-873).
 	SelfHealAlertAfter int
+	// Trust is the limited trial's settings (EXC-899).
+	Trust TrustConfig
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -482,6 +484,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateSites(); err != nil {
 		return err
 	}
+	if err := c.validateTrust(); err != nil {
+		return err
+	}
 	if err := c.validateSiteGit(); err != nil {
 		return err
 	}
@@ -492,6 +497,7 @@ func Load() AppConfig {
 	cfg := load()
 	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
 	cfg.SelfHealAlertAfter = envInt("EXCALIBASE_SELFHEAL_ALERT_AFTER", 5)
+	cfg.Trust = loadTrust()
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"

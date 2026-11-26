@@ -146,6 +146,9 @@ func runServer(cfg config.AppConfig) {
 	}
 	sqlStore := buildPlatformStore(cfg)
 	defer sqlStore.Close()
+	if err := trustBackfillCheck(cfg, sqlStore); err != nil {
+		log.Fatal(err)
+	}
 
 	// Use platform store as InstanceStore (same interface)
 	var store storage.InstanceStore = sqlStore

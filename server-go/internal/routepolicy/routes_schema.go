@@ -31,7 +31,7 @@ func schemaWrite(method, pattern string) Row {
 	return Row{
 		Methods: []string{method}, Pattern: "/api/schema/{projectId}" + pattern,
 		Auth: AuthSession, Param: ParamProject,
-		Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true,
+		Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, Trust: trustNone,
 	}
 }
 

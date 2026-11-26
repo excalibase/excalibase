@@ -198,6 +198,8 @@ var darkWork = map[features.Feature]string{
 	features.SelfHeal: "TestSelfHeal_WantedOnlyWithItsFlag",
 	// Off, nothing is read from the kubelet or the engine and nothing is stored (cmd/server).
 	features.NetMeter: "TestNetMeterSampler_OffWhileTheFlagIsOff",
+	// Off, every account resolves as full and the trust tables are never read; no route is gated yet (internal/trust).
+	features.LimitedTrial: "TestFlagOffEveryoneIsFullAndNothingIsRead",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }
