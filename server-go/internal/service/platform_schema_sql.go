@@ -22,8 +22,8 @@ func platformSchemaScripts() (lockdown, quarantine, refusal string) {
 func schemaScoped(namespace string) *strings.Replacer {
 	scoped := strings.NewReplacer("{{NS}}", namespace, "{{QNS}}", "to_regnamespace(quarantine)")
 	return strings.NewReplacer("{{OWNED}}", scoped.Replace(customerOwnedObjects), "{{TAINTED_TABLES}}", taintedTables,
-		"{{LAST_TRY}}", strconv.Itoa(quarantineNameTries-1), "{{GRANTEES}}", scoped.Replace(schemaGrantees),
-		"{{QUARANTINE_GRANTEES}}", quarantineGrantees, "{{MOVABLE}}", scoped.Replace(movableObjects), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargets))
+		"{{LAST_TRY}}", strconv.Itoa(quarantineNameTries-1), "{{GRANTED}}", scoped.Replace(grantedOnSchema), "{{REVOKE_HELPER}}", revokeHelperSQL,
+		"{{STAGE_LOCKDOWN}}", stageNotice("lockdown"), "{{STAGE_QUARANTINE}}", stageNotice("quarantine"), "{{STAGE_REFUSAL}}", stageNotice("refusal"), "{{MOVABLE}}", scoped.Replace(movableObjects), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargets))
 }
 
 // The lockdown takes the schema back, reclaims the platform's own tables a
@@ -32,11 +32,12 @@ func schemaScoped(namespace string) *strings.Replacer {
 // holds and PUBLIC's EXECUTE. Nothing in it can refuse or collide.
 const platformSchemaLockdownTemplate = `
 SET LOCAL statement_timeout = '60s';
+{{STAGE_LOCKDOWN}}
+{{REVOKE_HELPER}}
 DO $excalibase_schema_lockdown$
 DECLARE
   entry record;
   item record;
-  holder record;
   schema_oid oid;
 BEGIN
   FOR entry IN SELECT * FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role, known_tables) LOOP
@@ -73,16 +74,26 @@ BEGIN
       EXECUTE format('DROP RULE %I ON %s', item.rulename, item.relation);
     END LOOP;
 
-    FOR holder IN SELECT r.rolname FROM pg_roles r WHERE {{CUSTOMER_R}} AND r.oid IN ({{GRANTEES}}) LOOP
-      EXECUTE format('REVOKE ALL ON SCHEMA %I FROM %I', entry.schema_name, holder.rolname);
-      EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM %I', entry.schema_name, holder.rolname);
-      EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM %I', entry.schema_name, holder.rolname);
-      EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM %I', entry.schema_name, holder.rolname);
+    FOR item IN
+      SELECT g.kind, g.ident, array_agg(DISTINCT r.rolname) AS roles FROM ({{GRANTED}}) g
+      JOIN pg_roles r ON r.oid = g.grantee WHERE {{CUSTOMER_R}} GROUP BY g.kind, g.ident
+    LOOP
+      PERFORM pg_temp.excalibase_revoke('ALL', item.kind, item.ident, item.roles);
     END LOOP;
-    EXECUTE format('REVOKE ALL ON SCHEMA %I FROM PUBLIC', entry.schema_name);
-    EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM PUBLIC', entry.schema_name);
-    EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC', entry.schema_name);
-    EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC', entry.schema_name);
+    FOR item IN
+      SELECT d.defaclrole::regrole::text AS owner_role,
+             CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' ELSE 'TYPES' END AS kind,
+             string_agg(quote_ident(r.rolname), ', ') AS roles
+      FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN pg_roles r ON r.oid = a.grantee
+      WHERE d.defaclnamespace = schema_oid AND d.defaclobjtype IN ('r', 'S', 'f', 'T') AND {{CUSTOMER_R}}
+      GROUP BY d.defaclrole, d.defaclobjtype
+    LOOP
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %I REVOKE ALL ON %s FROM %s CASCADE', item.owner_role, entry.schema_name, item.kind, item.roles);
+    END LOOP;
+    EXECUTE format('REVOKE ALL ON SCHEMA %I FROM PUBLIC CASCADE', entry.schema_name);
+    EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM PUBLIC CASCADE', entry.schema_name);
+    EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC CASCADE', entry.schema_name);
+    EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC CASCADE', entry.schema_name);
   END LOOP;
 END
 $excalibase_schema_lockdown$;
@@ -95,11 +106,12 @@ $excalibase_schema_lockdown$;
 // a schema of its own that did not exist.
 const platformSchemaQuarantineTemplate = `
 SET LOCAL statement_timeout = '60s';
+{{STAGE_QUARANTINE}}
+{{REVOKE_HELPER}}
 DO $excalibase_schema_quarantine$
 DECLARE
   entry record;
   item record;
-  holder record;
   quarantine text;
   target text;
   schema_oid oid;
@@ -116,10 +128,10 @@ BEGIN
 
     EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', quarantine);
     EXECUTE format('ALTER SCHEMA %I OWNER TO CURRENT_USER', quarantine);
-    EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM PUBLIC', quarantine);
-    FOR holder IN SELECT r.rolname FROM pg_roles r WHERE {{CUSTOMER_R}} AND r.oid IN ({{QUARANTINE_GRANTEES}}) LOOP
-      EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM %I', quarantine, holder.rolname);
-    END LOOP;
+    EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM PUBLIC CASCADE', quarantine);
+    PERFORM pg_temp.excalibase_revoke('CREATE', 'SCHEMA', quote_ident(quarantine),
+      (SELECT coalesce(array_agg(DISTINCT r.rolname), ARRAY[]::text[]) FROM pg_namespace n, aclexplode(n.nspacl) a
+       JOIN pg_roles r ON r.oid = a.grantee WHERE n.nspname = quarantine AND a.privilege_type = 'CREATE' AND {{CUSTOMER_R}}));
 
     FOR item IN
       SELECT o.kind, o.ident, o.object_oid, o.collides, r.rolname AS owner_name
@@ -153,6 +165,7 @@ $excalibase_schema_quarantine$;
 // and the project is reported rather than passed as clean.
 const platformSchemaRefusalTemplate = `
 SET LOCAL statement_timeout = '60s';
+{{STAGE_REFUSAL}}
 DO $excalibase_schema_refusal$
 DECLARE
   entry record;
@@ -208,6 +221,10 @@ const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND w.rulename <> '_RETURN' AND NOT {{CUSTOMER_R}})
       OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND NOT {{CUSTOMER_R}} AND c.oid IN {{TAINTED_TABLES}})
+      OR EXISTS (SELECT 1 FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN pg_roles r ON r.oid = a.grantee
+                 WHERE d.defaclnamespace = to_regnamespace(v.schema_name) AND {{CUSTOMER_R}})
+      OR EXISTS (SELECT 1 FROM pg_type t CROSS JOIN LATERAL aclexplode(t.typacl) a JOIN pg_roles r ON r.oid = a.grantee
+                 WHERE t.typnamespace = to_regnamespace(v.schema_name) AND t.typcategory <> 'A' AND {{CUSTOMER_R}})
     )
   ), false)`
 
@@ -215,16 +232,38 @@ const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
 // is taken in the quarantine schema, before the repair refuses.
 const quarantineNameTries = 8
 
-// schemaGrantees is every role holding an explicit grant on {{NS}} or on a
-// relation, column or routine in it. A role holds no other grant there, so the
-// revokes need only name these: the cost follows the grants that exist, never
+// grantedOnSchema is every explicit grant on {{NS}} and what is in it: the
+// schema, relations and their columns, routines, and types and domains, each as
+// the object kind and name a REVOKE takes. Only these hold a grant, so the
+// revokes need only name them: the cost follows the grants that exist, never
 // the number of roles the owner made.
-const schemaGrantees = `
-      SELECT a.grantee FROM pg_namespace n, aclexplode(n.nspacl) a WHERE n.oid = {{NS}}
-      UNION SELECT a.grantee FROM pg_class c, aclexplode(c.relacl) a WHERE c.relnamespace = {{NS}}
-      UNION SELECT a.grantee FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid, aclexplode(att.attacl) a WHERE c.relnamespace = {{NS}}
-      UNION SELECT a.grantee FROM pg_proc p, aclexplode(p.proacl) a WHERE p.pronamespace = {{NS}}`
+const grantedOnSchema = `
+      SELECT 'SCHEMA' AS kind, quote_ident(n.nspname) AS ident, a.grantee FROM pg_namespace n, aclexplode(n.nspacl) a WHERE n.oid = {{NS}}
+      UNION SELECT CASE c.relkind WHEN 'S' THEN 'SEQUENCE' ELSE 'TABLE' END, c.oid::regclass::text, a.grantee FROM pg_class c, aclexplode(c.relacl) a WHERE c.relnamespace = {{NS}}
+      UNION SELECT 'TABLE', c.oid::regclass::text, a.grantee FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid, aclexplode(att.attacl) a WHERE c.relnamespace = {{NS}}
+      UNION SELECT 'ROUTINE', p.oid::regprocedure::text, a.grantee FROM pg_proc p, aclexplode(p.proacl) a WHERE p.pronamespace = {{NS}}
+      UNION SELECT CASE t.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END, t.oid::regtype::text, a.grantee FROM pg_type t, aclexplode(t.typacl) a
+        WHERE t.typnamespace = {{NS}} AND t.typcategory <> 'A'`
 
-// quarantineGrantees is every role holding CREATE on the quarantine schema.
-const quarantineGrantees = `
-      SELECT a.grantee FROM pg_namespace n, aclexplode(n.nspacl) a WHERE n.nspname = quarantine AND a.privilege_type = 'CREATE'`
+// revokeHelperSQL is a function in the script's own temporary schema that
+// revokes privilege on one object from many roles, a few hundred at a time and
+// with CASCADE, so a grant chain cannot stop it.
+const revokeHelperSQL = `CREATE OR REPLACE FUNCTION pg_temp.excalibase_revoke(privilege text, kind text, ident text, roles text[]) RETURNS void LANGUAGE plpgsql AS $excalibase_revoke$
+DECLARE
+  first_role int := 1;
+BEGIN
+  WHILE first_role <= cardinality(roles) LOOP
+    EXECUTE format('REVOKE %s ON %s %s FROM %s CASCADE', privilege, kind, ident, (SELECT string_agg(quote_ident(role_name), ', ') FROM unnest(roles[first_role:first_role + 199]) AS role_name));
+    first_role := first_role + 200;
+  END LOOP;
+END
+$excalibase_revoke$;`
+
+// stageNotice names the script that is running; the error of a failed run
+// carries the last one, which tells the reconcile which script failed.
+func stageNotice(name string) string {
+	return "DO $excalibase_stage$ BEGIN RAISE NOTICE '" + repairStageMarker + name + "'; END $excalibase_stage$;"
+}
+
+// repairStageMarker starts the notice each script of a registration prints.
+const repairStageMarker = "excalibase-repair-stage:"

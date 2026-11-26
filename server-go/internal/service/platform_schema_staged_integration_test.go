@@ -223,8 +223,8 @@ func TestPlatformSchemas_CollisionsInQuarantineGoToASchemaOfTheirOwn(t *testing.
 	if n := scanString(t, c.admin, customerOwnedInPlatformSchemas); n != "0" {
 		t.Fatalf("%s customer-owned object(s) are still in the platform schemas", n)
 	}
-	if got := scanString(t, c.admin, `SELECT count(DISTINCT n.nspname) FROM pg_namespace n
-		WHERE n.nspname LIKE 'excalibase\_quarantine\_auth\_%' AND n.nspowner <> 'excalibase_app'::regrole`); got == "0" {
+	if scanString(t, c.admin, `SELECT count(DISTINCT n.nspname) FROM pg_namespace n
+		WHERE n.nspname LIKE 'excalibase\_quarantine\_auth\_%' AND n.nspowner <> 'excalibase_app'::regrole`) == "0" {
 		t.Fatal("the colliding objects did not go to schemas of their own")
 	}
 	if c.probe(t) {
@@ -337,5 +337,119 @@ func TestPlatformSchemas_EveryKindOfCustomerGrantIsRevoked(t *testing.T) {
 		if scanBool(t, c.admin, "SELECT "+check) {
 			t.Errorf("the %s grant survived", name)
 		}
+	}
+}
+
+// asRoles runs statements as the given roles in one session, each SET ROLE
+// taking effect for the statements after it.
+func (c *platformSchemaCase) asRoles(t *testing.T, steps ...[2]string) {
+	t.Helper()
+	tx, err := c.admin.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, step := range steps {
+		if _, err := tx.Exec("SET LOCAL ROLE " + step[0]); err != nil {
+			t.Fatalf("set role %s: %v", step[0], err)
+		}
+		if _, err := tx.Exec(step[1]); err != nil {
+			t.Fatalf("as %s: %s: %v", step[0], step[1], err)
+		}
+		if _, err := tx.Exec("RESET ROLE"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A grant passed down a chain with the grant option cannot stop the lockdown
+// with "dependent privileges exist": every grant in the chain goes.
+func TestPlatformSchemas_AGrantOptionChainIsRevoked(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	mustExec(t, c.admin, `CREATE ROLE sidekick NOLOGIN; CREATE ROLE sidekick2 NOLOGIN`)
+	mustExec(t, c.admin, `GRANT USAGE ON SCHEMA auth TO `+customerOwner+` WITH GRANT OPTION`)
+	mustExec(t, c.admin, `GRANT SELECT ON auth.users TO `+customerOwner+` WITH GRANT OPTION`)
+	c.asRoles(t,
+		[2]string{customerOwner, `GRANT USAGE ON SCHEMA auth TO sidekick WITH GRANT OPTION`},
+		[2]string{customerOwner, `GRANT SELECT ON auth.users TO sidekick WITH GRANT OPTION`},
+		[2]string{"sidekick", `GRANT USAGE ON SCHEMA auth TO sidekick2`},
+		[2]string{"sidekick", `GRANT SELECT ON auth.users TO sidekick2`},
+	)
+	if !c.probe(t) {
+		t.Fatal("the probe did not see the chain")
+	}
+	c.register(t)
+	if scanBool(t, c.admin, `SELECT has_schema_privilege('sidekick2', 'auth', 'USAGE') OR has_table_privilege('sidekick2', 'auth.users', 'SELECT')
+		OR has_schema_privilege('sidekick', 'auth', 'USAGE') OR has_table_privilege($1, 'auth.users', 'SELECT')`, customerOwner) {
+		t.Fatal("a grant in the chain survived")
+	}
+}
+
+// Thousands of roles each holding a grant on one table finish inside the timeout.
+func TestPlatformSchemas_ThousandsOfGrantHoldersDoNotStopTheRepair(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	mustExec(t, c.admin, `DO $$ BEGIN FOR i IN 1..300 LOOP EXECUTE format('CREATE TABLE auth.holder_t%s (id int)', i); END LOOP; END $$`)
+	mustExec(t, c.admin, `DO $$ BEGIN FOR i IN 1..2000 LOOP
+		EXECUTE format('CREATE ROLE holder_%s NOLOGIN', i);
+		EXECUTE format('GRANT SELECT ON auth.users TO holder_%s', i);
+		EXECUTE format('GRANT USAGE ON SCHEMA auth TO holder_%s', i);
+	END LOOP; END $$`)
+	started := time.Now()
+	if err := c.registerWith(t, ""); err != nil {
+		t.Fatalf("registration with 2000 grant holders and 300 tables: %v", err)
+	}
+	if took := time.Since(started); took > 30*time.Second {
+		t.Fatalf("the repair took %s with 2000 grant holders and 300 tables", took)
+	}
+	if c.probe(t) {
+		t.Fatal("drift left behind")
+	}
+}
+
+// A default privilege that would hand a customer role every new platform table
+// is seen and cleared.
+func TestPlatformSchemas_DefaultPrivilegesForACustomerAreClearedAndSeen(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	mustExec(t, c.admin, `ALTER DEFAULT PRIVILEGES FOR ROLE auth_admin IN SCHEMA auth GRANT SELECT ON TABLES TO `+customerOwner)
+	mustExec(t, c.admin, `ALTER DEFAULT PRIVILEGES FOR ROLE cdc_watcher IN SCHEMA excalibase_cdc GRANT SELECT ON TABLES TO excalibase_app`)
+	if !c.probe(t) {
+		t.Fatal("the probe did not see a default privilege for a customer")
+	}
+	c.register(t)
+	if c.probe(t) {
+		t.Fatal("the default privileges survived")
+	}
+	mustExec(t, c.authAdmin, `CREATE TABLE auth.sessions (id int)`)
+	if scanBool(t, c.admin, `SELECT has_table_privilege($1, 'auth.sessions', 'SELECT')`, customerOwner) {
+		t.Fatal("a table created after the repair is readable by the owner")
+	}
+}
+
+// A grant on a type or domain in a platform schema is seen and revoked.
+func TestPlatformSchemas_TypeAndDomainGrantsToACustomerAreRevoked(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	mustExec(t, c.authAdmin, `CREATE TYPE auth.platform_mood AS ENUM ('a')`)
+	mustExec(t, c.authAdmin, `CREATE DOMAIN auth.platform_pos AS int CHECK (VALUE > 0)`)
+	mustExec(t, c.authAdmin, `GRANT USAGE ON TYPE auth.platform_mood TO `+customerOwner)
+	mustExec(t, c.authAdmin, `GRANT USAGE ON DOMAIN auth.platform_pos TO `+customerOwner)
+	if !c.probe(t) {
+		t.Fatal("the probe did not see a grant on a type")
+	}
+	c.register(t)
+	if scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_type t, aclexplode(t.typacl) a
+		WHERE t.typnamespace = 'auth'::regnamespace AND a.grantee = $1::regrole)`, customerOwner) {
+		t.Fatal("a type or domain grant to the owner survived")
+	}
+	if c.probe(t) {
+		t.Fatal("drift left behind")
 	}
 }

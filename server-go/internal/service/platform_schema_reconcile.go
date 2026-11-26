@@ -93,7 +93,7 @@ func (s *ProvisioningService) reconcileIfPending(ctx context.Context, inst *doma
 		return false, err
 	}
 	if err := s.reconcileProject(projectCtx, inst.ProjectID); err != nil {
-		if errors.Is(err, errPlatformSchemaLeft) || errors.Is(err, errPlatformRepairCutOff) {
+		if errors.Is(err, errPlatformSchemaLeft) || errors.Is(err, errPlatformRepairCutOff) || errors.Is(err, errPlatformRepairFailed) {
 			s.trackSchemaAlert(inst.ProjectID, true, err)
 		}
 		return false, err

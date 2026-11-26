@@ -20,34 +20,45 @@ func TestPlatformSchemas_CustomerRolesCannotChangeThem(t *testing.T) {
 	roles := map[string]*sql.DB{roleApp: c.app, customerOwner: c.owner(t)}
 	for role, db := range roles {
 		for _, schema := range platformManagedSchemas {
-			for _, statement := range []string{
-				"CREATE TABLE " + schema + ".planted (id int)",
-				"CREATE FUNCTION " + schema + ".planted() RETURNS int LANGUAGE sql AS 'SELECT 1'",
-				"ALTER SCHEMA " + schema + " OWNER TO " + role,
-				"ALTER SCHEMA " + schema + " RENAME TO planted_schema",
-				"DROP SCHEMA " + schema + " CASCADE",
-			} {
-				if _, err := db.Exec(statement); err == nil {
-					t.Errorf("%s was allowed to run: %s", role, statement)
-				} else if !strings.Contains(err.Error(), "permission denied") && !strings.Contains(err.Error(), "must be owner") {
-					t.Errorf("%s: %s refused for another reason: %v", role, statement, err)
-				}
-			}
+			expectSchemaStatementsRefused(t, db, role, schema)
 		}
 		mustBeRefused(t, db, "ALTER TABLE auth.users OWNER TO "+role)
-		// Postgres only warns on a GRANT by a role with no grant option; what
-		// counts is that nothing was granted.
-		for _, schema := range platformManagedSchemas {
-			_, _ = db.Exec("GRANT ALL ON SCHEMA " + schema + " TO PUBLIC")
-			_, _ = db.Exec("GRANT ALL ON SCHEMA " + schema + " TO " + role)
-			if scanBool(t, c.admin, "SELECT has_schema_privilege('public', $1, 'CREATE') OR has_schema_privilege($2, $1, 'CREATE')", schema, role) {
-				t.Errorf("%s granted itself or PUBLIC CREATE on %s", role, schema)
-			}
+		c.expectNoSelfGrant(t, db, role)
+	}
+}
+
+func expectSchemaStatementsRefused(t *testing.T, db *sql.DB, role, schema string) {
+	t.Helper()
+	for _, statement := range []string{
+		"CREATE TABLE " + schema + ".planted (id int)",
+		"CREATE FUNCTION " + schema + ".planted() RETURNS int LANGUAGE sql AS 'SELECT 1'",
+		"ALTER SCHEMA " + schema + " OWNER TO " + role,
+		"ALTER SCHEMA " + schema + " RENAME TO planted_schema",
+		"DROP SCHEMA " + schema + " CASCADE",
+	} {
+		_, err := db.Exec(statement)
+		if err == nil {
+			t.Errorf("%s was allowed to run: %s", role, statement)
+		} else if !strings.Contains(err.Error(), "permission denied") && !strings.Contains(err.Error(), "must be owner") {
+			t.Errorf("%s: %s refused for another reason: %v", role, statement, err)
 		}
-		_, _ = db.Exec("GRANT ALL ON TABLE auth.users TO " + role)
-		if scanBool(t, c.admin, "SELECT has_table_privilege($1, 'auth.users', 'SELECT')", role) {
-			t.Errorf("%s granted itself SELECT on auth.users", role)
+	}
+}
+
+// Postgres only warns on a GRANT by a role with no grant option; what counts is
+// that nothing was granted.
+func (c *platformSchemaCase) expectNoSelfGrant(t *testing.T, db *sql.DB, role string) {
+	t.Helper()
+	for _, schema := range platformManagedSchemas {
+		_, _ = db.Exec("GRANT ALL ON SCHEMA " + schema + " TO PUBLIC")
+		_, _ = db.Exec("GRANT ALL ON SCHEMA " + schema + " TO " + role)
+		if scanBool(t, c.admin, "SELECT has_schema_privilege('public', $1, 'CREATE') OR has_schema_privilege($2, $1, 'CREATE')", schema, role) {
+			t.Errorf("%s granted itself or PUBLIC CREATE on %s", role, schema)
 		}
+	}
+	_, _ = db.Exec("GRANT ALL ON TABLE auth.users TO " + role)
+	if scanBool(t, c.admin, "SELECT has_table_privilege($1, 'auth.users', 'SELECT')", role) {
+		t.Errorf("%s granted itself SELECT on auth.users", role)
 	}
 }
 

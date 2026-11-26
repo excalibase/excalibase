@@ -237,5 +237,5 @@ func registrationScripts(roleSQL, passwordRepair string) []string {
 	if passwordRepair != "" {
 		scripts = append(scripts, passwordRepair)
 	}
-	return append(scripts, roleSQL, quarantine, refusal)
+	return append(scripts, stageNotice("registration")+roleSQL, quarantine, refusal)
 }

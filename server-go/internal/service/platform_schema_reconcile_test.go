@@ -497,19 +497,50 @@ func TestReconcileProjectRoles_ARepairCutOffByATimeoutIsAlerted(t *testing.T) {
 	}
 }
 
-// The lockdown reads the grants that exist; it does not walk every role.
-func TestPlatformSchemaScripts_RevokeOnlyFromRolesThatHoldAGrant(t *testing.T) {
-	lockdown, quarantine, _ := platformSchemaScripts()
-	for name, script := range map[string]string{"lockdown": lockdown, "quarantine": quarantine} {
-		loops := strings.Split(script, "FOR holder IN")[1:]
-		if len(loops) == 0 {
-			t.Fatalf("the %s script revokes from no holder", name)
-		}
-		for _, loop := range loops {
-			header, _, _ := strings.Cut(loop, "LOOP")
-			if !strings.Contains(header, "aclexplode") {
-				t.Errorf("the %s script walks roles that hold no grant", name)
+// Any failure of a repair script, whatever its error, is an alert; a failure of
+// the registration SQL after them is not a schema alert, and a deadline that cut
+// the repair is.
+func TestReconcileProjectRoles_AnyRepairScriptFailureIsAlerted(t *testing.T) {
+	for name, tc := range map[string]struct {
+		text  string
+		alert bool
+	}{
+		"lockdown":     {"exit code 3: NOTICE: excalibase-repair-stage:lockdown ERROR: 2BP01: dependent privileges exist", true},
+		"quarantine":   {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:registration NOTICE: excalibase-repair-stage:quarantine ERROR: 42P07: relation exists", true},
+		"refusal":      {"exit code 3: NOTICE: excalibase-repair-stage:refusal ERROR: boom", true},
+		"registration": {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:registration ERROR: platform role(s) x were created outside the platform", false},
+		"deadline":     {"context deadline exceeded", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newRotationHarness(t)
+			h.seedPreSchedulerCluster(t)
+			h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
+			alerts := NewAlertingService(t.TempDir())
+			h.svc.SetSchemaAlerts(alerts)
+			h.kube.ExecAnswer = func(cmd []string) (string, error) {
+				return probeAuthTag + "\tf\n" + probeSchemasTag + "\tt\n", nil
 			}
+			h.kube.ExecAnswerStdin = func(string) (string, error) { return "", errors.New(tc.text) }
+			h.svc.ReconcileProjectRoles(context.Background())
+			if got := len(alerts.GetActiveAlertsForProject(rotProject)) == 1; got != tc.alert {
+				t.Fatalf("alert raised = %v, want %v", got, tc.alert)
+			}
+		})
+	}
+}
+
+// Every revoke the repair runs cascades, so a grant chain cannot stop it, and
+// every repair script announces itself for the alert path.
+func TestPlatformSchemaScripts_EveryRevokeCascadesAndEachScriptNamesItself(t *testing.T) {
+	lockdown, quarantine, refusal := platformSchemaScripts()
+	for name, script := range map[string]string{"lockdown": lockdown, "quarantine": quarantine, "refusal": refusal} {
+		for _, line := range strings.Split(script, "\n") {
+			if strings.Contains(line, "REVOKE ") && !strings.Contains(line, "CASCADE") {
+				t.Errorf("the %s script has a revoke without CASCADE: %s", name, strings.TrimSpace(line))
+			}
+		}
+		if !strings.Contains(script, "excalibase-repair-stage:"+name) {
+			t.Errorf("the %s script does not name itself", name)
 		}
 	}
 }
