@@ -71,8 +71,9 @@ test.describe('Organizations', () => {
   test('shows org list page with orgs', async ({ page }) => {
     await page.goto('/orgs');
     await expect(page.getByRole('heading', { name: 'Organizations' })).toBeVisible();
-    await expect(page.getByText('Alice Corp')).toBeVisible();
-    await expect(page.getByText('Bob Inc')).toBeVisible();
+    // The v2 org switcher also names the current org, so the rows are found by their role.
+    await expect(page.getByRole('button', { name: /^Alice Corp\b.*alice-corp/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Bob Inc\b/ })).toBeVisible();
   });
 
   test('create org form shows and auto-generates slug', async ({ page }) => {
@@ -101,7 +102,7 @@ test.describe('Organizations', () => {
 
   test('org detail shows tabs', async ({ page }) => {
     await page.goto('/orgs/org-1');
-    await expect(page.getByText('Alice Corp')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Alice Corp' })).toBeVisible();
     await expect(page.getByText('alice-corp')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Projects' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Members' })).toBeVisible();
@@ -135,7 +136,7 @@ test.describe('Organizations', () => {
   test('settings tab shows tier and danger zone', async ({ page }) => {
     await page.goto('/orgs/org-1');
     await page.getByRole('button', { name: 'Settings' }).click();
-    await expect(page.getByText('Organization Settings')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Organization Settings' })).toBeVisible();
     await expect(page.getByText('Danger Zone')).toBeVisible();
   });
 
