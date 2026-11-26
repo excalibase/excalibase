@@ -27,6 +27,8 @@ const msgInternalError = "internal error"
 const errNotAuthenticated = "not authenticated"
 
 type AuthHandler struct {
+	// creditSignup tells the credit ledger about sign-ups and verified addresses (EXC-866); nil when not wired.
+	creditSignup  CreditSignup
 	userStore     storage.UserStore
 	tokenStore    storage.TokenStore
 	orgStore      storage.OrgStore      // optional — joins an org through an invite token at registration
@@ -135,6 +137,8 @@ type registerRequest struct {
 	Password    string `json:"password"`
 	SetupToken  string `json:"setupToken"`
 	InviteToken string `json:"inviteToken"`
+	// CreditTermsVersion is the credit terms the person ticked at sign-up; empty when they did not.
+	CreditTermsVersion string `json:"creditTermsVersion"`
 }
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -214,7 +218,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		h.registerFirstAdmin(w, r, req.SetupToken, inviteHash, user, now)
 		return
 	}
-	h.registerMember(w, r, inviteHash, user)
+	h.registerMember(w, r, inviteHash, user, req.CreditTermsVersion)
 }
 
 // registerFirstAdmin creates the platform's first admin. The one-time setup
@@ -234,10 +238,11 @@ func (h *AuthHandler) registerFirstAdmin(w http.ResponseWriter, r *http.Request,
 // registerMember creates an unverified account and mails its verification
 // link. No session is issued: signing in waits for the link. An account whose
 // link could not be sent is removed again, so the address stays free.
-func (h *AuthHandler) registerMember(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User) {
+func (h *AuthHandler) registerMember(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User, creditTerms string) {
 	if !h.createSubsequentUser(w, r, user) {
 		return
 	}
+	h.recordCreditTerms(r.Context(), user.ID, creditTerms)
 	invite, ok := h.joinInviteIfAny(w, r, inviteHash, user)
 	if !ok {
 		return

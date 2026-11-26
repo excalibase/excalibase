@@ -163,3 +163,66 @@ func TestTheCreditServiceExistsOnlyOverAStoreThatKeepsALedger(t *testing.T) {
 		t.Fatal("a service gets a handler")
 	}
 }
+
+func TestConfigReportsTheCreditTermsOnlyWhileCreditsAreOn(t *testing.T) {
+	cfg := config.AppConfig{Credits: config.CreditsConfig{TermsVersion: "v7", TermsURL: "https://example.test/t"}}
+	ask := func(flags features.Flags) string {
+		w := httptest.NewRecorder()
+		serveConfig(cfg, flags)(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+		return w.Body.String()
+	}
+	if body := ask(features.NewStatic()); strings.Contains(body, "termsVersion") || strings.Contains(body, "v7") {
+		t.Fatalf("off: %s", body)
+	}
+	if body := ask(features.NewStatic(features.Credits)); !strings.Contains(body, `"termsVersion":"v7"`) || !strings.Contains(body, `"termsUrl":"https://example.test/t"`) {
+		t.Fatalf("on: %s", body)
+	}
+}
+
+func TestCreditSignupDoesNothingWhileTheFlagIsOff(t *testing.T) {
+	ledger := &countingLedger{}
+	svc := credits.NewService(ledger, credits.Rules{TermsVersion: "v1"}, nil)
+	off := creditSignup{svc: svc, flags: features.NewStatic()}
+	off.RecordTerms(context.Background(), "u1", "v1")
+	off.GrantOnVerified(context.Background(), "u1")
+	if ledger.terms != 0 || ledger.grants != 0 {
+		t.Fatalf("off: %+v", ledger)
+	}
+	on := creditSignup{svc: svc, flags: features.NewStatic(features.Credits)}
+	on.RecordTerms(context.Background(), "u1", "v1")
+	on.GrantOnVerified(context.Background(), "u1")
+	if ledger.terms != 1 || ledger.grants != 1 {
+		t.Fatalf("on: %+v", ledger)
+	}
+}
+
+type countingLedger struct {
+	matrixLedger
+	terms, grants int
+}
+
+func (l *countingLedger) AcceptCreditTerms(context.Context, string, string, time.Time) error {
+	l.terms++
+	return nil
+}
+
+func (l *countingLedger) GrantCreditTrial(context.Context, string, credits.Rules, time.Time) (credits.GrantResult, error) {
+	l.grants++
+	return credits.GrantResult{Outcome: credits.OutcomeGranted}, nil
+}
+
+func TestTheOrgsTableReadsBalancesOnlyWhileCreditsAreOn(t *testing.T) {
+	reads := 0
+	read := func(context.Context, []string) (map[string]int64, error) {
+		reads++
+		return map[string]int64{"o": 5}, nil
+	}
+	off := creditBalancesWhenOn(config.AppConfig{}.Features(), read)
+	if got, _ := off(context.Background(), []string{"o"}); got != nil || reads != 0 {
+		t.Fatalf("flag off read %d: %v", reads, got)
+	}
+	on := creditBalancesWhenOn(config.AppConfig{DarkFeatures: []features.Feature{features.Credits}}.Features(), read)
+	if got, _ := on(context.Background(), []string{"o"}); got["o"] != 5 || reads != 1 {
+		t.Fatalf("flag on: %v", got)
+	}
+}

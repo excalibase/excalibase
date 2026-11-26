@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/lib/pq"
 )
 
 // AdminConsole reads and writes what the platform admin's console shows. It
@@ -248,3 +249,22 @@ const listOrgsBase = `
 		       OR lower(u.email) LIKE '%' || lower($3) || '%' ESCAPE '\')
 		  AND ($6 = '' OR upper(o.tier) = $6)
 		  AND ($7 = '' OR ` + statusExpr + ` = $7)`
+
+// CreditBalances reads the credit balance of each given org; an org with no account is left out.
+func (a *AdminConsole) CreditBalances(ctx context.Context, orgIDs []string) (map[string]int64, error) {
+	rows, err := a.db.QueryContext(ctx, `SELECT org_id, balance_micros FROM credit_accounts WHERE org_id = ANY($1)`, pq.Array(orgIDs))
+	if err != nil {
+		return nil, fmt.Errorf("credit balances: %w", err)
+	}
+	defer rows.Close()
+	balances := make(map[string]int64, len(orgIDs))
+	for rows.Next() {
+		var orgID string
+		var micros int64
+		if err := rows.Scan(&orgID, &micros); err != nil {
+			return nil, fmt.Errorf("scan credit balance: %w", err)
+		}
+		balances[orgID] = micros
+	}
+	return balances, rows.Err()
+}

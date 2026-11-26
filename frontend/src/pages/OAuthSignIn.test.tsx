@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { LoginPage } from './LoginPage';
 import { RegisterPage } from './RegisterPage';
@@ -16,6 +17,7 @@ const user = { id: 'u1', username: 'dev', email: 'dev@x.test', role: 'user' };
 
 function renderAt(path: string) {
   return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
@@ -24,7 +26,8 @@ function renderAt(path: string) {
         <Route path="/orgs" element={<div data-testid="orgs">ORGS</div>} />
         <Route path="/" element={<div data-testid="home">HOME</div>} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 

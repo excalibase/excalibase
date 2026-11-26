@@ -86,3 +86,42 @@ func creditsBootCheck(cfg config.AppConfig) error {
 	}
 	return trust.RequireContainerGate(ctx, flags, "credits")
 }
+
+// creditSignup is the credit ledger's side of sign-up and verification; with the flag off it does nothing.
+type creditSignup struct {
+	svc   *credits.Service
+	flags features.Flags
+}
+
+func (c creditSignup) on(ctx context.Context) bool {
+	return c.svc != nil && features.Enabled(ctx, c.flags, features.Credits)
+}
+
+func (c creditSignup) RecordTerms(ctx context.Context, userID, version string) {
+	if !c.on(ctx) {
+		return
+	}
+	if err := c.svc.RecordTerms(ctx, userID, version); err != nil {
+		log.Printf("WARN: credits: record terms for %s: %v", userID, err)
+	}
+}
+
+func (c creditSignup) GrantOnVerified(ctx context.Context, userID string) {
+	if !c.on(ctx) {
+		return
+	}
+	if _, err := c.svc.GrantTrial(ctx, userID); err != nil {
+		log.Printf("WARN: credits: grant on verification for %s: %v", userID, err)
+	}
+}
+
+// wireCreditSignup connects sign-up and every verification path to the ledger.
+func wireCreditSignup(cfg config.AppConfig, svc *credits.Service, authHandler *handler.AuthHandler, verifier *handler.EmailVerifier) {
+	signup := creditSignup{svc: svc, flags: cfg.Features()}
+	if authHandler != nil {
+		authHandler.SetCreditSignup(signup)
+	}
+	if verifier != nil {
+		verifier.SetCreditSignup(signup)
+	}
+}

@@ -24,6 +24,7 @@ func buildAdminConsole(cfg config.AppConfig, sqlStore storage.PlatformStore, run
 	queries := postgres.NewAdminConsole(sqlStore.DB()).WithNetSamples(netMeterRunning)
 	console := adminconsole.NewConsole(queries, apphost.NewPostgresAppStore(sqlStore.DB()), runtime)
 	console.SetAudit(sqlStore)
+	console.SetCreditBalances(creditBalancesWhenOn(cfg.Features(), queries.CreditBalances))
 	suspensions := adminconsole.NewSuspensionService(queries, apps, sqlStore)
 	suspensions.SetNotifier(suspensionNotifier(cfg, mail, backups), func(ctx context.Context) bool {
 		return features.Enabled(ctx, cfg.Features(), features.SuspensionEmails)
@@ -64,4 +65,14 @@ func suspensionNotifier(cfg config.AppConfig, mail email.Sender, backups service
 			return configured
 		},
 	})
+}
+
+// creditBalancesWhenOn answers the orgs table's balance column only while credits are on.
+func creditBalancesWhenOn(flags features.Flags, read adminconsole.CreditBalances) adminconsole.CreditBalances {
+	return func(ctx context.Context, orgIDs []string) (map[string]int64, error) {
+		if !features.Enabled(ctx, flags, features.Credits) {
+			return nil, nil
+		}
+		return read(ctx, orgIDs)
+	}
 }

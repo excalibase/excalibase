@@ -276,3 +276,13 @@ func (s *Service) sweepIfLeader(ctx context.Context, leader Leader) {
 		s.Sweep(ctx)
 	}
 }
+
+// RecordTerms stores that the person accepted the current terms, for a person
+// who ticked the box at sign-up. It grants nothing: the grant waits for the
+// verified address.
+func (s *Service) RecordTerms(ctx context.Context, userID, version string) error {
+	if version != s.rules.TermsVersion {
+		return ErrTermsVersion
+	}
+	return s.ledger.AcceptCreditTerms(ctx, userID, version, s.now())
+}

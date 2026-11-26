@@ -31,6 +31,8 @@ const lastParams = (url: string) => {
   return (calls.at(-1)?.[1] as { params: Record<string, unknown> } | undefined)?.params;
 };
 
+const sortableIds = (columns: { id: string; sortValue?: unknown }[]) => columns.filter((c) => c.sortValue).map((c) => c.id).sort();
+
 describe('column definitions', () => {
   test('every sortable column is one the server allows, and every allowed sort has a column', () => {
     const sortable = (columns: { id: string; sortValue?: unknown }[]) => columns.filter((c) => c.sortValue).map((c) => c.id).sort();
@@ -42,6 +44,18 @@ describe('column definitions', () => {
   test('the first column of each table names the row, so a checkbox reads "Select <name>"', () => {
     expect(projectColumns()[0].text?.(project(1) as never)).toBe('Project 1');
     expect(userColumns()[0].text?.(user(1) as never)).toBe('dev1@acme.test');
+  });
+
+  test('the credit column shows the balance, a dash for no account, and is absent while credits are off', () => {
+    expect(orgColumns().map((c) => c.id)).not.toContain('credit');
+    const credit = orgColumns(true).find((c) => c.id === 'credit');
+    render(<>{credit?.cell({ creditMicros: 300_000_000 } as never)}</>);
+    expect(screen.getByText('$300.00')).toBeInTheDocument();
+    render(<>{credit?.cell({ creditMicros: 0 } as never)}</>);
+    expect(screen.getByText('$0.00')).toBeInTheDocument();
+    render(<>{credit?.cell({} as never)}</>);
+    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(sortableIds(orgColumns(true))).toEqual([...ORG_SORTS].sort());
   });
 
   test('filter ids are the parameters the server reads', () => {
@@ -224,6 +238,20 @@ describe('OrgsAdminTable', () => {
     expect(screen.getByText('1–25 of 100')).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Plan'), 'STANDARD');
     await waitFor(() => expect(lastParams('/admin/console/orgs')).toMatchObject({ tier: 'STANDARD', offset: 0 }));
+  });
+
+  test('the table shows the balance column only while the credits feature is on', async () => {
+    const reply = (credits: boolean) => (url: string) => Promise.resolve({
+      data: url === '/config' ? { deploymentMode: 'cloud', features: { credits } } : { items: [{ ...org, creditMicros: 42_000_000 }], total: 1 },
+    } as never);
+    vi.mocked(api.get).mockImplementation(reply(true));
+    const on = renderWith(<OrgsAdminTable canMutate />);
+    expect(await screen.findByText('$42.00')).toBeInTheDocument();
+    on.unmount();
+    vi.mocked(api.get).mockImplementation(reply(false));
+    renderWith(<OrgsAdminTable canMutate />);
+    await screen.findByText('Acme');
+    expect(screen.queryByText('$42.00')).toBeNull();
   });
 
   test('revoking needs a reason and sends it with the cascade', async () => {

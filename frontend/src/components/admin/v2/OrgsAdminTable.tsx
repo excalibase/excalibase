@@ -10,6 +10,7 @@ import type { ConsoleOrg } from '../../../api/adminConsole';
 import { AccountStatusBadge } from '../AccountStatusBadge';
 import { ReasonDialog } from '../ReasonDialog';
 import { GrantCreditDialog } from './GrantCreditDialog';
+import { dollars } from '../../../pages/usage/creditsFormat';
 import { useFeatureEnabled } from '../../../hooks/useDeploymentMode';
 import { BulkDialog, BulkOutcomeNotice, type BulkOutcome, type BulkRequest } from './BulkAction';
 import { refreshAdmin } from './adminRows';
@@ -30,8 +31,8 @@ export const ORG_FILTERS: FilterDef<ConsoleOrg>[] = [
   },
 ];
 
-export function orgColumns(): Column<ConsoleOrg>[] {
-  return [
+export function orgColumns(withCredit = false): Column<ConsoleOrg>[] {
+  const columns: Column<ConsoleOrg>[] = [
     {
       id: 'name', header: 'Organization', locked: true, sortValue: serverSorted, text: (org) => org.name,
       cell: (org) => (<div><div className="font-medium">{org.name}</div><div className="font-mono text-xs text-text-tertiary">{org.slug}</div></div>),
@@ -49,6 +50,10 @@ export function orgColumns(): Column<ConsoleOrg>[] {
     },
     { id: 'created', header: 'Created', sortValue: serverSorted, defaultHidden: true, cell: (org) => (org.createdAt ? formatInstant(org.createdAt, 'date') : '—') },
   ];
+  if (!withCredit) return columns;
+  // Beside the plan, where an admin looks when deciding whether to grant.
+  const credit: Column<ConsoleOrg> = { id: 'credit', header: 'Credit', cell: (org) => (org.creditMicros == null ? '—' : dollars(org.creditMicros)) };
+  return [...columns.slice(0, 3), credit, ...columns.slice(3)];
 }
 
 // The render props live outside the component so they are not rebuilt as new components on every render.
@@ -93,7 +98,7 @@ export function OrgsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
   const [creditFor, setCreditFor] = useState<ConsoleOrg | null>(null);
   const [bulk, setBulk] = useState<BulkRequest<ConsoleOrg> | null>(null);
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
-  const columns = useMemo(orgColumns, []);
+  const columns = useMemo(() => orgColumns(creditsOn), [creditsOn]);
 
   const confirmPlan = async (reason: string) => {
     if (!planFor) return;

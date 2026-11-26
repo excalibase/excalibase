@@ -6,6 +6,8 @@ import { Button } from '../components/Button';
 import { NewPasswordFields, newPasswordReady } from '../components/auth/NewPasswordFields';
 import { ResendVerification } from '../components/auth/ResendVerification';
 import { ProviderButtons } from '../components/auth/ProviderSignIn';
+import { CreditTermsBox } from '../components/auth/CreditTermsBox';
+import { useCreditTerms } from '../hooks/useDeploymentMode';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { USERNAME_RULE, usernameError } from '../utils/names';
 
@@ -20,6 +22,9 @@ export function RegisterPage() {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const creditTerms = useCreditTerms();
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const acceptedTerms = creditTerms && termsAccepted ? creditTerms.termsVersion : undefined;
   const [pendingEmail, setPendingEmail] = useState<string | null>(null);
   const [usernameTouched, setUsernameTouched] = useState(false);
   const usernameInvalid = usernameTouched && usernameError(username.trim()) !== undefined;
@@ -43,6 +48,7 @@ export function RegisterPage() {
         email: email.trim(),
         password,
         ...(inviteToken ? { inviteToken } : {}),
+        ...(acceptedTerms ? { creditTermsVersion: acceptedTerms } : {}),
       });
       setPendingEmail(response.data.email || email.trim());
     } catch (err: unknown) {
@@ -113,12 +119,14 @@ export function RegisterPage() {
           onPasswordChange={setPassword} onConfirmChange={setConfirm} placeholder="Choose a password" disabled={loading} />
       </div>
 
+      <CreditTermsBox accepted={termsAccepted} onChange={setTermsAccepted} disabled={loading} />
+
       <Button type="submit" disabled={loading || !newPasswordReady(password, confirm)} className="w-full flex items-center justify-center gap-2">
         {loading && <Loader2 className="w-4 h-4 animate-spin" />}
         {loading ? 'Creating account...' : 'Create Account'}
       </Button>
 
-      <ProviderButtons invite={inviteToken || undefined} />
+      <ProviderButtons invite={inviteToken || undefined} creditTerms={acceptedTerms} />
 
       <p className="text-center text-sm text-text-secondary">
         Already have an account?{' '}

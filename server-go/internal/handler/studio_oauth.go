@@ -87,6 +87,7 @@ func (h *StudioOAuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, auth.NewCookie(oauthStateCookie, state, 600, http.SameSiteLaxMode))
+	rememberCreditTerms(w, r)
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
@@ -101,6 +102,7 @@ func (h *StudioOAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, "cancelled")
 		return
 	}
+	creditTerms := takeCreditTerms(w, r)
 	browserState, _ := auth.ReadCookie(r, oauthStateCookie)
 	provider := chi.URLParam(r, "provider")
 	identity, inviteHash, err := h.signIn.Finish(r.Context(), provider, query.Get("state"), browserState, query.Get("code"))
@@ -112,6 +114,10 @@ func (h *StudioOAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.refuse(w, r, accountRefusal(err))
 		return
+	}
+	h.auth.recordCreditTerms(r.Context(), user.ID, creditTerms)
+	if h.auth.creditSignup != nil {
+		h.auth.creditSignup.GrantOnVerified(r.Context(), user.ID)
 	}
 	outcome := url.Values{}
 	if created && inviteHash != "" {

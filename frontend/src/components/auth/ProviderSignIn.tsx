@@ -32,7 +32,7 @@ export function ProviderRefusal({ reason }: { readonly reason: string | null }) 
 
 // ProviderButtons shows one link per provider the platform has configured.
 // The whole exchange happens on the server; the browser only follows links.
-export function ProviderButtons({ invite }: { readonly invite?: string }) {
+export function ProviderButtons({ invite, creditTerms }: { readonly invite?: string; readonly creditTerms?: string }) {
   const [providers, setProviders] = useState<string[]>([]);
 
   useEffect(() => {
@@ -44,7 +44,10 @@ export function ProviderButtons({ invite }: { readonly invite?: string }) {
   }, []);
 
   if (providers.length === 0) return null;
-  const query = invite ? `?${new URLSearchParams({ invite }).toString()}` : '';
+  const params = new URLSearchParams();
+  if (invite) params.set('invite', invite);
+  if (creditTerms) params.set('creditTerms', creditTerms);
+  const query = params.size > 0 ? `?${params.toString()}` : '';
   return (
     <div className="space-y-2">
       {providers.map((provider) => (
