@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 	"time"
 
@@ -77,6 +79,9 @@ type TierResolver func(ctx context.Context, tier domain.TierType) (config.TierCo
 // IdlePauser is the slice of PauseService the sweep needs.
 type IdlePauser interface {
 	Pause(ctx context.Context, projectID, reason string) error
+	// PauseStuck finishes a pause only while the row is still PAUSING under the
+	// lease; admitted runs once just before the work.
+	PauseStuck(ctx context.Context, projectID, reason string, admitted func() error) error
 }
 
 // IdleResumer lets the sweep finish a resume that stopped part way. A project
@@ -85,6 +90,9 @@ type IdlePauser interface {
 // being retried.
 type IdleResumer interface {
 	Resume(ctx context.Context, projectID string) error
+	// ResumeStuck finishes a resume only while the row is still RESUMING under
+	// the lease; admitted runs once just before the work.
+	ResumeStuck(ctx context.Context, projectID string, admitted func() error) error
 }
 
 // IdleWarnNotifier delivers the day-(N-1) warning to humans. Optional: the
@@ -118,7 +126,15 @@ type IdlePauseSchedulerConfig struct {
 	ResumeGrace time.Duration
 	// StuckRetryAfter defaults to DefaultStuckRetryAfter.
 	StuckRetryAfter time.Duration
-	Logger          *log.Logger
+	// SelfHeal retries a stuck pause or resume on every plan, not only on the
+	// ones auto-pause covers (EXC-873). Off keeps the old reach.
+	SelfHeal bool
+	// IdleDisabled leaves idle warnings and idle pauses alone, so the sweep
+	// can run for stuck operations with auto-pause off.
+	IdleDisabled bool
+	// Escalator alerts staff when a stuck retry keeps failing; nil is off.
+	Escalator *RetryEscalator
+	Logger    *log.Logger
 }
 
 // IdlePauseReport lists what one sweep did, by project id.
@@ -149,6 +165,9 @@ type IdlePauseScheduler struct {
 	logger      *log.Logger
 
 	stuckRetryAfter time.Duration
+	selfHeal        bool
+	idleDisabled    bool
+	escalator       *RetryEscalator
 
 	engineActivity map[domain.DatabaseType]engineActivitySource
 
@@ -164,6 +183,7 @@ func NewIdlePauseScheduler(c IdlePauseSchedulerConfig) *IdlePauseScheduler {
 		notifier: c.Notifier, audit: c.Audit, leadership: NewLeadership(c.Lock),
 		now: c.Now, interval: c.Interval, resumeGrace: c.ResumeGrace, logger: c.Logger,
 		stuckRetryAfter: c.StuckRetryAfter,
+		selfHeal:        c.SelfHeal, idleDisabled: c.IdleDisabled, escalator: c.Escalator,
 	}
 	if s.stuckRetryAfter <= 0 {
 		s.stuckRetryAfter = DefaultStuckRetryAfter
@@ -257,25 +277,51 @@ func (s *IdlePauseScheduler) RunOnce(ctx context.Context) (IdlePauseReport, erro
 	if err != nil {
 		return report, fmt.Errorf("list instances: %w", err)
 	}
-	activity, err := s.activity.ListProjectActivity(ctx)
+	activity, err := s.listActivity(ctx)
 	if err != nil {
-		return report, fmt.Errorf("list activity: %w", err)
+		return report, err
 	}
 	now := s.now()
+	stuck := map[string]bool{}
 	for _, inst := range instances {
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
+		if isStuckStatus(inst.Status) {
+			stuck[inst.ProjectID] = true
+		}
 		row, seen := activity[inst.ProjectID]
 		s.sweepOne(ctx, inst, row, seen, now, &report)
 	}
+	for _, healed := range slices.Concat(report.Paused, report.Resumed) {
+		delete(stuck, healed)
+	}
+	s.escalator.Reconcile(ctx, StuckRetryMetricPrefix, stuck)
 	return report, nil
+}
+
+// listActivity reads the idle markers; a sweep that never judges idleness has
+// no use for them.
+func (s *IdlePauseScheduler) listActivity(ctx context.Context) (map[string]domain.ProjectActivity, error) {
+	if s.idleDisabled {
+		return nil, nil
+	}
+	activity, err := s.activity.ListProjectActivity(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list activity: %w", err)
+	}
+	return activity, nil
+}
+
+func isStuckStatus(status string) bool {
+	return status == string(domain.StatusPausing) || status == string(domain.StatusResuming)
 }
 
 // sweepOne applies the pause / warn / skip decision to a single project.
 func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.DatabaseInstance, row domain.ProjectActivity, seen bool, now time.Time, report *IdlePauseReport) {
-	pauseAfterDays, ok := s.autoPauseDays(ctx, inst)
-	if !ok {
+	pauseAfterDays, tiered := s.autoPauseDays(ctx, inst)
+	judgesIdle := tiered && !s.idleDisabled
+	if !judgesIdle && !s.selfHeal {
 		return
 	}
 	if domain.IsNotServable(inst.Status) || inst.NoDatabase {
@@ -283,12 +329,7 @@ func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.Database
 		// no database to stop. None is a project the sweep may pause.
 		return
 	}
-	if inst.Status == string(domain.StatusPausing) {
-		s.retryStuckPause(ctx, inst, now, report)
-		return
-	}
-	if inst.Status == string(domain.StatusResuming) {
-		s.retryStuckResume(ctx, inst, now, report)
+	if s.retryIfStuck(ctx, inst, now, report) || !judgesIdle {
 		return
 	}
 	if inst.Status != "ACTIVE" || s.resumedRecently(inst, now) {
@@ -311,31 +352,37 @@ func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.Database
 	}
 }
 
+// retryIfStuck hands a PAUSING or RESUMING project to its retry and reports
+// whether it was one.
+func (s *IdlePauseScheduler) retryIfStuck(ctx context.Context, inst *domain.DatabaseInstance, now time.Time, report *IdlePauseReport) bool {
+	switch inst.Status {
+	case string(domain.StatusPausing):
+		s.retryStuckPause(ctx, inst, now, report)
+	case string(domain.StatusResuming):
+		s.retryStuckResume(ctx, inst, now, report)
+	default:
+		return false
+	}
+	return true
+}
+
 // retryStuckPause drives a project whose pause failed part way back towards
 // PAUSED. Left alone it would sit in PAUSING forever: the sweep's ordinary
 // path only looks at ACTIVE projects, and nothing else calls pause for it.
 func (s *IdlePauseScheduler) retryStuckPause(ctx context.Context, inst *domain.DatabaseInstance, now time.Time, report *IdlePauseReport) {
-	if !s.stuck(inst, now) || !pauseRetryDue(inst, now) {
+	if !s.retryDue(inst, now) {
 		return
 	}
-	attempts, err := s.instances.RecordPauseAttempt(inst.ProjectID, now)
-	if err != nil {
-		s.logger.Printf("idle-pause: count retry for %s: %v", inst.ProjectID, err)
-		return
-	}
-	s.logger.Printf("idle-pause: retrying the stuck pause of %s (attempt %d; next in %v if it fails)",
-		inst.ProjectID, attempts, pauseRetryBackoffFor(attempts))
 	reason := inst.PauseReason
 	if reason == "" {
 		reason = domain.PauseReasonIdle
 	}
-	if err := s.pauser.Pause(ctx, inst.ProjectID, reason); err != nil {
-		s.logger.Printf("idle-pause: retry of %s failed: %v", inst.ProjectID, err)
-		report.Failed = append(report.Failed, inst.ProjectID)
-		return
+	attempts := 0
+	err := s.pauser.PauseStuck(ctx, inst.ProjectID, reason, s.countAttempt(inst.ProjectID, "pause", now, &attempts))
+	if s.settleStuck(ctx, inst.ProjectID, "pause", attempts, err, report) {
+		s.logAudit(ctx, AuditActionIdlePause, inst.ProjectID, "stuck pause retried to completion")
+		report.Paused = append(report.Paused, inst.ProjectID)
 	}
-	s.logAudit(ctx, AuditActionIdlePause, inst.ProjectID, "stuck pause retried to completion")
-	report.Paused = append(report.Paused, inst.ProjectID)
 }
 
 // retryStuckResume drives a project whose resume stopped part way back to
@@ -343,22 +390,55 @@ func (s *IdlePauseScheduler) retryStuckPause(ctx context.Context, inst *domain.D
 // would sit in RESUMING indefinitely with its database running and no CDC —
 // a degraded tenant nobody is told about.
 func (s *IdlePauseScheduler) retryStuckResume(ctx context.Context, inst *domain.DatabaseInstance, now time.Time, report *IdlePauseReport) {
-	if s.resumer == nil || !s.stuck(inst, now) || !pauseRetryDue(inst, now) {
+	if s.resumer == nil || !s.retryDue(inst, now) {
 		return
 	}
-	attempts, err := s.instances.RecordPauseAttempt(inst.ProjectID, now)
-	if err != nil {
-		s.logger.Printf("idle-pause: count resume retry for %s: %v", inst.ProjectID, err)
-		return
+	attempts := 0
+	err := s.resumer.ResumeStuck(ctx, inst.ProjectID, s.countAttempt(inst.ProjectID, "resume", now, &attempts))
+	if s.settleStuck(ctx, inst.ProjectID, "resume", attempts, err, report) {
+		report.Resumed = append(report.Resumed, inst.ProjectID)
 	}
-	s.logger.Printf("idle-pause: retrying the stuck resume of %s (attempt %d; next in %v if it fails)",
-		inst.ProjectID, attempts, pauseRetryBackoffFor(attempts))
-	if err := s.resumer.Resume(ctx, inst.ProjectID); err != nil {
-		s.logger.Printf("idle-pause: resume retry of %s failed: %v", inst.ProjectID, err)
-		report.Failed = append(report.Failed, inst.ProjectID)
-		return
+}
+
+// retryDue is whether a stuck project is due a retry now, judged on the row as
+// it is now: the listing may be a tick old, and a project the customer has
+// since moved on is not the sweep's to touch.
+func (s *IdlePauseScheduler) retryDue(inst *domain.DatabaseInstance, now time.Time) bool {
+	if !s.stuck(inst, now) || !pauseRetryDue(inst, now) {
+		return false
 	}
-	report.Resumed = append(report.Resumed, inst.ProjectID)
+	fresh, err := s.instances.FindByProjectID(inst.ProjectID)
+	return err == nil && fresh != nil && fresh.Status == inst.Status
+}
+
+// countAttempt records an attempt once the retry holds the project's lease, so
+// a busy project is not counted. The count lands in attempts.
+func (s *IdlePauseScheduler) countAttempt(projectID, what string, now time.Time, attempts *int) func() error {
+	return func() error {
+		count, err := s.instances.RecordPauseAttempt(projectID, now)
+		if err != nil {
+			return fmt.Errorf("count %s retry: %w", what, err)
+		}
+		*attempts = count
+		s.logger.Printf("idle-pause: retrying the stuck %s of %s (attempt %d; next in %v if it fails)",
+			what, projectID, count, pauseRetryBackoffFor(count))
+		return nil
+	}
+}
+
+// settleStuck reports whether a stuck retry completed. A busy project or one
+// that is no longer stuck is neither a failure nor an attempt towards the alert.
+func (s *IdlePauseScheduler) settleStuck(ctx context.Context, projectID, what string, attempts int, err error, report *IdlePauseReport) bool {
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, ErrNoLongerStuck), errors.Is(err, ErrProjectOperationRunning), errors.Is(err, storage.ErrProjectBusy):
+		return false
+	}
+	s.logger.Printf("idle-pause: %s retry of %s failed: %v", what, projectID, err)
+	s.escalator.Failed(ctx, StuckRetryMetricPrefix, projectID, what, attempts)
+	report.Failed = append(report.Failed, projectID)
+	return false
 }
 
 // stuck reports whether a PAUSING or RESUMING project's row has gone

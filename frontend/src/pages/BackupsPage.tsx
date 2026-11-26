@@ -12,6 +12,7 @@ import { Archive, Copy, RefreshCw, RotateCcw, type LucideIcon } from 'lucide-rea
 import { serverErrorMessage } from '../utils/serverError';
 import { formatBytes } from '../utils/formatBytes';
 import { backupView } from '../utils/backupView';
+import { formatInstant } from '../utils/instant';
 
 type Tab = 'backups' | 'restore' | 'copy';
 
@@ -134,7 +135,7 @@ export function BackupsPage() {
                 {backups.map((b) => (
                   <tr key={b.id} className="border-b border-border-primary last:border-0 hover:bg-surface-hover transition-colors">
                     <td className="py-3 font-mono text-xs text-text-primary">{b.id}</td>
-                    <td className="py-3 text-text-secondary">{new Date(b.timestamp).toLocaleString()}</td>
+                    <td className="py-3 text-text-secondary">{formatInstant(b.timestamp)}</td>
                     <td className="py-3 text-text-tertiary">{b.type ?? 'MANUAL'}</td>
                     <td className="py-3 text-text-secondary">{formatBytes(b.sizeBytes ?? 0)}</td>
                     <td className="py-3"><StatusBadge status={b.status} /></td>

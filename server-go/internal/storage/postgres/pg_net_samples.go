@@ -1,0 +1,134 @@
+package postgres
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/netmeter"
+)
+
+// Network metering history (EXC-844): minute rows for 48 hours, hourly rollups for 30 days.
+const (
+	netMinuteRetention = 48 * time.Hour
+	netHourlyRetention = 30 * 24 * time.Hour
+)
+
+// netPruneBatch is how many rows one delete removes, so a prune never holds a long lock.
+var netPruneBatch = 10_000
+
+// AppendNetSamples stores one round of per-app minutes.
+func (s *Store) AppendNetSamples(ctx context.Context, samples []netmeter.Sample) error {
+	if len(samples) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin net samples: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	statement, err := tx.PrepareContext(ctx, `INSERT INTO app_net_samples
+		(ts, project_id, app_id, instances, rx_bps, tx_bps, max_instance_tx_bps)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (project_id, app_id, ts) DO NOTHING`)
+	if err != nil {
+		return fmt.Errorf("prepare net samples: %w", err)
+	}
+	defer statement.Close()
+	for _, sample := range samples {
+		if _, err := statement.ExecContext(ctx, sample.At.UTC(), sample.ProjectID, sample.AppID, sample.Instances,
+			sample.RxBps, sample.TxBps, sample.MaxInstanceTxBps); err != nil {
+			return fmt.Errorf("insert net sample: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// ListNetSamples reads an app's minutes since a time, oldest first.
+func (s *Store) ListNetSamples(ctx context.Context, projectID, appID string, since time.Time) ([]netmeter.Sample, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT ts, project_id, app_id, instances, rx_bps, tx_bps, max_instance_tx_bps
+		FROM app_net_samples WHERE project_id = $1 AND app_id = $2 AND ts >= $3 ORDER BY ts`, projectID, appID, since)
+	if err != nil {
+		return nil, fmt.Errorf("list net samples: %w", err)
+	}
+	defer rows.Close()
+	var out []netmeter.Sample
+	for rows.Next() {
+		var sample netmeter.Sample
+		if err := rows.Scan(&sample.At, &sample.ProjectID, &sample.AppID, &sample.Instances, &sample.RxBps, &sample.TxBps, &sample.MaxInstanceTxBps); err != nil {
+			return nil, err
+		}
+		sample.At = sample.At.UTC()
+		out = append(out, sample)
+	}
+	return out, rows.Err()
+}
+
+// ListNetHourly reads an app's hourly rollups since a time, oldest first.
+func (s *Store) ListNetHourly(ctx context.Context, projectID, appID string, since time.Time) ([]netmeter.Hourly, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT hour, project_id, app_id, samples, avg_rx_bps, avg_tx_bps, max_tx_bps, max_instance_tx_bps
+		FROM app_net_hourly WHERE project_id = $1 AND app_id = $2 AND hour >= $3 ORDER BY hour`, projectID, appID, since)
+	if err != nil {
+		return nil, fmt.Errorf("list net hourly: %w", err)
+	}
+	defer rows.Close()
+	var out []netmeter.Hourly
+	for rows.Next() {
+		var hour netmeter.Hourly
+		if err := rows.Scan(&hour.Hour, &hour.ProjectID, &hour.AppID, &hour.Samples, &hour.AvgRxBps, &hour.AvgTxBps, &hour.MaxTxBps, &hour.MaxInstanceTxBps); err != nil {
+			return nil, err
+		}
+		hour.Hour = hour.Hour.UTC()
+		out = append(out, hour)
+	}
+	return out, rows.Err()
+}
+
+// rollupNetHoursSQL folds the finished hours after the last rolled one into
+// their hourly rows. A rolled hour is never built again: its minute rows may
+// be partly gone by then, and a rebuild from what is left would overwrite the
+// complete row, so a conflict does nothing.
+const rollupNetHoursSQL = `
+	INSERT INTO app_net_hourly (hour, project_id, app_id, samples, avg_rx_bps, avg_tx_bps, max_tx_bps, max_instance_tx_bps)
+	SELECT date_trunc('hour', ts AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', project_id, app_id,
+	       COUNT(*), AVG(rx_bps), AVG(tx_bps), MAX(tx_bps), MAX(max_instance_tx_bps)
+	FROM app_net_samples
+	WHERE ts >= COALESCE((SELECT MAX(hour) + INTERVAL '1 hour' FROM app_net_hourly), '-infinity'::timestamptz)
+	  AND ts < $1
+	GROUP BY 1, 2, 3
+	ON CONFLICT (project_id, app_id, hour) DO NOTHING`
+
+// PruneNetSamples rolls finished hours up first, then deletes whole hours:
+// minute rows before the hour that holds now minus 48 hours, hourly rows
+// before the hour that holds now minus 30 days, a batch at a time. Cutting on
+// an hour boundary keeps an hour's minutes together until the whole hour is
+// old enough, so no hour is ever half there.
+func (s *Store) PruneNetSamples(ctx context.Context, now time.Time) error {
+	now = now.UTC()
+	if _, err := s.db.ExecContext(ctx, rollupNetHoursSQL, now.Truncate(time.Hour)); err != nil {
+		return fmt.Errorf("roll up net samples: %w", err)
+	}
+	if err := s.deleteInBatches(ctx, "app_net_samples", "ts", now.Add(-netMinuteRetention).Truncate(time.Hour)); err != nil {
+		return err
+	}
+	return s.deleteInBatches(ctx, "app_net_hourly", "hour", now.Add(-netHourlyRetention).Truncate(time.Hour))
+}
+
+// deleteInBatches removes rows older than the cutoff; table and column are
+// constants of this file, never input.
+func (s *Store) deleteInBatches(ctx context.Context, table, column string, cutoff time.Time) error {
+	query := fmt.Sprintf(`DELETE FROM %[1]s WHERE ctid IN (SELECT ctid FROM %[1]s WHERE %[2]s < $1 LIMIT $2)`, table, column)
+	for {
+		result, err := s.db.ExecContext(ctx, query, cutoff.UTC(), netPruneBatch)
+		if err != nil {
+			return fmt.Errorf("prune %s: %w", table, err)
+		}
+		deleted, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("prune %s: %w", table, err)
+		}
+		if deleted < int64(netPruneBatch) {
+			return nil
+		}
+	}
+}

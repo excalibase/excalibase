@@ -138,11 +138,17 @@ func runServer(cfg config.AppConfig) {
 	if cfg.AdminConsoleDisabled() {
 		log.Println("WARN: ADMIN_HOST is not set: the admin console is off, every /api/admin route except service accounts answers 404")
 	}
+	if err := cfg.CheckDenoRuntimeImage(); err != nil {
+		log.Fatal(err)
+	}
 	if err := cfg.CheckDenoProvisioningURL(); err != nil {
 		log.Fatal(err)
 	}
 	sqlStore := buildPlatformStore(cfg)
 	defer sqlStore.Close()
+	if err := trustBackfillCheck(cfg, sqlStore); err != nil {
+		log.Fatal(err)
+	}
 
 	// Use platform store as InstanceStore (same interface)
 	var store storage.InstanceStore = sqlStore
@@ -310,6 +316,7 @@ func runServer(cfg config.AppConfig) {
 		pauseSvc.AddStatusObserver(projectDB)
 		pauseSvc.AddStatusObserver(deps.schemaHandler)
 		pauseSvc.SetOrgGuard(newOrgGuard(store, sqlStore))
+		pauseSvc.SetFeatures(cfg.Features())
 		deps.provHandler.SetPauseService(pauseSvc)
 		deps.provHandler.SetInstanceStore(store)
 		// DELETE stops a project with the same pause before its grace period.
@@ -317,9 +324,12 @@ func runServer(cfg config.AppConfig) {
 	}
 	stopDeletionSweep := startDeletionSweeper(cfg, sqlStore, provSvc, deps.backupHandler.Service())
 	defer stopDeletionSweep()
+	// A retry that keeps failing is handed to the platform admins (EXC-873).
+	retryEscalator := newRetryEscalator(cfg, cfg.Features(), deps.alerts, adminAlertNotifier(cfg, sqlStore, deps.emailSender, deps.alerts))
+	provSvc.SetRetryEscalator(retryEscalator)
 	stopRollbackRetry := startRollbackRetrySweeper(cfg, sqlStore, provSvc)
 	defer stopRollbackRetry()
-	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender)
+	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender, retryEscalator)
 	defer stopIdlePause()
 
 	_, stopStorageReap := startStorageReaper(cfg, sqlStore, deps.storageSvc)
@@ -403,7 +413,7 @@ func wireInPlaceRestore(backupSvc *service.BackupService, provSvc *service.Provi
 	backupSvc.SetInPlaceRestore(service.NewInPlaceRestore(service.InPlaceRestoreConfig{
 		Projects:  provSvc,
 		Instances: store,
-		Probe:     service.NewVaultDatabaseProbe(vc),
+		Probe:     service.NewVaultDatabaseProbe(vc).WithInstances(store),
 		Observers: observers,
 	}))
 }
@@ -668,6 +678,9 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 	if archive := walArchiveSampler(cfg, k8sClient, sqlStore, alerts, notifier); archive != nil {
 		checks = append(checks, archive)
 	}
+	if meter := netMeterSampler(cfg, sqlStore, k8sClient); meter != nil {
+		checks = append(checks, meter)
+	}
 	if len(checks) > 0 {
 		metrics.SetClusterSampler(checks)
 	}
@@ -687,7 +700,7 @@ func metricsLoopRuns(cfg config.AppConfig, k8sClient k8s.KubeClient, requests se
 	if k8sClient != nil && cfg.ProvisionerMode != "docker" {
 		return true
 	}
-	return hostMonitoringOn(cfg) || (cfg.ProvisionerMode == "docker" && requests != nil)
+	return hostMonitoringOn(cfg) || netMeterOn(cfg) || (cfg.ProvisionerMode == "docker" && requests != nil)
 }
 
 // newRequestMetricsService reads the request_metrics table and scrapes the
@@ -920,20 +933,22 @@ func startIdlePauseScheduler(
 	provSvc *service.ProvisioningService,
 	pauseSvc *service.PauseService,
 	sender email.Sender,
+	escalator *service.RetryEscalator,
 ) func() {
 	noop := func() {
 		// nothing started, nothing to stop
 	}
-	if !cfg.AutoPauseEnabled {
+	run, judgesIdle := idleSweepModes(cfg, cfg.Features())
+	if !run {
 		log.Println("Idle auto-pause disabled (EXCALIBASE_AUTOPAUSE_ENABLED)")
 		return noop
 	}
-	if pauseSvc == nil || sqlStore == nil {
+	if pauseSvc == nil || (judgesIdle && sqlStore == nil) {
 		log.Println("WARN: idle auto-pause enabled but no pause service is wired — sweep not started")
 		return noop
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
-	if cfg.IsCloud() {
+	if cfg.IsCloud() && sqlStore != nil {
 		lock = standingLock(sqlStore, idlePauseLockID)
 	}
 	scheduler := service.NewIdlePauseScheduler(service.IdlePauseSchedulerConfig{
@@ -949,6 +964,10 @@ func startIdlePauseScheduler(
 		Interval: cfg.AutoPauseInterval,
 		// A pause or resume still running is not retried underneath itself (EXC-590).
 		StuckRetryAfter: cfg.StuckRetryAfter,
+		// Self-heal reaches every plan and runs with auto-pause off (EXC-873).
+		SelfHeal:     selfHealOn(cfg, cfg.Features()),
+		IdleDisabled: !judgesIdle,
+		Escalator:    escalator,
 		Notifier: service.NewIdleWarnEmail(service.IdleWarnEmailConfig{
 			Users:        sqlStore,
 			Sender:       sender,
@@ -1622,11 +1641,11 @@ type handlerDepsArgs struct {
 // an adapter that did not take a probe — or a vault the probe cannot read
 // through — is a startup failure, not something to discover on the first
 // restore a customer runs.
-func wireRestoreVerification(backupSvc *service.BackupService, vc vaultclient.VaultClient, readyTimeout time.Duration) error {
+func wireRestoreVerification(backupSvc *service.BackupService, vc vaultclient.VaultClient, readyTimeout time.Duration, instances storage.InstanceStore) error {
 	if vc == nil {
 		return errors.New("no vault client: the probe cannot read the credentials a restored project is registered with")
 	}
-	if err := backupSvc.SetDatabaseProbe(service.NewVaultDatabaseProbe(vc)); err != nil {
+	if err := backupSvc.SetDatabaseProbe(service.NewVaultDatabaseProbe(vc).WithInstances(instances)); err != nil {
 		return err
 	}
 	backupSvc.SetRestoreReadyTimeout(readyTimeout)
@@ -1820,7 +1839,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	backupSvc.SetRestorePlanSource(provSvc)
 	backupSvc.SetBackupCredentials(provSvc.BackupCredentials())
-	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout); err != nil {
+	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout, store); err != nil {
 		log.Fatalf("restore verification: %v", err)
 	}
 	startHostMySQLBackups(hostMySQLBackups, store)

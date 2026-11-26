@@ -6055,13 +6055,13 @@
       "height": 264,
       "strokeColor": "#1864ab",
       "backgroundColor": "transparent",
-      "text": "Row-Level Security\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nPostgres RLS policies\nrequest.user_id set per query\nEnforced at DB layer",
+      "text": "Row-Level Security\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nPostgres RLS policies\nX-Excalibase-User-Id set per query\nEnforced at DB layer",
       "fontSize": 15,
       "fontFamily": 2,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "r100183",
-      "originalText": "Row-Level Security\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nPostgres RLS policies\nrequest.user_id set per query\nEnforced at DB layer",
+      "originalText": "Row-Level Security\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nPostgres RLS policies\nX-Excalibase-User-Id set per query\nEnforced at DB layer",
       "lineHeight": 1.35
     },
     {

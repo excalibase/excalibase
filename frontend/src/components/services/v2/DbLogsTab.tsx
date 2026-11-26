@@ -1,10 +1,11 @@
 import { Loader2, Search } from 'lucide-react';
 import { keptFor, lineColor, useLogExplorer } from '../../../hooks/useLogExplorer';
+import { sentence } from '../../../utils/sentence';
 import { serverErrorMessage } from '../../../utils/serverError';
 import type { DatabaseInstance } from '../../../types';
 import { cn } from '../../../utils/cn';
 import { LogDrainsCard } from '../../LogDrainsCard';
-import { Section } from './sections';
+import { Notice, Section } from './sections';
 
 type Explorer = ReturnType<typeof useLogExplorer>;
 
@@ -57,6 +58,14 @@ function Lines({ explorer }: { readonly explorer: Explorer }) {
 // Search and filter the database's log lines, then where they are sent on.
 export function DbLogsTab({ project }: { readonly project: DatabaseInstance }) {
   const explorer = useLogExplorer(project.projectId);
+  if (explorer.notOffered) {
+    return (
+      <div className="space-y-5" data-testid="db-logs">
+        <Notice testId="logs-not-offered">{sentence(explorer.notOffered)}</Notice>
+        <LogDrainsCard projectId={project.projectId} />
+      </div>
+    );
+  }
   return (
     <div className="space-y-5" data-testid="db-logs">
       <Section id="db-logs-title" title="Logs">

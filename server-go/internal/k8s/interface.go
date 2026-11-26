@@ -300,7 +300,7 @@ func (c ClusterCapacity) FreeMemBytes() int64 {
 // limits scale with tier so paid projects get more headroom without cost to
 // free/hobbyist projects.
 type DenoRuntimeSpec struct {
-	Image         string // container image, e.g. excalibase/deno-runtime:latest
+	Image         string // container image, e.g. excalibase/deno-runtime:1.7.1, never latest
 	RuntimeSecret string // X-Runtime-Secret env var
 	Tier          string // "FREE" (default), "STANDARD", "ENTERPRISE"
 	// AllowedHosts is the project's outbound allowlist, already canonical

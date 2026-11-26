@@ -50,3 +50,13 @@ rules:
   - apiGroups: ["node.k8s.io"]
     resources: ["runtimeclasses"]
     verbs: ["get"]
+{{- if .Values.netmeter.enabled }}
+  # Per-app network metering reads each kubelet's summary (EXC-844). nodes/stats
+  # only: nodes/proxy would also reach exec and logs on every node.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["nodes/stats"]
+    verbs: ["get"]
+{{- end }}

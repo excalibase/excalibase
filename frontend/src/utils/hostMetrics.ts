@@ -1,4 +1,5 @@
 import type { ContainerSample, HostSample, MonitoringRange } from '../api/monitoring';
+import { parseInstant } from './instant';
 
 const DASH = '—';
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
@@ -60,7 +61,7 @@ export function networkLabel(rx: number | null, tx: number | null): string {
 const LONG_RANGES = new Set<MonitoringRange>(['7d', '30d']);
 
 export function timeLabel(timestamp: string, range: MonitoringRange): string {
-  const at = new Date(timestamp);
+  const at = new Date(parseInstant(timestamp));
   if (LONG_RANGES.has(range)) {
     return at.toLocaleString([], {
       month: 'short',

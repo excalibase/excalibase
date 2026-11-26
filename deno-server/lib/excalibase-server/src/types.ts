@@ -28,7 +28,7 @@ export type AuthClaims = Record<string, unknown>;
 export interface UserIdentity {
   /** `"{issuer}|{subject}"` — stable cross-provider identifier. */
   readonly tokenIdentifier: string;
-  /** JWT `sub` claim. */
+  /** JWT `sub` claim. For a signed-in user it is the account id as a string (e.g. "42"), not the email. */
   readonly subject: string;
   /** JWT `iss` claim. */
   readonly issuer: string;

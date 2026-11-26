@@ -664,6 +664,10 @@ func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if errors.Is(err, service.ErrLogsNotOffered) {
+		writeJSON(w, map[string]any{"logs": "", "notOffered": service.ErrLogsNotOffered.Error()})
+		return
+	}
 	if errors.Is(err, service.ErrLogsUnavailable) {
 		httpError(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -882,7 +886,7 @@ const lifecycleUnexpected = "the operation could not be completed; try again, an
 // lifecycleSentinels are the pause and resume outcomes whose own words are
 // meant for the caller.
 var lifecycleSentinels = []error{
-	service.ErrProjectOperationRunning, service.ErrPauseNotObserved, service.ErrPauseBackupNotCompleted, service.ErrResumeNotObserved,
+	service.ErrProjectOperationRunning, service.ErrPauseRetrying, service.ErrResumeRetrying, service.ErrPauseNotObserved, service.ErrPauseBackupNotCompleted, service.ErrResumeNotObserved,
 	storage.ErrProjectBusy, storage.ErrProjectStatusChanged,
 }
 

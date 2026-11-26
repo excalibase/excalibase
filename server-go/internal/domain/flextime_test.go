@@ -12,7 +12,7 @@ func TestFlexTimeMarshal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if string(b) != `"2026-03-26T14:30:00.000000000"` {
+	if string(b) != `"2026-03-26T14:30:00Z"` {
 		t.Errorf("got %s", string(b))
 	}
 }

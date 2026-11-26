@@ -8,10 +8,11 @@ import { AccountStatusBadge } from './AccountStatusBadge';
 import { SuspendReasonCode, type SuspendReasonCodeValue } from './SuspendReasonCode';
 import { ReasonDialog } from './ReasonDialog';
 import { useDebounced } from './useDebounced';
+import { formatInstant } from '../../utils/instant';
 
 type Pending = { user: ConsoleUser; action: 'suspend' | 'unsuspend' } | null;
 
-const when = (iso?: string) => (iso ? new Date(iso).toLocaleString() : '—');
+const when = (iso?: string) => (iso ? formatInstant(iso) : '—');
 
 // Every account on the platform: who it is, whether it looks throwaway, where
 // it last signed in from, what it owns and runs, and the one action on abuse.

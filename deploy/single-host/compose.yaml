@@ -332,6 +332,24 @@ services:
       FEATURE_STUDIO_V2: ${FEATURE_STUDIO_V2:-false}
       # MCP invoke_function, off until chosen. Not a safeguard: deployed function code can already read the project's function secrets; this only removes one way of running it (EXC-684).
       FEATURE_FUNCTIONINVOKE: ${FEATURE_FUNCTIONINVOKE:-false}
+      # Failed purges, pauses and resumes retry themselves and alert the admins when they keep failing (EXC-873); off until chosen.
+      FEATURE_SELFHEAL: ${FEATURE_SELFHEAL:-false}
+      FEATURE_NETMETER: ${FEATURE_NETMETER:-false}
+      EXCALIBASE_SELFHEAL_ALERT_AFTER: ${EXCALIBASE_SELFHEAL_ALERT_AFTER:-5}
+      # Limited trial until verified (EXC-899); off until chosen. Only the trust state exists so far; the verify flow and the limits come later.
+      FEATURE_LIMITEDTRIAL: ${FEATURE_LIMITEDTRIAL:-false}
+      TRUST_GH_MIN_AGE_DAYS: ${TRUST_GH_MIN_AGE_DAYS:-90}
+      TRUST_GH_MIN_PUBLIC_EVENTS: ${TRUST_GH_MIN_PUBLIC_EVENTS:-5}
+      TRUST_GH_ACTIVITY_WINDOW_DAYS: ${TRUST_GH_ACTIVITY_WINDOW_DAYS:-90}
+      TRUST_GH_MIN_REPOS: ${TRUST_GH_MIN_REPOS:-3}
+      TRUST_GH_REPO_MIN_AGE_DAYS: ${TRUST_GH_REPO_MIN_AGE_DAYS:-30}
+      TRUST_GH_RECHECK_DAYS: ${TRUST_GH_RECHECK_DAYS:-0}
+      TRUST_VERIFY_RETRY_MINUTES: ${TRUST_VERIFY_RETRY_MINUTES:-10}
+      TRUST_GRANDFATHER_BEFORE: ${TRUST_GRANDFATHER_BEFORE:-2026-11-01}
+      TRUST_CLAIM_COOLDOWN_DAYS: ${TRUST_CLAIM_COOLDOWN_DAYS:-30}
+      EDGE_LIMITED_MBPS: ${EDGE_LIMITED_MBPS:-1}
+      EDGE_LIMITED_ALLOW_WS: ${EDGE_LIMITED_ALLOW_WS:-false}
+      POD_LIMITED_EGRESS_MBPS: ${POD_LIMITED_EGRESS_MBPS:-1}
       HOST_METRICS_CONTAINERS: *platform_containers
       HOST_METRICS_NET_DEV: /host/proc-net-dev
       # Stored project log search in the bundled Loki (EXC-672; init.sh --host-logs).

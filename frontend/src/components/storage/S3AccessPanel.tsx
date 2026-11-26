@@ -9,6 +9,7 @@ import {
   type CreatedS3Key,
   type S3Permissions,
 } from '../../api/s3Keys';
+import { formatInstant } from '../../utils/instant';
 
 function errorText(err: unknown, fallback: string): string {
   const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -207,7 +208,7 @@ export function S3AccessPanel({ projectId, buckets }: S3AccessPanelProps) {
                 <td><code className="text-xs">{key.accessKeyId}</code></td>
                 <td>{key.buckets.length === 0 ? 'All buckets' : key.buckets.join(', ')}</td>
                 <td>{permissionsText(key)}</td>
-                <td>{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString() : 'never'}</td>
+                <td>{key.lastUsedAt ? formatInstant(key.lastUsedAt) : 'never'}</td>
                 <td className="text-right">
                   <button type="button" onClick={() => revoke(key.id, key.name)} className="text-red-400 hover:text-red-300">Revoke</button>
                 </td>

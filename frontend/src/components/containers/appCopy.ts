@@ -1,6 +1,7 @@
 import { isValidAppName } from './appName';
 import type { App, Deploy, DeployStatus } from '../../api/apps';
 import type { TierType } from '../../types';
+import { parseInstant } from '../../utils/instant';
 
 export interface TierDescription {
   label: string;
@@ -182,7 +183,7 @@ export function suggestAppName(image: string): string {
 
 export function formatWhen(iso?: string): string {
   if (!iso) return '';
-  const date = new Date(iso);
+  const date = new Date(parseInstant(iso));
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
 }
 

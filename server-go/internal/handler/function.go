@@ -698,7 +698,13 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	env := h.createEnv(r.Context(), projectID, fn.ID)
+	env, envErr := h.deployEnv(r.Context(), projectID)
+	if envErr != nil {
+		_ = rollbackCronSync(cronTx)
+		rollback()
+		writeSecretsUnavailable(w, envErr)
+		return
+	}
 
 	client, err := h.runtimeClientFor(r.Context(), projectID)
 	if err != nil {
@@ -750,20 +756,8 @@ func (h *FunctionHandler) rollbackFunctionSave(projectID, fnID string, previous 
 	}
 }
 
-// createEnv builds the env for a first deploy. Unavailable user secrets
-// degrade to builtins only.
-func (h *FunctionHandler) createEnv(ctx context.Context, projectID, fnID string) map[string]string {
-	builtins := h.builtinEnv(ctx, projectID)
-	env, err := h.mergeSecrets(projectID, builtins)
-	if err != nil {
-		log.Printf("WARN: build env for %s/%s: %v", projectID, fnID, err)
-		return builtins
-	}
-	return env
-}
-
 // deployEnv merges the project's user secrets over the platform builtins.
-// A secrets failure is an error: replay and redeploy must not ship a
+// A secrets failure is an error: deploy, replay and redeploy must not ship a
 // function without its secrets.
 func (h *FunctionHandler) deployEnv(ctx context.Context, projectID string) (map[string]string, error) {
 	return h.mergeSecrets(projectID, h.builtinEnv(ctx, projectID))
@@ -1404,7 +1398,7 @@ func (h *FunctionHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	keys, err := h.secrets.ListKeys(projectID)
 	if err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		writeSecretsUnavailable(w, err)
 		return
 	}
 	out := make([]map[string]string, 0, len(keys))
@@ -1431,10 +1425,13 @@ func (h *FunctionHandler) SetSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.secrets.Set(projectID, body.Key, body.Value); err != nil {
-		httpError(w, safeError(err), http.StatusBadRequest)
+		writeSecretWriteFailure(w, err)
 		return
 	}
-	h.redeployAll(r, projectID)
+	if err := h.redeployAll(r, projectID); err != nil {
+		writeRedeployFailure(w, projectID, err)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "set", "key": body.Key})
 }
 
@@ -1443,47 +1440,54 @@ func (h *FunctionHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	key := chi.URLParam(r, "key")
 	if err := h.secrets.Delete(projectID, key); err != nil {
-		httpError(w, safeError(err), http.StatusBadRequest)
+		writeSecretWriteFailure(w, err)
 		return
 	}
-	h.redeployAll(r, projectID)
+	if err := h.redeployAll(r, projectID); err != nil {
+		writeRedeployFailure(w, projectID, err)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "deleted", "key": key})
 }
 
 // redeployAll re-pushes every function of the project to the runtime so the
-// latest env (user secrets + builtins) is picked up. Errors are logged and
-// not surfaced — secret write succeeded, so the admin UI should still 200.
-func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
+// latest env (user secrets + builtins) is picked up. It tries every function
+// and returns what failed: a caller that saved a setting must say the running
+// functions did not pick it up. A suspended organisation is skipped, not failed.
+func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) error {
 	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
 		log.Printf("WARN: redeploy of %s skipped: %v", projectID, err)
-		return
+		return nil
 	}
 	list, err := h.store.List(projectID)
-	if err != nil || len(list) == 0 {
-		return
+	if err != nil {
+		return fmt.Errorf("list functions: %w", err)
+	}
+	if len(list) == 0 {
+		return nil
 	}
 	env, err := h.deployEnv(r.Context(), projectID)
 	if err != nil {
-		log.Printf("WARN: redeploy build env: %v", err)
-		return
+		return fmt.Errorf("build env: %w", err)
 	}
-	client, cerr := h.runtimeClientFor(r.Context(), projectID)
-	if cerr != nil {
-		log.Printf("WARN: redeploy runtime client: %v", cerr)
-		return
+	client, err := h.runtimeClientFor(r.Context(), projectID)
+	if err != nil {
+		return fmt.Errorf("runtime client: %w", err)
 	}
 	shared := h.sharedFilesFor(projectID)
 	allowedHosts := h.workerEgressHosts(projectID)
+	var failures []error
 	for _, fn := range list {
 		code, err := fn.BundleWith(shared)
 		if err != nil {
-			log.Printf("WARN: redeploy bundle %s: %v", fn.ID, err)
+			failures = append(failures, fmt.Errorf("bundle %s: %w", fn.ID, err))
 			continue
 		}
 		if err := client.Deploy(r.Context(), deployRequestFor(fn, code, env, allowedHosts)); err != nil {
-			log.Printf("WARN: redeploy %s: %v", fn.RuntimeID(), err)
+			failures = append(failures, fmt.Errorf("deploy %s: %w", fn.RuntimeID(), err))
 		}
 	}
+	return errors.Join(failures...)
 }
 
 // RuntimeStatus reports whether the project's runtime is reachable, and

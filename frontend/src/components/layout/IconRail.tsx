@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useParams, useNavigate, Link } from 'react-router-dom';
-import { sectionLanding, visibleProjectNav, type NavSection } from './navigation';
+import { sectionLabel, sectionLanding, visibleProjectNav, type NavSection } from './navigation';
 import { useAppHostingEnabled, useFeatureEnabled, useSitesEnabled } from '../../hooks/useDeploymentMode';
 import { cn } from '../../utils/cn';
 import { useInstance } from '../../hooks/useProvisioning';
@@ -17,6 +17,8 @@ interface IconRailProps {
   readonly onSectionClick: (key: string) => void;
   // Inside the phone drawer: always full width and labelled, without the hover control.
   readonly drawer?: boolean;
+  // Names the sections as the console layout (studio_v2) does.
+  readonly v2Names?: boolean;
 }
 
 function railWidth(drawer: boolean, expanded: boolean): string {
@@ -24,7 +26,7 @@ function railWidth(drawer: boolean, expanded: boolean): string {
   return expanded ? 'w-48' : 'w-12';
 }
 
-export function IconRail({ activeSection, onSectionClick, drawer = false }: IconRailProps) {
+export function IconRail({ activeSection, onSectionClick, drawer = false, v2Names = false }: IconRailProps) {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -109,7 +111,7 @@ export function IconRail({ activeSection, onSectionClick, drawer = false }: Icon
             <button
               key={section.key}
               onClick={() => handleClick(section)}
-              title={isExpanded ? undefined : section.label}
+              title={isExpanded ? undefined : sectionLabel(section, v2Names)}
               data-testid={`nav-${section.key}`}
               className={cn(
                 'flex items-center gap-2.5 rounded-lg transition-colors text-left',
@@ -120,7 +122,7 @@ export function IconRail({ activeSection, onSectionClick, drawer = false }: Icon
               )}
             >
               <Icon className="w-[18px] h-[18px] flex-shrink-0" />
-              {isExpanded && <span className="text-[13px] font-medium truncate">{section.label}</span>}
+              {isExpanded && <span className="text-[13px] font-medium truncate">{sectionLabel(section, v2Names)}</span>}
             </button>
           );
         })}

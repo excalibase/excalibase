@@ -64,6 +64,8 @@ export interface DataTableProps<T> {
 }
 
 const PAGE_SIZES = [10, 25, 50, 100];
+// On a phone a row stacks into a card: each cell is a line headed by its column's name.
+const CELL = 'px-4 py-3 max-md:flex max-md:items-baseline max-md:justify-between max-md:gap-4 max-md:px-0 max-md:py-1.5 max-md:before:shrink-0 max-md:before:text-xs max-md:before:text-text-tertiary max-md:before:content-[attr(data-label)]';
 const FIELD = 'bg-bg-secondary border border-border-primary rounded-lg text-sm text-text-primary';
 
 export function DataTable<T>(props: DataTableProps<T>) {
@@ -243,9 +245,11 @@ function Body<T>(p: BodyProps<T>) {
     );
   }
   return (
-    <table className="w-full text-sm" aria-labelledby={captionId}>
+    <>
+    <PhoneControls visible={p.visible} sort={p.sort} onSort={p.onSort} selectable={p.selectable} selection={p.selection} />
+    <table className="w-full text-sm max-md:block" aria-labelledby={captionId}>
       <caption id={captionId} className="sr-only">{p.label}</caption>
-      <thead>
+      <thead className="max-md:hidden">
         <tr className="text-text-tertiary border-b border-border-primary bg-bg-secondary">
           {p.selectable && (
             <th scope="col" className="w-10 px-4 py-3">
@@ -257,23 +261,53 @@ function Body<T>(p: BodyProps<T>) {
           {p.rowActions && <th scope="col" className="text-right px-4 py-3 font-medium">Actions</th>}
         </tr>
       </thead>
-      <tbody>
+      <tbody className="max-md:block">
         {p.shown.map((row) => {
           const id = p.getRowId(row);
           return (
-            <tr key={id} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
+            <tr key={id} className="border-b border-border-primary last:border-0 hover:bg-surface-hover max-md:block max-md:px-4 max-md:py-3">
               {p.selectable && (
                 <td className="px-4 py-3">
                   <input type="checkbox" aria-label={`Select ${rowName(p.visible, row, id)}`} checked={p.selection.isSelected(id)} onChange={() => p.selection.toggle(id)} />
                 </td>
               )}
-              {p.visible.map((c) => <td key={c.id} className="px-4 py-3">{c.cell(row)}</td>)}
-              {p.rowActions && <td className="px-4 py-3 text-right">{p.rowActions(row)}</td>}
+              {p.visible.map((c) => <td key={c.id} data-label={c.header} className={CELL}>{c.cell(row)}</td>)}
+              {p.rowActions && <td className={cn(CELL, 'text-right max-md:justify-end')}>{p.rowActions(row)}</td>}
             </tr>
           );
         })}
       </tbody>
     </table>
+    </>
+  );
+}
+
+// The header row is hidden on a phone, where rows are cards; these keep sorting and select-all usable there.
+function PhoneControls<T>({ visible, sort, onSort, selectable, selection }: Pick<BodyProps<T>, 'visible' | 'sort' | 'onSort' | 'selectable' | 'selection'>) {
+  const sortable = visible.filter((c) => c.sortValue);
+  if (sortable.length === 0 && !selectable) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-border-primary px-4 py-2 text-sm md:hidden" data-testid="phone-controls">
+      {sortable.length > 0 && (
+        <>
+          <select aria-label="Sort by" value={sort?.columnId ?? ''} onChange={(e) => onSort(e.target.value)} className={cn(FIELD, 'min-h-9 px-2')}>
+            <option value="" disabled>Sort by</option>
+            {sortable.map((c) => <option key={c.id} value={c.id}>{c.header}</option>)}
+          </select>
+          {sort && (
+            <button type="button" onClick={() => onSort(sort.columnId)} className={cn(FIELD, 'min-h-9 px-3')}>
+              {sort.direction === 'asc' ? 'Ascending' : 'Descending'}
+            </button>
+          )}
+        </>
+      )}
+      {selectable && (
+        <label className="flex items-center gap-2">
+          <input type="checkbox" aria-label="Select every row on this page" checked={selection.allSelected} onChange={selection.toggleAll} />
+          <span>Select page</span>
+        </label>
+      )}
+    </div>
   );
 }
 

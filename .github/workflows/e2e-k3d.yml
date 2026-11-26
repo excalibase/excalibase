@@ -65,13 +65,13 @@ jobs:
       # pull anonymously.
       - name: Log in to Docker Hub
         if: env.DOCKERHUB_USERNAME != ''
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Log in to ghcr.io
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -169,6 +169,9 @@ jobs:
 
       - name: Chart lets provisioning check a volume can grow
         run: sh charts/provisioning/tests/disk-resize-rbac.sh
+
+      - name: Chart grants network metering only while it is on
+        run: sh charts/provisioning/tests/netmeter-rbac.sh
 
       - name: Chart lets provisioning read the sandbox RuntimeClass
         run: sh charts/provisioning/tests/runtimeclass-rbac.sh

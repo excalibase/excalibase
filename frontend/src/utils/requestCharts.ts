@@ -1,3 +1,4 @@
+import { parseInstant } from './instant';
 // Request charts (EXC-656): per-project traffic of the GraphQL, REST, auth and
 // realtime surfaces, sampled by provisioning once a minute.
 export type RequestRange = '1h' | '24h' | '7d';
@@ -46,8 +47,8 @@ export function requestChartsPath(projectId: string, range: RequestRange): strin
 function steps(charts: RequestCharts): number[] {
   const stepMs = charts.stepSeconds * 1000;
   if (stepMs <= 0) return [];
-  const first = Math.floor(Date.parse(charts.from) / stepMs) * stepMs;
-  const last = Date.parse(charts.to);
+  const first = Math.floor(parseInstant(charts.from) / stepMs) * stepMs;
+  const last = parseInstant(charts.to);
   const out: number[] = [];
   for (let at = first; at < last; at += stepMs) out.push(at);
   return out;
@@ -56,7 +57,7 @@ function steps(charts: RequestCharts): number[] {
 function byStep(charts: RequestCharts): Map<number, Partial<Record<ChartFamily, RequestChartPoint>>> {
   const map = new Map<number, Partial<Record<ChartFamily, RequestChartPoint>>>();
   for (const point of charts.points) {
-    const at = Date.parse(point.timestamp);
+    const at = parseInstant(point.timestamp);
     map.set(at, { ...map.get(at), [point.family]: point });
   }
   return map;
@@ -142,7 +143,7 @@ export function formatRate(percent: number | null): string {
 }
 
 export function stepLabel(timestamp: string, range: RequestRange): string {
-  const at = new Date(timestamp);
+  const at = new Date(parseInstant(timestamp));
   return range === '7d'
     ? at.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit' })
     : at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams, type To } from 'react-router-d
 import { apiErrorMessage } from '../api/apps';
 import { SitesUnavailable } from '../components/services/SitesUnavailable';
 import { AddServiceMenu, EmptyServices } from '../components/services/v2/AddService';
+import { NotOffered } from '../components/services/v2/NotOffered';
 import { ServicePanel } from '../components/services/v2/ServicePanel';
 import { ServiceList, ServicesLoading } from '../components/services/v2/ServiceList';
 import { panelSearch, parsePanelState, serviceKey, type ServiceRef } from '../components/services/v2/panelState';
@@ -35,7 +36,10 @@ export function ProjectServicesPage() {
     return (
       <>
         <EmptyServices projectId={projectId} services={services} />
-        {!services.sitesOn && <div className="mx-auto max-w-2xl text-center"><SitesUnavailable projectId={projectId} /></div>}
+        <div className="mx-auto max-w-2xl space-y-1 text-center">
+          {!services.sitesOn && <SitesUnavailable projectId={projectId} />}
+          <NotOffered appHosting={services.appHosting} storage={services.storageOffered} />
+        </div>
       </>
     );
   }
@@ -66,6 +70,7 @@ export function ProjectServicesPage() {
         )}
       </div>
       {!services.sitesOn && <SitesUnavailable projectId={projectId} />}
+      <NotOffered appHosting={services.appHosting} storage={services.storageOffered} />
     </div>
   );
 }

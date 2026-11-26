@@ -166,6 +166,12 @@ export const PROJECT_NAV: NavSection[] = [
   { key: 'settings', label: 'Settings', icon: Settings, to: 'settings' },
 ];
 
+// What the console layout (studio_v2) calls a section whose old name differs.
+const V2_NAMES: Readonly<Record<string, string>> = { database: 'Database', containers: 'Apps', vault: 'Secrets' };
+
+export const sectionLabel = (section: Pick<NavSection, 'key' | 'label'>, v2Names = false): string =>
+  (v2Names ? V2_NAMES[section.key] : undefined) ?? section.label;
+
 export function visibleNavItems(
   items: readonly NavItem[],
   documentDb: boolean,

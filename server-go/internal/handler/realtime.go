@@ -135,7 +135,8 @@ func (h *RealtimeHandler) dial(r *http.Request) (*service.RealtimeService, *sql.
 	if !isValidID(projectID) {
 		return nil, nil, fmt.Errorf("invalid projectId")
 	}
-	if _, err := h.store.FindByProjectID(projectID); err != nil {
+	inst, err := h.store.FindByProjectID(projectID)
+	if err != nil {
 		return nil, nil, fmt.Errorf("project not found: %w", err)
 	}
 
@@ -145,7 +146,7 @@ func (h *RealtimeHandler) dial(r *http.Request) (*service.RealtimeService, *sql.
 	if err != nil {
 		return nil, nil, fmt.Errorf("read excalibase_app creds from vault: %w", err)
 	}
-	dsn, err := realtimeDSN(creds, projectdb.OverridesFromEnv())
+	dsn, err := realtimeDSN(creds, projectdb.OverridesFor(projectdb.OverridesFromEnv(), inst))
 	if err != nil {
 		return nil, nil, err
 	}

@@ -98,7 +98,7 @@ func TestEnsureDenoRuntime_CreatesDeploymentAndService(t *testing.T) {
 	ns := "proj-deno"
 
 	err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{
-		Image: "custom/deno:1", RuntimeSecret: "shh", Tier: "STANDARD",
+		Image: "custom/deno:1.0.0", RuntimeSecret: "shh", Tier: "STANDARD",
 	})
 	if err != nil {
 		t.Fatalf("EnsureDenoRuntime: %v", err)
@@ -112,7 +112,7 @@ func TestEnsureDenoRuntime_CreatesDeploymentAndService(t *testing.T) {
 	}
 
 	// Second call is idempotent (deployment exists → no error).
-	if err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{}); err != nil {
+	if err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{Image: egressImage}); err != nil {
 		t.Errorf("idempotent EnsureDenoRuntime: %v", err)
 	}
 }
@@ -125,7 +125,7 @@ func TestEnsureDenoRuntime_CreatesEgressPolicy(t *testing.T) {
 	ctx := context.Background()
 	ns := "proj-deno-np"
 
-	if err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{Tier: "STANDARD"}); err != nil {
+	if err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{Image: egressImage, Tier: "STANDARD"}); err != nil {
 		t.Fatalf("EnsureDenoRuntime: %v", err)
 	}
 
@@ -185,7 +185,7 @@ func TestGetDeployment(t *testing.T) {
 	if exists {
 		t.Error("expected missing deployment to report false")
 	}
-	_ = c.EnsureDenoRuntime(ctx, "ns", DenoRuntimeSpec{})
+	_ = c.EnsureDenoRuntime(ctx, "ns", DenoRuntimeSpec{Image: egressImage})
 	exists, err = c.GetDeployment(ctx, "ns", "deno-runtime")
 	if err != nil || !exists {
 		t.Errorf("expected created deployment to exist, got exists=%v err=%v", exists, err)
@@ -221,7 +221,7 @@ func TestEnsureDenoRuntime_NoServiceAccountToken(t *testing.T) {
 	ctx := context.Background()
 	ns := "proj-deno-sa"
 
-	if err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{Tier: "STANDARD"}); err != nil {
+	if err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{Image: egressImage, Tier: "STANDARD"}); err != nil {
 		t.Fatalf("EnsureDenoRuntime: %v", err)
 	}
 	dep, err := c.clientset.AppsV1().Deployments(ns).Get(ctx, "deno-runtime", metav1.GetOptions{})

@@ -73,6 +73,15 @@ describe('logs tab', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('The server said no');
   });
 
+  test('a single host without log search says it is not offered, not that loading failed', async () => {
+    const reason = 'log search is not turned on for this single host: switch on host monitoring to search the database logs';
+    open({ logs: '', notOffered: reason });
+    expect(await screen.findByTestId('logs-not-offered')).toHaveTextContent('Log search is not turned on for this single host: switch on host monitoring to search the database logs.');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('No logs available')).not.toBeInTheDocument();
+    expect(screen.queryByRole('searchbox', { name: 'Search logs' })).not.toBeInTheDocument();
+  });
+
   test('log drains are offered only with their feature on', async () => {
     plane.routes['/projects/p1/log-drains'] = [];
     open();

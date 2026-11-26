@@ -1,5 +1,5 @@
 import { NavLink, useParams } from 'react-router-dom';
-import { PROJECT_NAV, visibleNavItems } from './navigation';
+import { PROJECT_NAV, sectionLabel, visibleNavItems } from './navigation';
 import { useProjectIsDocumentDB } from '../../hooks/useDocuments';
 import { cn } from '../../utils/cn';
 import { useInstance } from '../../hooks/useProvisioning';
@@ -10,9 +10,10 @@ interface SubNavProps {
   readonly sectionKey: string;
   // Inside the phone drawer: full width under the rail.
   readonly drawer?: boolean;
+  readonly v2Names?: boolean;
 }
 
-export function SubNav({ sectionKey, drawer = false }: SubNavProps) {
+export function SubNav({ sectionKey, drawer = false, v2Names = false }: SubNavProps) {
   const { projectId } = useParams<{ projectId: string }>();
   const section = PROJECT_NAV.find((s) => s.key === sectionKey);
   const { data: documentDb = false } = useProjectIsDocumentDB(projectId ?? '');
@@ -25,7 +26,7 @@ export function SubNav({ sectionKey, drawer = false }: SubNavProps) {
     <div className={cn('flex-shrink-0 flex flex-col bg-surface-card', drawer ? 'w-full border-t border-border-primary' : 'w-56 border-r border-border-primary')} data-testid="sub-nav">
       <div className="px-4 py-3 border-b border-border-primary">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-text-tertiary">
-          {section.label}
+          {sectionLabel(section, v2Names)}
         </h2>
       </div>
       <nav className="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto">

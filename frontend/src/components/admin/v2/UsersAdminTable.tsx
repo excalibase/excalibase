@@ -12,8 +12,9 @@ import { BulkDialog, BulkOutcomeNotice, type BulkOutcome, type BulkRequest } fro
 import { appsFailedNote, refreshAdmin, skippedNote, suspendableUsers } from './adminRows';
 import { USER_SORTS } from './listQuery';
 import { useServerList } from './useServerList';
+import { formatInstant } from '../../../utils/instant';
 
-const when = (iso?: string) => (iso ? new Date(iso).toLocaleString() : '—');
+const when = (iso?: string) => (iso ? formatInstant(iso) : '—');
 // Sorting happens on the server; a column only needs a value to show its sort button.
 const serverSorted = () => '';
 const anyRow = () => true;

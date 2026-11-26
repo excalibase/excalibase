@@ -1,12 +1,13 @@
 import { useParams } from 'react-router-dom';
 import { Loader2, Search, FileText } from 'lucide-react';
 import { lineColor, keptFor, useLogExplorer } from '../hooks/useLogExplorer';
+import { sentence } from '../utils/sentence';
 import { serverErrorMessage } from '../utils/serverError';
 import { LogDrainsCard } from '../components/LogDrainsCard';
 
 export function LogExplorerPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const { search, setSearch, ranges, range, setRangeLabel, retentionHours, logLines, isLoading, error } = useLogExplorer(projectId || '');
+  const { search, setSearch, ranges, range, setRangeLabel, retentionHours, logLines, isLoading, error, notOffered } = useLogExplorer(projectId || '');
 
   return (
     <div data-testid="log-explorer-page">
@@ -62,7 +63,10 @@ export function LogExplorerPage() {
             {serverErrorMessage(error, 'The logs could not be loaded')}
           </p>
         )}
-        {!isLoading && !error && logLines.length === 0 && (
+        {!isLoading && !error && notOffered && (
+          <p className="p-12 text-center text-text-secondary text-sm" data-testid="logs-not-offered">{sentence(notOffered)}</p>
+        )}
+        {!isLoading && !error && !notOffered && logLines.length === 0 && (
           <div className="p-12 text-center text-text-tertiary text-sm">
             {search ? 'No matching log lines' : 'No logs available'}
           </div>

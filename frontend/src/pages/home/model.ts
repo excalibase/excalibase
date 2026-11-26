@@ -1,4 +1,5 @@
 import type { DatabaseInstance } from '../../types';
+import { parseInstant } from '../../utils/instant';
 
 // What Home and the Projects list work out from the data the Studio already loads.
 // Nothing here is estimated: a number that cannot be known is left out by the caller.
@@ -44,12 +45,14 @@ const KIND_ORDER: AttentionKind[] = ['project-failed', 'app-failed', 'token-expi
 const nameOf = (project: Pick<DatabaseInstance, 'projectId' | 'projectName'>): string => project.projectName?.trim() || project.projectId;
 
 function formatDate(value: string | number): string {
-  return new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const at = new Date(parseInstant(value));
+  if (Number.isNaN(at.getTime())) return 'unknown';
+  return at.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function expiryOf(token: TokenInfo): number | null {
   if (!token.expiresAt) return null;
-  const time = Date.parse(token.expiresAt);
+  const time = parseInstant(token.expiresAt);
   return Number.isNaN(time) ? null : time;
 }
 
@@ -201,7 +204,7 @@ export function rowAction(project: DatabaseInstance, status: ProjectStatus): Att
 }
 
 export function lastUsedAt(project: DatabaseInstance): number | null {
-  const time = Date.parse(project.lastSeenAt ?? project.lastActiveAt ?? '');
+  const time = parseInstant(project.lastSeenAt ?? project.lastActiveAt);
   return Number.isNaN(time) ? null : time;
 }
 
@@ -209,7 +212,7 @@ const RELATIVE = new Intl.RelativeTimeFormat('en', { numeric: 'always' });
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [['year', 365 * DAY_MS], ['month', 30 * DAY_MS], ['day', DAY_MS], ['hour', 3_600_000], ['minute', 60_000]];
 
 export function relativeTime(value: string | number, now: Date): string {
-  const time = typeof value === 'number' ? value : Date.parse(value);
+  const time = parseInstant(value);
   if (Number.isNaN(time)) return '';
   const elapsed = now.getTime() - time;
   for (const [unit, size] of UNITS) {

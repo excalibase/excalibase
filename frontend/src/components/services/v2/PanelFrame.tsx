@@ -19,20 +19,28 @@ interface PanelFrameProps {
   readonly children: React.ReactNode;
 }
 
+// Whether the panel's top edge is in the upper half of the window.
+const isHighOnScreen = (element: HTMLElement): boolean => {
+  const { top } = element.getBoundingClientRect();
+  return top >= 0 && top < window.innerHeight / 2;
+};
+
 // The side panel's header (name, status, close) and its tabs. A service with
 // no tabs shows its one view under the header.
 export function PanelFrame({ title, subtitle, status, onClose, tabsLabel = title, tabs = [], tab = '', onTab, idPrefix, children }: PanelFrameProps) {
   const panel = useRef<HTMLElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
-  // Opening a panel moves focus into it, and brings it into view when it is
-  // stacked under the cards on a phone. Escape closes it when it came from
+  // Opening a panel moves focus into it, and brings it into view only when it
+  // sits low on the screen, as when it is stacked under the cards on a phone.
+  // A panel beside the cards is already in view, and scrolling to it would
+  // move a tall tab such as Connect by itself. Escape closes it when it came from
   // inside it: not from a dialog opened over it, which handles its own.
   useEffect(() => {
     const element = panel.current;
     if (!element) return undefined;
     element.focus({ preventScroll: true });
-    element.scrollIntoView?.({ block: 'nearest' });
+    if (!isHighOnScreen(element)) element.scrollIntoView?.({ block: 'start' });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented) close.current();
     };

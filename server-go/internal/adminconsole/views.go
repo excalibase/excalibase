@@ -110,8 +110,9 @@ type Overview struct {
 	FailedProjects []ProjectBrief   `json:"failedProjects"`
 	TopCPU         []ProjectBrief   `json:"topCpu"`
 	TopMemory      []ProjectBrief   `json:"topMemory"`
-	// TopEgress is read from the single-host container metrics; a cluster does
-	// not record egress per project, so it is empty there.
+	// TopEgress is read from the single-host container metrics, or from the net
+	// meter's samples while FEATURE_NETMETER is on (a cluster records egress
+	// per project only then, so it is empty there otherwise).
 	TopEgress []ProjectBrief `json:"topEgress"`
 }
 

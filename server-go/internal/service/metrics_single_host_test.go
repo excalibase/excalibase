@@ -141,3 +141,25 @@ func TestSampleAllRunsTheClusterChecksEveryTick(t *testing.T) {
 		t.Fatalf("cluster checks ran %d times", cluster.calls)
 	}
 }
+
+// With host monitoring off a single host has no metrics to show; it says so
+// without naming Kubernetes, which that host never runs.
+func TestASingleHostWithMonitoringOffSaysMetricsAreNotOn(t *testing.T) {
+	store, _ := storage.NewFileSystemStore(t.TempDir())
+	if err := store.Create(dockerInstance()); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMetricsService(store, nil, t.TempDir())
+
+	got, err := svc.GetCurrentMetrics(context.Background(), "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := ""
+	if got.UnavailableReason != nil {
+		reason = *got.UnavailableReason
+	}
+	if got.MetricsAvailable || !strings.Contains(reason, "single host") || strings.Contains(strings.ToLower(reason), "kubernetes") {
+		t.Errorf("metrics = %+v, reason %q", got, reason)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/imageref"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 )
 
@@ -139,6 +140,8 @@ type AppConfig struct {
 	RequestMetricsTargets []string
 	// HostMetrics is where single-host monitoring reads (EXC-670).
 	HostMetrics HostMetrics
+	// NetMeter is where per-app network metering reads the kubelet (EXC-844).
+	NetMeter NetMeter
 	// HostLogs is a single host's stored log search (EXC-672).
 	HostLogs HostLogs
 
@@ -330,6 +333,12 @@ type AppConfig struct {
 	// row unwritten, before the sweep retries the operation
 	// (EXCALIBASE_STUCK_RETRY_AFTER, default twice the pause timeout, EXC-590).
 	StuckRetryAfter time.Duration
+	// SelfHealAlertAfter is how many failed automatic attempts of one
+	// operation alert the platform admins (EXCALIBASE_SELFHEAL_ALERT_AFTER,
+	// default 5, EXC-873).
+	SelfHealAlertAfter int
+	// Trust is the limited trial's settings (EXC-899).
+	Trust TrustConfig
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -475,6 +484,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateSites(); err != nil {
 		return err
 	}
+	if err := c.validateTrust(); err != nil {
+		return err
+	}
 	if err := c.validateSiteGit(); err != nil {
 		return err
 	}
@@ -484,6 +496,8 @@ func (c AppConfig) Validate() error {
 func Load() AppConfig {
 	cfg := load()
 	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
+	cfg.SelfHealAlertAfter = envInt("EXCALIBASE_SELFHEAL_ALERT_AFTER", 5)
+	cfg.Trust = loadTrust()
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"
@@ -531,7 +545,7 @@ func load() AppConfig {
 		DenoRuntimeURL:                 envOr("DENO_RUNTIME_URL", "http://deno-runtime.serverless.svc.cluster.local:8000"),
 		DenoRuntimeSecret:              envOr("DENO_RUNTIME_SECRET", ""),
 		DenoNamespace:                  envOr("DENO_NAMESPACE", "serverless"),
-		DenoRuntimeImage:               envOr("DENO_RUNTIME_IMAGE", "excalibase/deno-runtime:latest"),
+		DenoRuntimeImage:               os.Getenv("DENO_RUNTIME_IMAGE"),
 		DenoProvisioningURL:            os.Getenv("DENO_PROVISIONING_URL"),
 		VaultURL:                       envOr("VAULT_URL", ""),
 		VaultPAT:                       envOr("VAULT_PAT", ""),
@@ -564,6 +578,7 @@ func load() AppConfig {
 		LogForwarderToken:              os.Getenv("LOG_FORWARDER_TOKEN"),
 		RequestMetricsTargets:          loadRequestMetricsTargets(),
 		HostMetrics:                    loadHostMetrics(),
+		NetMeter:                       loadNetMeter(),
 		HostLogs:                       loadHostLogs(),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),
@@ -823,6 +838,24 @@ func (c AppConfig) AdminOrigin() string {
 // AdminAccessEnabled is whether the admin host demands a Cloudflare Access assertion.
 func (c AppConfig) AdminAccessEnabled() bool {
 	return c.AdminHost != "" && c.AdminAccessTeamDomain != "" && c.AdminAccessAud != ""
+}
+
+// CheckDenoRuntimeImage refuses a k8s install whose per-project function
+// runtime image is missing or floating (EXC-447): customer code runs in it, so
+// a push to a moving tag must not change what runs. A value set on any mode is
+// checked too; there is no default.
+func (c AppConfig) CheckDenoRuntimeImage() error {
+	runsPods := c.ProvisionerMode != "docker" && c.DenoRuntimeSecret != ""
+	if c.DenoRuntimeImage == "" && !runsPods {
+		return nil
+	}
+	if c.DenoRuntimeImage == "" {
+		return errors.New("DENO_RUNTIME_IMAGE must be set to a release version or a digest: project function runtimes have no default image")
+	}
+	if err := imageref.RequirePinned(c.DenoRuntimeImage); err != nil {
+		return fmt.Errorf("DENO_RUNTIME_IMAGE: %w", err)
+	}
+	return nil
 }
 
 // CheckDenoProvisioningURL refuses a k8s install that runs functions without

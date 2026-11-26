@@ -72,7 +72,7 @@ These apply to every matrix. Matrix-specific pages cover the rest.
 | `VAULT_URL` | optional | — | If set, use remote vault over HTTP instead of embedded. |
 | `VAULT_PAT` | with `VAULT_URL` | — | Personal access token for remote vault. |
 | `NATS_URL` | optional | — | NATS server for policy-change events and CDC. |
-| `DENO_RUNTIME_IMAGE` | no | `excalibase/deno-runtime:latest` | Image used for per-project edge function runtimes. |
+| `DENO_RUNTIME_IMAGE` | k8s mode | none | Image for per-project edge function runtimes: `name@sha256:<64 hex>`, or a tag `X.Y.Z`, `vX.Y.Z`, `main-<sha>` or `release-X.Y-<sha>`. Any other tag (`latest`, `main`, `1.7`, `stable`) or none stops boot. Docker mode runs no function pods. |
 | `DENO_NAMESPACE` | no | `serverless` | Namespace for the shared-fallback Deno runtime. |
 | `DENO_RUNTIME_SECRET` | yes (for edge functions) | — | HMAC secret between platform and Deno runtime. |
 | `FUNCTION_EGRESS_POLICY` | no | `networkpolicy` | How each project's function runtime is fenced: `cilium` admits the outbound allowlist by host name (CiliumNetworkPolicy `toFQDNs`, Cilium 1.19+); `networkpolicy` opens public addresses on the allowlisted ports. Anything else stops the server at boot. See [functions-egress.md](../functions-egress.md). |

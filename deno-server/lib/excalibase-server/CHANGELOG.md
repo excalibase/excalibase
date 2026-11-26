@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `ctx.auth.getUserIdentity().subject` and `tokenIdentifier` (`iss|sub`) now
+  carry the user's account id (for example `"42"`), not the email. The auth
+  service signs `sub` as the account id and the address stays in `email`.
+  If your code reads `subject` as an address, read `email` instead. Tokens
+  issued before the update keep the old `sub` until they expire. No runtime
+  change here.
+
 ## 0.13.0
 
 - New `FunctionError(status, message)`: a handler refuses its caller with a

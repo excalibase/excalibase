@@ -50,7 +50,7 @@ const (
 	// change, sign-out scopes, and Studio's per-user details and delete.
 	AuthUser Feature = "authuser"
 	// AuthGuest is end-user guest accounts (no address, role guest) and the
-	// stable token subject: sub becomes the account id.
+	// is_guest claim. The token sub is the account id with or without it.
 	AuthGuest Feature = "authguest"
 	// AuthMFA is end-user TOTP factors, recovery codes and the aal claim:
 	// the project's switch and its per-project key in the vault.
@@ -149,6 +149,22 @@ const (
 	// account: the rule, what was stopped and how to appeal (EXC-841). Off, a
 	// suspension is silent as before.
 	SuspensionEmails Feature = "suspensionemails"
+	// SelfHeal makes a failed operation heal itself: a backup purge left in
+	// BACKUPS_PENDING_DELETE is retried with backoff, a stuck pause or resume is
+	// retried on every plan and with auto-pause off, staff are alerted when a
+	// retry keeps failing, and the customer is told "we are retrying
+	// automatically" instead of being asked to retry (EXC-873). Off: only the
+	// admin purge route and auto-pause's own sweep retry, as before.
+	SelfHeal Feature = "selfheal"
+	// NetMeter measures each customer app's network rx/tx once a minute (kubelet
+	// counters on Kubernetes, engine counters on a single host) into per-app
+	// history, the input of behaviour-based abuse review (EXC-844). It only
+	// measures; it never stops anything. Off: nothing is read or stored.
+	NetMeter Feature = "netmeter"
+	// LimitedTrial makes a new account limited until it is verified through its
+	// GitHub account: the trust state, the resolver that answers it, and later
+	// the verify flow and its limits (EXC-899). Off: every account behaves as full.
+	LimitedTrial Feature = "limitedtrial"
 	// StudioV2 is the cloud-console layout of Studio: new top bar, navigation
 	// and shared tables. Frontend only; the server just reports it (EXC-762).
 	StudioV2 Feature = "studio_v2"
@@ -156,7 +172,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails, SelfHeal, NetMeter, LimitedTrial}
 }
 
 type Flags interface {

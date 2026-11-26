@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Command } from 'cmdk';
 import { BookOpen, Database, Compass } from 'lucide-react';
 import { useMyProjects, useCurrentOrg } from '../../../hooks/useMemberOrgs';
-import { visibleNavItems, visibleProjectNav, type NavCapabilities } from '../navigation';
+import { sectionLabel, visibleNavItems, visibleProjectNav, type NavCapabilities } from '../navigation';
 import { useAppHostingEnabled, useFeatureEnabled, useFeatures, useSitesEnabled } from '../../../hooks/useDeploymentMode';
 import { useInstance } from '../../../hooks/useProvisioning';
 import { useProjectIsDocumentDB } from '../../../hooks/useDocuments';
@@ -29,10 +29,10 @@ export function projectPages(
   return visibleProjectNav(capabilities).flatMap((section) => {
     const pages = section.children
       ? visibleNavItems(section.children, documentDb, postgres, features)
-      : [{ label: section.label, to: section.to ?? '' }];
+      : [{ label: sectionLabel(section, true), to: section.to ?? '' }];
     return pages.map((page) => ({
       key: `${section.key}:${page.to}`,
-      label: section.children ? `${section.label}: ${page.label}` : page.label,
+      label: section.children ? `${sectionLabel(section, true)}: ${page.label}` : page.label,
       to: `/project/${projectId}/${page.to}`.replace(/\/$/, ''),
     }));
   });

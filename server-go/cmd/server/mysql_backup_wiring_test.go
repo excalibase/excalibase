@@ -21,7 +21,7 @@ func TestMySQLBackupsAreServedOnKubernetes(t *testing.T) {
 	if !backupSvc.SupportsInPlaceRestoreFor(inst) {
 		t.Error("a MySQL project cannot be restored in place")
 	}
-	if err := wireRestoreVerification(backupSvc, bootVault{}, bootReadyTimeout); err != nil {
+	if err := wireRestoreVerification(backupSvc, bootVault{}, bootReadyTimeout, nil); err != nil {
 		t.Fatalf("the MySQL adapter refused the probe: %v", err)
 	}
 }
