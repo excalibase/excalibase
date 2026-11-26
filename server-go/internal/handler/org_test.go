@@ -76,6 +76,7 @@ func setupOrgRouterWithInstances(t *testing.T, isCloud bool) (chi.Router, *pgsto
 	orgHandler.SetNodePlacement(&fakeNodes{nodes: 5})
 	orgHandler.SetInstanceStore(instances)
 	orgHandler.SetPlanChangeHook(func() { orgPlanChanges.Add(1) })
+	orgHandler.SetOrgGuard(suspendedOrgGuard())
 	r := chi.NewRouter()
 	r.Route(testOrgsPath, func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {

@@ -274,7 +274,9 @@ func TestInviteLink_AcceptNeedsASignedInCaller(t *testing.T) {
 	r := chi.NewRouter()
 	r.Route(testOrgsPath, func(r chi.Router) {
 		r.Use(auth.RequireAuth)
-		NewOrgHandler(f.store, f.store).Routes(r, true)
+		signedIn := NewOrgHandler(f.store, f.store)
+		signedIn.SetOrgGuard(suspendedOrgGuard())
+		signedIn.Routes(r, true)
 	})
 	req := httptest.NewRequest("POST", testOrgsPath+"/invites/accept", strings.NewReader(fmt.Sprintf(`{"token":%q}`, token)))
 	w := httptest.NewRecorder()
