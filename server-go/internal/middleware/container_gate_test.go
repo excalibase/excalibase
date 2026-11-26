@@ -29,6 +29,13 @@ func TestContainerWriteClassification(t *testing.T) {
 		{http.MethodPost, base + "/sites/s1/builds", true},
 		{http.MethodPost, base + "/functions/", true},
 		{http.MethodPost, "/api/schema/p1/functions", false},
+		// Anchored: the allow-list and the container list only read a project route.
+		{http.MethodPost, "/api/projects/p1/apps/a1/deploy/apps/a2/pause", true},
+		{http.MethodPost, "/other/apps/a1/pause", false},
+		{http.MethodPost, "/x/api/projects/p1/sites/s1/builds", false},
+		// An escaped slash stays inside its segment, as the router reads it.
+		{http.MethodPost, base + "/apps/a1%2Fpause", true},
+		{http.MethodPost, base + "/apps/a1%2Fx/pause", false},
 		{http.MethodPut, base + "/functions/egress", false},
 		{http.MethodPost, base + "/functions/secrets", false},
 		{http.MethodPut, base + "/sites/s1/git", true},
@@ -98,5 +105,16 @@ func TestRequireVerifiedForContainersWithNoGateAllowsAll(t *testing.T) {
 	})
 	if code, _ := gateStatus(r, http.MethodPost, "/api/projects/p1/apps/"); code != http.StatusNoContent {
 		t.Fatalf("nil gate: %d", code)
+	}
+}
+
+// The gate reads the escaped path the router matches, not the decoded one.
+func TestRequireVerifiedForContainersReadsTheEscapedPath(t *testing.T) {
+	limited := gateRouter(trust.Limited)
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/p1/apps/a1%2Fx/deploy", nil)
+	w := httptest.NewRecorder()
+	limited.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("an escaped-slash deploy path: %d, want 403", w.Code)
 	}
 }

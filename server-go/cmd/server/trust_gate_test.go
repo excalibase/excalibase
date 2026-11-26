@@ -61,6 +61,7 @@ func TestProductionWiresTheContainerGateEverywhere(t *testing.T) {
 	for file, want := range map[string][]string{
 		"main.go":        {"trustGate:             newTrustGate(cfg, store, sqlStore)", "appDeploySvc.SetContainerGate(newTrustGate(cfg, store, sqlStore))", "gate: newTrustGate(cfg, store, sqlStore)"},
 		"site_builds.go": {"ContainerGate: newTrustGate(cfg, args.sqlStore, args.sqlStore)"},
+		"sites.go":       {"ContainerGate: newTrustGate(cfg, sqlStore, sqlStore)"},
 		"app_network.go": {"ContainerGate: a.gate"},
 		"org_guard.go":   {"RequireVerifiedForContainers(d.trustGate)"},
 	} {

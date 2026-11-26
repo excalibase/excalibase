@@ -28,6 +28,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
@@ -54,6 +55,7 @@ type FunctionHandler struct {
 	store edgefn.Store
 	// orgGuard refuses deploys for an organisation whose owner is abuse-suspended (EXC-843).
 	orgGuard      *orgguard.Guard
+	containerGate *trust.Gate
 	secrets       *edgefn.SecretsStore
 	vault         vaultclient.VaultClient // optional, for reading DB_URL
 	instanceStore storage.InstanceStore
@@ -131,6 +133,10 @@ type FunctionHandler struct {
 // SetFeatures gives the handler the dark-feature switches it consults.
 // SetOrgGuard makes function deploys refuse a suspended owner's organisation.
 func (h *FunctionHandler) SetOrgGuard(guard *orgguard.Guard) { h.orgGuard = guard }
+
+// SetContainerGate refuses a limited (unverified) owner a new function runtime
+// and any push of function code into one (EXC-899); nil allows all.
+func (h *FunctionHandler) SetContainerGate(gate *trust.Gate) { h.containerGate = gate }
 
 func (h *FunctionHandler) SetFeatures(flags features.Flags) { h.flags = flags }
 
@@ -636,6 +642,10 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
 		writeOrgGuardError(w, err)
+		return
+	}
+	if err := h.containerGate.CheckProject(r.Context(), projectID); err != nil {
+		writeStartRefusal(w, err)
 		return
 	}
 	tenant, _ := custommw.TenantIDFromContext(r.Context())
@@ -1460,6 +1470,11 @@ func (h *FunctionHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 // functions did not pick it up. A suspended organisation is skipped, not failed.
 func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) error {
 	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
+		log.Printf("WARN: redeploy of %s skipped: %v", projectID, err)
+		return nil
+	}
+	// A limited owner's functions are not pushed into a runtime: skipped like a suspension.
+	if err := h.containerGate.CheckProject(r.Context(), projectID); err != nil {
 		log.Printf("WARN: redeploy of %s skipped: %v", projectID, err)
 		return nil
 	}

@@ -12,18 +12,20 @@ import (
 // under /apps/ is closed to a limited account until someone decides it
 // starts nothing (EXC-899). Reads and DELETE never start a container.
 var appsMayWrite = regexp.MustCompile(
-	`/apps/[^/]+/(pause|disk|secrets/[^/]+|domains(/.*)?|git/sign-in)/?$`)
+	`^/api/projects/[^/]+/apps/[^/]+/(pause|disk|secrets/[^/]+|domains(/.*)?|git/sign-in)/?$`)
 
 // Writes that run tenant code in a container but sit outside /apps/: a
 // template deploy makes apps, a site build runs in a build Job, and a function
 // deploy creates or rolls the project's own Deno runtime pod.
 var containerWrites = regexp.MustCompile(
-	`/app-templates/[^/]+/deploy/?$|/sites/[^/]+/(builds|git)/?$|^/api/projects/[^/]+/functions/?$`)
+	`^/api/projects/[^/]+/(app-templates/[^/]+/deploy|sites/[^/]+/(builds|git)|functions)/?$`)
 
 var appsFamily = regexp.MustCompile(`^/api/projects/[^/]+/apps(/|$)`)
 
 // ContainerWrite reports whether a project write starts, builds or scales a
-// container, which a limited (unverified) account may not do.
+// container, which a limited (unverified) account may not do. path is the raw
+// (escaped) path, the one the router matches: a %2F inside a segment must not
+// read as a separator here and as part of an id there.
 func ContainerWrite(method, path string) bool {
 	if isSafeMethod(method) || method == http.MethodDelete {
 		return false
@@ -42,7 +44,7 @@ func RequireVerifiedForContainers(gate *trust.Gate) func(http.Handler) http.Hand
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			projectID := chi.URLParam(r, "projectId")
-			if projectID == "" || !ContainerWrite(r.Method, r.URL.Path) {
+			if projectID == "" || !ContainerWrite(r.Method, r.URL.EscapedPath()) {
 				next.ServeHTTP(w, r)
 				return
 			}

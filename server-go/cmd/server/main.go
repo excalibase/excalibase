@@ -1347,6 +1347,7 @@ func buildFunctionHandler(
 	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
 	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
 	fnHandler.SetOrgGuard(newOrgGuard(store, sqlStore))
+	fnHandler.SetContainerGate(newTrustGate(cfg, store, sqlStore))
 	if cfg.ProvisionerMode != "docker" {
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
