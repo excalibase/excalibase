@@ -1467,7 +1467,9 @@ The model: a new account is **limited** and becomes **full** once verified. Veri
 
 - A `user_trust` table (one decision per account: state, method, a reason code, time, rule version) and an append-only `trust_audit` table. No GitHub data is stored, only the result.
 - One resolver answers "is this owner limited or full". The owner is the org's immutable `OwnerID`, so a limited member of a full owner's org runs at full. With the flag on, an owner with no decision, an unknown state or any read error is **limited** (fail closed); with the flag off it is full and the tables are not read.
-- Because a missing decision means limited, switching the flag on before the grandfather backfill exists would limit every existing account. The backfill, the verify flow, the banner and the edge limits come in later changes; do not turn the flag on in prod before then.
+- Because a missing decision means limited, switching the flag on before the grandfather backfill has run would limit every existing account. So with `FEATURE_LIMITEDTRIAL=true` the server refuses to start until the `trust_backfill_runs` table holds a marker (when the backfill finished and the cutoff it used). The backfill command, the verify flow, the banner and the edge limits come in later changes, so the flag cannot be turned on yet.
+- `trust_audit` has no foreign key to users: the trail of who was limited, verified or overridden is kept when an account is deleted. `user_trust` goes with the account.
+- `TRUST_GRANDFATHER_BEFORE` may not be in the future.
 
 Settings (all read at boot; a mistyped value stops the boot instead of falling back):
 

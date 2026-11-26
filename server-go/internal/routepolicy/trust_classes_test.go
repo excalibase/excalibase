@@ -5,78 +5,70 @@ import (
 	"testing"
 )
 
-// EXC-899: whoever owns an org's apps decides what they may run (the trust of
-// Org.OwnerID). Every route that creates, changes or starts an app has to say
-// whether it resolves that trust before it acts, so a new app route cannot be
-// added without someone choosing. P4 makes "resolves" true in the handlers;
-// until then this table is the checklist the route test enforces.
-const (
-	trustResolves = "resolves"
-	trustExempt   = "exempt"
-)
+// EXC-899: the trust of an org's owner decides what its apps, functions and
+// hosts may do. Every route that changes something (any method but GET, HEAD or OPTIONS) has to
+// say whether it resolves that trust, is exempt from it, or is unrelated, so a
+// new route cannot be added without someone choosing. P4 makes "resolves" true
+// in the handlers; until then the field is the checklist this test enforces.
 
-type trustClass struct {
-	class  string
-	reason string
-}
-
-var appRouteTrust = map[string]trustClass{
-	"POST /api/projects/{projectId}/apps/":                                    {trustResolves, "creates an app"},
-	"PATCH /api/projects/{projectId}/apps/{appId}/":                           {trustResolves, "changes what the next deploy runs"},
-	"DELETE /api/projects/{projectId}/apps/{appId}/":                          {trustExempt, "removes a workload"},
-	"POST /api/projects/{projectId}/apps/{appId}/pause":                       {trustExempt, "scales to zero"},
-	"POST /api/projects/{projectId}/apps/{appId}/resume":                      {trustResolves, "starts the workload; never refused for trust, only rendered with the owner's class"},
-	"POST /api/projects/{projectId}/apps/{appId}/disk":                        {trustExempt, "plan-capped storage, no network effect"},
-	"POST /api/projects/{projectId}/apps/{appId}/deploy":                      {trustResolves, "renders the workload and its ingress"},
-	"POST /api/projects/{projectId}/apps/{appId}/deploys/{deployId}/redeploy": {trustResolves, "renders the workload and its ingress"},
-	"PUT /api/projects/{projectId}/apps/{appId}/secrets/{name}":               {trustExempt, "stores a secret value only"},
-	"PUT /api/projects/{projectId}/app-network/":                              {trustExempt, "private app-to-app traffic, not the public edge"},
-	"POST /api/projects/{projectId}/app-templates/{templateId}/deploy":        {trustResolves, "creates apps and their deploys"},
-	"PUT /api/projects/{projectId}/registry-credentials/{registry}":           {trustExempt, "stores a credential"},
-	"DELETE /api/projects/{projectId}/registry-credentials/{registry}":        {trustExempt, "removes a credential"},
-	"POST /api/projects/{projectId}/apps/{appId}/builds":                      {trustResolves, "builds an image that is then rolled out as a deploy"},
-	"PUT /api/projects/{projectId}/apps/{appId}/git":                          {trustExempt, "stores the app's git source only"},
-	"POST /api/projects/{projectId}/apps/{appId}/git/sign-in":                 {trustExempt, "starts a git provider sign-in"},
-	"DELETE /api/projects/{projectId}/apps/{appId}/git":                       {trustExempt, "removes the git source"},
-	"POST /api/projects/{projectId}/apps/{appId}/domains/":                    {trustResolves, "adds a host to the app's ingress"},
-	"POST /api/projects/{projectId}/apps/{appId}/domains/{domainId}/verify":   {trustResolves, "routes the host: writes the ingress"},
-	"DELETE /api/projects/{projectId}/apps/{appId}/domains/{domainId}":        {trustResolves, "rewrites the ingress without the host"},
-}
-
-func appWriteRoutes() map[string]bool {
-	routes := map[string]bool{}
+func writeRows() []Row {
+	var rows []Row
 	for _, row := range Table() {
-		if !strings.Contains(row.Pattern, "/apps/") && !strings.Contains(row.Pattern, "/app-templates/") &&
-			!strings.Contains(row.Pattern, "/app-network/") && !strings.Contains(row.Pattern, "/registry-credentials/") {
-			continue
-		}
 		for _, method := range row.Methods {
-			if method != "GET" {
-				routes[method+" "+row.Pattern] = true
+			if method != "GET" && method != "HEAD" && method != "OPTIONS" {
+				rows = append(rows, row)
+				break
 			}
 		}
 	}
-	return routes
+	return rows
 }
 
-func TestEveryAppWriteRouteIsClassifiedForTrust(t *testing.T) {
-	routes := appWriteRoutes()
-	if len(routes) == 0 {
-		t.Fatal("found no app write routes; the filter is wrong")
+func TestEveryWriteRouteHasATrustClass(t *testing.T) {
+	rows := writeRows()
+	if len(rows) < 100 {
+		t.Fatalf("found only %d write routes; the filter is wrong", len(rows))
 	}
-	for route := range routes {
-		class, ok := appRouteTrust[route]
-		if !ok {
-			t.Errorf("%s is an app write route with no trust class; add it to appRouteTrust as resolves or exempt", route)
+	for _, row := range rows {
+		switch row.Trust {
+		case trustResolves, trustExempt:
+			if row.TrustWhy == "" {
+				t.Errorf("%v %s is %q with no TrustWhy", row.Methods, row.Pattern, row.Trust)
+			}
+		case trustNone:
+		default:
+			t.Errorf("%v %s has no Trust class; set trustResolves, trustExempt or trustNone", row.Methods, row.Pattern)
+		}
+	}
+}
+
+// A route that touches apps, functions, sites or MCP may not call itself unrelated.
+func TestTrustNoneIsNeverUsedOnAWorkloadRoute(t *testing.T) {
+	workload := []string{"/apps", "app-templates", "app-network", "registry-credentials", "/projects/{projectId}/functions", "/functions/v1", "/sites", "site-builds", "/mcp"}
+	for _, row := range writeRows() {
+		if row.Trust != trustNone {
 			continue
 		}
-		if class.reason == "" || (class.class != trustResolves && class.class != trustExempt) {
-			t.Errorf("%s: class %q needs resolves or exempt and a reason", route, class.class)
+		for _, part := range workload {
+			if strings.Contains(row.Pattern, part) {
+				t.Errorf("%v %s is marked trustNone but names %q", row.Methods, row.Pattern, part)
+			}
 		}
 	}
-	for route := range appRouteTrust {
-		if !routes[route] {
-			t.Errorf("appRouteTrust names %s, which is no longer a route", route)
+}
+
+// Resuming and unsuspending are never refused for trust (EXC-899 plan 15.10).
+func TestResumeAndUnsuspendAreExempt(t *testing.T) {
+	seen := 0
+	for _, row := range writeRows() {
+		if strings.HasSuffix(row.Pattern, "/resume") || strings.HasSuffix(row.Pattern, "/unsuspend") {
+			seen++
+			if row.Trust != trustExempt {
+				t.Errorf("%s is %q; resume and unsuspend must be exempt", row.Pattern, row.Trust)
+			}
 		}
+	}
+	if seen < 3 {
+		t.Errorf("found %d resume/unsuspend routes, want at least 3", seen)
 	}
 }

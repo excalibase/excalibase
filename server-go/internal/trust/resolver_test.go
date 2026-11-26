@@ -31,10 +31,12 @@ type fakeInstances struct {
 	byProject map[string]*domain.DatabaseInstance
 	err       error
 	lookups   int
+	seenCtx   context.Context
 }
 
-func (f *fakeInstances) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
+func (f *fakeInstances) FindByProjectIDContext(ctx context.Context, projectID string) (*domain.DatabaseInstance, error) {
 	f.lookups++
+	f.seenCtx = ctx
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -112,13 +114,43 @@ func TestFlagOnOwnerStates(t *testing.T) {
 		{"full-user", Full},
 		{"limited-user", Limited},
 		{"no-row-user", Limited},
-		{"garbage-user", Limited},
 	}
 	for _, tc := range cases {
 		state, err := r.ForOwner(context.Background(), tc.owner)
 		if state != tc.want || err != nil {
 			t.Errorf("%s: got %s %v, want %s", tc.owner, state, err, tc.want)
 		}
+	}
+}
+
+// A stored state nobody wrote through Save is corruption: limited, and the caller is told.
+func TestAnUnknownStoredStateIsLimitedWithAnError(t *testing.T) {
+	f := newFixture()
+	f.store.records["garbage-user"] = &Record{UserID: "garbage-user", State: State("bogus")}
+	state, err := f.resolver(on()).ForOwner(context.Background(), "garbage-user")
+	if state != Limited || !errors.Is(err, ErrInvalidRecord) {
+		t.Errorf("got %s %v, want limited and ErrInvalidRecord", state, err)
+	}
+}
+
+// Wrapped causes stay reachable, so a caller can tell a timeout from a missing row.
+func TestResolverErrorsKeepTheirCause(t *testing.T) {
+	cause := errors.New("db down")
+	f := newFixture()
+	f.store.err = cause
+	if _, err := f.resolver(on()).ForOwner(context.Background(), "u"); !errors.Is(err, cause) {
+		t.Errorf("owner read lost its cause: %v", err)
+	}
+	f = newFixture()
+	f.instances.err = cause
+	if _, err := f.resolver(on()).ForProject(context.Background(), unknownProject); !errors.Is(err, cause) || !errors.Is(err, ErrUnresolved) {
+		t.Errorf("project lookup lost a cause: %v", err)
+	}
+	f = newFixture()
+	f.project(unknownProject, "org-x", "u")
+	f.orgs.err = cause
+	if _, err := f.resolver(on()).ForProject(context.Background(), unknownProject); !errors.Is(err, cause) || !errors.Is(err, ErrUnresolved) {
+		t.Errorf("org lookup lost a cause: %v", err)
 	}
 }
 
@@ -202,5 +234,20 @@ func TestRecordValidate(t *testing.T) {
 		if err := rec.Validate(); !errors.Is(err, ErrInvalidRecord) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+type ctxKey struct{}
+
+// A cancelled request must reach the lookup, not be swapped for a background context.
+func TestForProjectPassesTheCallersContextToTheLookup(t *testing.T) {
+	f := newFixture()
+	f.project(unknownProject, "org-x", "u")
+	ctx := context.WithValue(context.Background(), ctxKey{}, "caller")
+	if _, err := f.resolver(on()).ForProject(ctx, unknownProject); err != nil {
+		t.Fatal(err)
+	}
+	if f.instances.seenCtx == nil || f.instances.seenCtx.Value(ctxKey{}) != "caller" {
+		t.Error("the project lookup did not get the caller's context")
 	}
 }

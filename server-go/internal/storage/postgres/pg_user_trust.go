@@ -88,3 +88,29 @@ func (t trustStore) Find(ctx context.Context, userID string) (*trust.Record, err
 func (t trustStore) Save(ctx context.Context, record trust.Record, actor string) error {
 	return t.s.SaveUserTrust(ctx, record, actor)
 }
+
+// LatestBackfill returns the latest finished grandfather backfill, or nil.
+func (s *Store) LatestBackfill(ctx context.Context) (*trust.BackfillRun, error) {
+	var run trust.BackfillRun
+	err := s.db.QueryRowContext(ctx,
+		`SELECT finished_at, cutoff FROM trust_backfill_runs ORDER BY id DESC LIMIT 1`).Scan(&run.FinishedAt, &run.Cutoff)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find trust backfill: %w", err)
+	}
+	return &run, nil
+}
+
+// RecordBackfill is written by the backfill when it finishes.
+func (s *Store) RecordBackfill(ctx context.Context, run trust.BackfillRun) error {
+	if run.FinishedAt.IsZero() || run.Cutoff.IsZero() {
+		return fmt.Errorf("%w: a backfill marker needs both times", trust.ErrInvalidRecord)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO trust_backfill_runs (finished_at, cutoff) VALUES ($1, $2)`, run.FinishedAt, run.Cutoff); err != nil {
+		return fmt.Errorf("record trust backfill: %w", err)
+	}
+	return nil
+}

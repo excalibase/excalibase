@@ -13,9 +13,9 @@ import (
 // returned beside it is Limited: with the feature on, anything unknown is limited.
 var ErrUnresolved = errors.New("trust: owner could not be resolved")
 
-// ProjectInstances finds a project's instance (storage.InstanceStore has this method).
+// ProjectInstances finds a project's instance, honouring the caller's context.
 type ProjectInstances interface {
-	FindByProjectID(projectID string) (*domain.DatabaseInstance, error)
+	FindByProjectIDContext(ctx context.Context, projectID string) (*domain.DatabaseInstance, error)
 }
 
 // OrgFinder finds an org by id.
@@ -55,10 +55,17 @@ func (r *Resolver) ForOwner(ctx context.Context, ownerID string) (State, error) 
 	if err != nil {
 		return Limited, fmt.Errorf("trust: read decision: %w", err)
 	}
-	if record == nil || record.State != Full {
+	if record == nil {
 		return Limited, nil
 	}
-	return Full, nil
+	switch record.State {
+	case Full:
+		return Full, nil
+	case Limited:
+		return Limited, nil
+	default:
+		return Limited, fmt.Errorf("%w: stored state %q for %s", ErrInvalidRecord, record.State, ownerID)
+	}
 }
 
 // ForProject is the trust of the owner of the project's org.
@@ -66,16 +73,16 @@ func (r *Resolver) ForProject(ctx context.Context, projectID string) (State, err
 	if !r.enabled(ctx) {
 		return Full, nil
 	}
-	instance, err := r.instances.FindByProjectID(projectID)
+	instance, err := r.instances.FindByProjectIDContext(ctx, projectID)
 	if err != nil {
-		return Limited, fmt.Errorf("%w: project: %v", ErrUnresolved, err)
+		return Limited, fmt.Errorf("%w: project: %w", ErrUnresolved, err)
 	}
 	if instance == nil || instance.OrgID == "" {
 		return Limited, fmt.Errorf("%w: project has no organisation", ErrUnresolved)
 	}
 	org, err := r.orgs.FindOrgByID(ctx, instance.OrgID)
 	if err != nil {
-		return Limited, fmt.Errorf("%w: organisation: %v", ErrUnresolved, err)
+		return Limited, fmt.Errorf("%w: organisation: %w", ErrUnresolved, err)
 	}
 	if org == nil {
 		return Limited, fmt.Errorf("%w: organisation missing", ErrUnresolved)

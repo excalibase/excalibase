@@ -70,6 +70,8 @@ func loadTrust() TrustConfig {
 		when, err := parseTrustTime(raw)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("TRUST_GRANDFATHER_BEFORE=%q is not a date (2026-11-01) or an RFC 3339 time", raw))
+		} else if when.After(time.Now()) {
+			errs = append(errs, fmt.Sprintf("TRUST_GRANDFATHER_BEFORE=%q is in the future; accounts created after the backfill ran would be made full", raw))
 		} else {
 			cfg.GrandfatherBefore = when
 		}

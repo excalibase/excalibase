@@ -6,6 +6,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/trust"
 )
@@ -86,7 +87,9 @@ func TestUserTrustRefusesWhatIsNotARecord(t *testing.T) {
 	}
 }
 
-func TestUserTrustGoesWithTheUser(t *testing.T) {
+// The decision goes with the account, the audit trail does not: it is the
+// evidence of who was limited or verified, and of who changed it.
+func TestUserTrustGoesWithTheUserButTheAuditStays(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	if err := store.CreateUser(ctx, userNamed("u3", "ursula")); err != nil {
@@ -101,8 +104,46 @@ func TestUserTrustGoesWithTheUser(t *testing.T) {
 	if got, _ := store.FindUserTrust(ctx, "u3"); got != nil {
 		t.Errorf("trust outlived its user: %+v", got)
 	}
-	if rows := auditRows(t, store, "u3"); len(rows) != 0 {
-		t.Errorf("audit outlived its user: %v", rows)
+	if rows := auditRows(t, store, "u3"); len(rows) != 1 {
+		t.Errorf("audit rows after the user was deleted: %v, want the one entry kept", rows)
+	}
+}
+
+func TestTrustAuditRefusesRowsThatAreNotDecisions(t *testing.T) {
+	store := testStore(t)
+	insert := `INSERT INTO trust_audit (user_id, from_state, to_state, method, reason, actor) VALUES ($1, $2, $3, $4, 'ok', $5)`
+	cases := map[string][]any{
+		"bad to_state":   {"x", "", "maybe", "github", "system"},
+		"bad from_state": {"x", "maybe", "full", "github", "system"},
+		"bad method":     {"x", "", "full", "bribe", "system"},
+		"empty actor":    {"x", "", "full", "github", ""},
+	}
+	for name, args := range cases {
+		if _, err := store.db.Exec(insert, args...); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if _, err := store.db.Exec(insert, "gone-user", "", "full", "github", "system"); err != nil {
+		t.Errorf("a decision for a user with no row any more was refused: %v", err)
+	}
+}
+
+func TestTrustBackfillMarker(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	if got, err := store.LatestBackfill(ctx); err != nil || got != nil {
+		t.Fatalf("before any backfill: %v %v", got, err)
+	}
+	cutoff := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	if err := store.RecordBackfill(ctx, trust.BackfillRun{FinishedAt: time.Now(), Cutoff: cutoff}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.LatestBackfill(ctx)
+	if err != nil || got == nil || !got.Cutoff.Equal(cutoff) || got.FinishedAt.IsZero() {
+		t.Errorf("after: %+v %v", got, err)
+	}
+	if err := store.RecordBackfill(ctx, trust.BackfillRun{}); err == nil {
+		t.Error("a marker with no times was recorded")
 	}
 }
 

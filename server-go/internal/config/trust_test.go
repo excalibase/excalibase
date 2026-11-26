@@ -45,13 +45,13 @@ func TestTrustEnvOverrides(t *testing.T) {
 	t.Setenv("TRUST_GH_MIN_AGE_DAYS", "120")
 	t.Setenv("EDGE_LIMITED_MBPS", "2")
 	t.Setenv("EDGE_LIMITED_ALLOW_WS", "true")
-	t.Setenv("TRUST_GRANDFATHER_BEFORE", "2026-12-01")
+	t.Setenv("TRUST_GRANDFATHER_BEFORE", "2026-10-15")
 	t.Setenv("TRUST_GH_RECHECK_DAYS", "7")
 	got := Load().Trust
 	if got.GitHubMinAgeDays != 120 || got.EdgeLimitedMbps != 2 || !got.EdgeLimitedAllowWS || got.GitHubRecheckDays != 7 {
 		t.Errorf("overrides not read: %+v", got)
 	}
-	if !got.GrandfatherBefore.Equal(time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)) {
+	if !got.GrandfatherBefore.Equal(time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("grandfather date: %v", got.GrandfatherBefore)
 	}
 }
@@ -69,6 +69,7 @@ func TestTrustRejectsBadValues(t *testing.T) {
 		"negative recheck":  {"TRUST_GH_RECHECK_DAYS", "-1"},
 		"negative cooldown": {"TRUST_CLAIM_COOLDOWN_DAYS", "-3"},
 		"bad date":          {"TRUST_GRANDFATHER_BEFORE", "yesterday"},
+		"cutoff in future":  {"TRUST_GRANDFATHER_BEFORE", "2999-01-01"},
 		"bad bool":          {"EDGE_LIMITED_ALLOW_WS", "maybe"},
 		"zero retry":        {"TRUST_VERIFY_RETRY_MINUTES", "0"},
 	}
