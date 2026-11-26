@@ -555,7 +555,7 @@ jobs:
       - run: go test ./internal/... -race -cover -timeout 5m
 
   frontend-lint:
-    name: Frontend Type Check
+    name: Frontend Lint and Type Check
     runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
