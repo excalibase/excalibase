@@ -3,8 +3,8 @@
 package k8s
 
 import (
-	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"maps"
 	"net"
 	"os"

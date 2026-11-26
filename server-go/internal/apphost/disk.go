@@ -49,6 +49,7 @@ var (
 	systemDirectories = []string{
 		"/bin", "/boot", "/etc", "/lib", "/lib32", "/lib64", "/run", "/sbin", "/usr", "/var/run", "/tmp", "/.excalibase",
 	}
+	// /tmp is the app's scratch and /.excalibase the platform's probe; neither is a disk.
 	// /var itself is the image's, but /var/lib/<service> is the usual data directory.
 	varDirectory = "/var"
 	// kernelFilesystems are the runtime's, at any depth.

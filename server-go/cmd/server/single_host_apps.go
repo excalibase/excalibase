@@ -150,7 +150,7 @@ func appRenderOptions(cfg config.AppConfig) k8s.AppRenderOptions {
 	}
 	return k8s.AppRenderOptions{
 		RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Edge: edgePeer(cfg), Route: appRoute(cfg),
-		DiskStorageClass: cfg.TenantStorageClass,
+		DiskStorageClass: cfg.TenantStorageClass, TmpPercent: cfg.AppTmpPercent,
 	}
 }
 

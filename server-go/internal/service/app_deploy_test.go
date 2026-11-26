@@ -76,7 +76,7 @@ func (p fixedPlan) ProjectPlanTier(context.Context, string) (domain.TierType, er
 	return p.tier, p.err
 }
 
-var testDeployRender = k8s.AppRenderOptions{RuntimeClass: "gvisor", Route: k8s.AppRouteOptions{
+var testDeployRender = k8s.AppRenderOptions{TmpPercent: 25, RuntimeClass: "gvisor", Route: k8s.AppRouteOptions{
 	Domain: "apps.example.com", IngressClass: "haproxy", Issuer: "apps-acme", IngressFromNamespace: "haproxy-controller",
 }}
 
@@ -357,7 +357,7 @@ func TestNewAppDeployService_Defaults(t *testing.T) {
 	kube := k8s.NewMockClient()
 	instances := fakestore.NewInstances()
 
-	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, k8s.AppRenderOptions{RuntimeClass: "gvisor"})
+	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, k8s.AppRenderOptions{TmpPercent: 25, RuntimeClass: "gvisor"})
 
 	if svc.timeout != defaultAppRolloutTimeout {
 		t.Errorf("timeout: got %s want %s", svc.timeout, defaultAppRolloutTimeout)

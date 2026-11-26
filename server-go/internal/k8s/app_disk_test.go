@@ -87,12 +87,12 @@ func TestRenderAppWorkloadMountsTheDiskAndRecreates(t *testing.T) {
 		t.Errorf("strategy = %+v, want Recreate: two pods must never hold one disk", spec.Strategy)
 	}
 	pod := spec.Template.Spec
-	if len(pod.Volumes) != 1 || pod.Volumes[0].PersistentVolumeClaim == nil ||
+	if len(pod.Volumes) != 2 || pod.Volumes[0].PersistentVolumeClaim == nil ||
 		pod.Volumes[0].PersistentVolumeClaim.ClaimName != workload.Disk.Name {
 		t.Fatalf("volumes = %+v, want the app's claim", pod.Volumes)
 	}
 	mounts := pod.Containers[0].VolumeMounts
-	if len(mounts) != 1 || mounts[0].Name != pod.Volumes[0].Name || mounts[0].MountPath != "/data" || mounts[0].ReadOnly {
+	if len(mounts) != 2 || mounts[0].Name != pod.Volumes[0].Name || mounts[0].MountPath != "/data" || mounts[0].ReadOnly {
 		t.Fatalf("mounts = %+v, want the disk read-write at /data", mounts)
 	}
 }
