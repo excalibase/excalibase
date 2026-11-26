@@ -582,11 +582,15 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [changes, frontend-lint]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+      packages: read
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
@@ -595,6 +599,8 @@ jobs:
       - run: npm ci
       - name: Storage origin in the page policy
         run: sh tests/storage-origin.test.sh
+      - name: Studio is noindex
+        run: sh tests/noindex.test.sh
       # Unit tests only (vitest, no backend); the mocked Playwright suite runs in
       # frontend-e2e below.
       #
