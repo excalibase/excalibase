@@ -138,6 +138,23 @@ func TestSecretsStore_DeleteMissingIdempotent(t *testing.T) {
 	}
 }
 
+// A secret saved before a name became reserved must stay deletable.
+func TestSecretsStore_DeleteRemovesNowReservedKey(t *testing.T) {
+	v := newFakeVault()
+	v.data[NewSecretsStore(v).vaultPath("proj_p1")] = map[string]string{"EXCALIBASE_FUNCTIONS_URL": "old", "KEEP": "k"}
+	s := NewSecretsStore(v)
+	if err := s.Delete("proj_p1", "EXCALIBASE_FUNCTIONS_URL"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	got, _ := s.GetAll("proj_p1")
+	if _, ok := got["EXCALIBASE_FUNCTIONS_URL"]; ok {
+		t.Error("reserved key should be gone")
+	}
+	if got["KEEP"] != "k" {
+		t.Errorf("KEEP should remain: %q", got["KEEP"])
+	}
+}
+
 func TestSecretsStore_RejectsInvalidKey(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
