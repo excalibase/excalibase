@@ -1,12 +1,32 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "import"],
+  "plugins": [
+    "react",
+    "typescript",
+    "import"
+  ],
   "categories": {
     "correctness": "error",
     "suspicious": "warn"
   },
   "rules": {
-    "react/react-in-jsx-scope": "off"
+    "react/react-in-jsx-scope": "off",
+    "no-unused-vars": [
+      "error",
+      {
+        "ignoreRestSiblings": true
+      }
+    ],
+    "react/refs": "warn",
+    "react/set-state-in-effect": "warn",
+    "react/use-memo": "warn",
+    "react/purity": "warn",
+    "react/incompatible-library": "warn"
   },
-  "ignorePatterns": ["dist", "build", "coverage", "node_modules"]
+  "ignorePatterns": [
+    "dist",
+    "build",
+    "coverage",
+    "node_modules"
+  ]
 }

@@ -42,6 +42,6 @@ export const useRemoveCorsOrigin = (projectId: string) =>
 
 // The wildcard is only ever replaced as a whole list.
 export const useClearCorsWildcard = (projectId: string) =>
-  useCorsChange(projectId, async (_: void) =>
+  useCorsChange<void>(projectId, async () =>
     (await api.put<ProjectCors>(`/projects/${projectId}/cors`, { allowedOrigins: [], allowWildcard: false })).data,
   );

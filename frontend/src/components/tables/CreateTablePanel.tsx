@@ -107,7 +107,7 @@ export function CreateTablePanel({
       await createTable.mutateAsync({
         name: tableName,
         // Strip the client-only _key before sending to the API.
-        columns: newCols.map(({ _key: _, ...c }) => ({ ...c, name: c.name.trim(), default: undefined })),
+        columns: newCols.map(({ _key, ...c }) => ({ ...c, name: c.name.trim(), default: undefined })),
       });
     } catch (err) {
       setCreateError(serverErrorMessage(err, 'The table was not created'));
