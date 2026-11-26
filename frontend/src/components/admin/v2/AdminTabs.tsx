@@ -4,7 +4,15 @@ import { cn } from '../../../utils/cn';
 export interface AdminTab {
   id: string;
   label: string;
+  // A short count or state beside the label, as in "Abuse 98".
+  badge?: { text: string; tone: 'neutral' | 'bad' | 'warn' };
 }
+
+const BADGE_TONE = {
+  neutral: 'bg-bg-secondary text-text-secondary',
+  bad: 'bg-red-500/10 text-red-400',
+  warn: 'bg-amber-500/10 text-amber-400',
+} as const;
 
 const ARROW_STEPS: Record<string, number> = { ArrowRight: 1, ArrowLeft: -1 };
 
@@ -40,10 +48,12 @@ export function AdminTabs({ tabs, active, onChange }: AdminTabsProps) {
           tabIndex={tab.id === active ? 0 : -1}
           onClick={() => onChange(tab.id)}
           onKeyDown={(event) => move(event, index)}
-          className={cn('px-4 min-h-10 text-sm font-medium border-b-2 -mb-px',
+          className={cn('px-4 min-h-10 text-sm font-medium border-b-2 -mb-px whitespace-nowrap',
             tab.id === active ? 'border-purple-500 text-text-primary' : 'border-transparent text-text-secondary hover:text-text-primary')}
         >
           {tab.label}
+          {tab.badge && ' '}
+          {tab.badge && <span className={cn('ml-2 rounded-full px-1.5 py-0.5 text-xs tabular-nums', BADGE_TONE[tab.badge.tone])}>{tab.badge.text}</span>}
         </button>
       ))}
     </div>

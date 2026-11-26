@@ -31,6 +31,8 @@ export type Feature =
   | 'appgitbuilds'
   | 's3'
   | 'onetimecredentials'
+  // Analytics tabs in the admin console (EXC-898); staff only, off until turned on.
+  | 'adminanalytics'
   // The cloud-console layout of Studio (EXC-762); off until the owner turns it on.
   | 'studio_v2';
 

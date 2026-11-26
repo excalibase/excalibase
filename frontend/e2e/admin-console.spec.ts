@@ -18,7 +18,7 @@ async function stubConsole(page: Page) {
   const posts: { url: string; body: unknown }[] = [];
 
   await page.route('**/api/capacity', (route) => route.fulfill(json({ usableCpuMilli: 4000, requestedCpuMilli: 1000, usableMemBytes: 8e9, requestedMemBytes: 2e9, headroomPercent: 20, projects: { total: 1, byTier: {} }, tiers: {} })));
-  await page.route('**/api/admin/projects', (route) => route.fulfill(json([{ projectId: 'p1', projectName: 'shop', orgId: 'o1', orgName: 'Acme', ownerEmail: 'dev@acme.test', ownerStatus: 'active', status: 'ACTIVE', tier: 'free' }])));
+  await page.route('**/api/admin/projects?**', (route) => route.fulfill(json({ items: [{ projectId: 'p1', projectName: 'shop', orgId: 'o1', orgName: 'Acme', ownerEmail: 'dev@acme.test', ownerStatus: 'active', status: 'ACTIVE', tier: 'free' }], total: 1 })));
   await page.route('**/api/admin/storage', (route) => route.fulfill(json({ enabled: false })));
   await page.route('**/api/admin/tiers/**', (route) => route.fulfill(json([])));
   await page.route('**/api/admin/sso-providers**', (route) => route.fulfill(json([])));
@@ -53,10 +53,9 @@ test.describe('admin console', () => {
 
     await expect(page.getByText('12 sign-ups in the last 24 h')).toBeVisible();
 
+    await page.getByRole('tab', { name: 'Users' }).click();
     const users = page.getByTestId('users-table');
-    await expect(page.getByText('bad@mailinator.test', { exact: true }).first()).toBeVisible();
-    await users.getByLabel('Show suspended').check();
-    await users.getByPlaceholder(/Search email, domain or IP/).fill('mailinator');
+    await users.getByRole('searchbox', { name: 'Filter users' }).fill('mailinator');
 
     const row = users.getByRole('row', { name: /bad@mailinator.test/ });
     await expect(row.getByText('Suspended')).toBeVisible();

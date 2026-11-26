@@ -96,13 +96,6 @@ export const useAdminProjectsPage = (query: AdminProjectQuery) =>
     staleTime: 10_000,
   });
 
-export const useAdminProjects = () =>
-  useQuery({
-    queryKey: ['admin', 'projects'],
-    queryFn: async () => (await api.get<AdminProject[]>('/admin/projects')).data,
-    staleTime: 15_000,
-  });
-
 export const useClusterCapacity = () =>
   useQuery({
     queryKey: ['admin', 'capacity'],
