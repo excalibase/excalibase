@@ -576,6 +576,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npx tsc -b --noEmit
+      - run: npm run lint
 
   frontend-test:
     name: Frontend Unit (vitest)
@@ -601,6 +602,8 @@ jobs:
         run: sh tests/storage-origin.test.sh
       - name: Studio is noindex
         run: sh tests/noindex.test.sh
+      - name: Lint runs in CI and the tree passes it
+        run: sh tests/lint-ci.test.sh
       # Unit tests only (vitest, no backend); the mocked Playwright suite runs in
       # frontend-e2e below.
       #
