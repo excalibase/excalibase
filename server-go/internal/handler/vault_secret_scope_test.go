@@ -350,3 +350,19 @@ func TestProjectIDForSecretPrefixTreatsABareProjectAsThatProject(t *testing.T) {
 		}
 	}
 }
+
+// EXC-832: a paused project answers 423 to a service, but a human with no access to it gets the
+// same 404 as an unknown project, so the status never confirms the project exists.
+func TestVaultSecretReadOfAPausedProjectIsNotFoundToAStranger(t *testing.T) {
+	h := vaultScopeHandler(t)
+	h.instances.(*fakestore.Instances).Items[vaultProjectA].Status = "PAUSED"
+
+	code, body := vaultGet(t, h, vaultSecretURL, operatorUser(), sessionToken())
+	if code != http.StatusNotFound || strings.Contains(body, "paused") {
+		t.Fatalf("got %d (%s), want 404 that does not say paused", code, body)
+	}
+	member := &domain.User{ID: vaultMemberA, Role: "platform_operator", Active: true}
+	if code, body := vaultGet(t, h, vaultSecretURL, member, sessionToken()); code != http.StatusLocked {
+		t.Fatalf("a member: got %d (%s), want 423", code, body)
+	}
+}
