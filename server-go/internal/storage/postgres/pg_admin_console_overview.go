@@ -15,17 +15,21 @@ const (
 	signupDomainCt = 10
 )
 
-// projectBriefSQL selects a project with its owner and latest usage; the
-// trailing clause adds the filter and order each card needs.
-const projectBriefSQL = `
-	WITH usage AS (` + latestMetricsSQL + `)
-	SELECT di.project_id, COALESCE(di.project_name, ''), di.org_id, COALESCE(u.email, ''), ` + statusExpr + `,
-	       di.status, COALESCE(di.failure_reason, ''), COALESCE(usage.cpu_usage_cores, 0), COALESCE(usage.memory_usage_mb, 0)
+// projectBriefColumns and projectBriefFrom are a project with its owner and
+// latest usage; the queries below add the filter and order each card needs.
+const (
+	projectBriefColumns = `di.project_id, COALESCE(di.project_name, ''), di.org_id, COALESCE(u.email, ''), ` + statusExpr + `,
+	       di.status, COALESCE(di.failure_reason, ''), COALESCE(usage.cpu_usage_cores, 0), COALESCE(usage.memory_usage_mb, 0)`
+	projectBriefFrom = `
 	FROM database_instances di
 	JOIN orgs o ON o.id = di.org_id
 	JOIN users u ON u.id = o.owner_id
 	LEFT JOIN abuse_suspensions s ON s.user_id = u.id
 	LEFT JOIN usage ON usage.project_id = di.project_id `
+	projectBriefSQL = `
+	WITH usage AS (` + latestMetricsSQL + `)
+	SELECT ` + projectBriefColumns + projectBriefFrom
+)
 
 // Each card's query is a constant, composed at compile time from the shared
 // select and its own filter and order.

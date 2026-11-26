@@ -136,6 +136,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 	return &handlerDeps{
 		provHandler:           handler.NewProvisioningHandler(provSvc, nil),
 		adminConsoleHandler:   handler.NewAdminConsoleHandler(matrixConsole{}, matrixConsole{}),
+		adminAttentionHandler: handler.NewAdminAttentionHandler(adminconsole.NewAttention(matrixAttention{})),
 		adminAnalyticsHandler: handler.NewAdminAnalyticsHandler(matrixAnalytics{}, features.NewStatic(features.All()...)),
 		metricsHandler:        handler.NewMetricsHandler(service.NewMetricsService(instances, mock, dir)),
 		backupHandler:         handler.NewBackupHandler(service.NewBackupService(instances, mock, dir, nil)),
@@ -402,6 +403,8 @@ var permissionRoutes = []permissionRoute{
 	{group: "tier config update", method: http.MethodPut, path: "/api/admin/tiers/STANDARD", unrestrictedOnly: true},
 	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a", unrestrictedOnly: true},
 	{group: "admin console users", method: http.MethodGet, path: "/api/admin/console/users", unrestrictedOnly: true},
+	{group: "admin attention suspensions", method: http.MethodGet, path: "/api/admin/attention/suspensions", unrestrictedOnly: true},
+	{group: "admin attention failed projects", method: http.MethodGet, path: "/api/admin/attention/failed-projects", unrestrictedOnly: true},
 	{group: "admin analytics users", method: http.MethodGet, path: "/api/admin/analytics/users", unrestrictedOnly: true},
 	{group: "admin analytics abuse", method: http.MethodGet, path: "/api/admin/analytics/abuse", unrestrictedOnly: true},
 	{group: "admin analytics traffic", method: http.MethodGet, path: "/api/admin/analytics/traffic", unrestrictedOnly: true},
@@ -501,6 +504,16 @@ func (matrixConsole) Suspend(context.Context, adminconsole.Actor, string, adminc
 }
 func (matrixConsole) Unsuspend(context.Context, adminconsole.Actor, string, string) (*adminconsole.Result, error) {
 	return &adminconsole.Result{}, nil
+}
+
+// matrixAttention answers the paged lists from nothing, like matrixConsole.
+type matrixAttention struct{}
+
+func (matrixAttention) ListSuspended(context.Context, adminconsole.AttentionQuery) (adminconsole.CursorPage[adminconsole.SuspendedBrief], error) {
+	return adminconsole.CursorPage[adminconsole.SuspendedBrief]{Items: []adminconsole.SuspendedBrief{}}, nil
+}
+func (matrixAttention) ListFailedProjects(context.Context, adminconsole.AttentionQuery) (adminconsole.CursorPage[adminconsole.ProjectBrief], error) {
+	return adminconsole.CursorPage[adminconsole.ProjectBrief]{Items: []adminconsole.ProjectBrief{}}, nil
 }
 
 // matrixAnalytics answers the analytics routes from nothing, like matrixConsole.
