@@ -21,7 +21,7 @@ import (
 // from the same app runtime the deploy service uses, and a suspension stops
 // apps through the app lifecycle, never by reaching around it.
 func buildAdminConsole(cfg config.AppConfig, sqlStore storage.PlatformStore, runtime service.AppRuntime, apps *service.AppDeployService, mail email.Sender, backups service.BackupStorageSource) (*handler.AdminConsoleHandler, *adminconsole.SuspensionService) {
-	queries := postgres.NewAdminConsole(sqlStore.DB())
+	queries := postgres.NewAdminConsole(sqlStore.DB()).WithNetSamples(netMeterOn(cfg))
 	console := adminconsole.NewConsole(queries, apphost.NewPostgresAppStore(sqlStore.DB()), runtime)
 	console.SetAudit(sqlStore)
 	suspensions := adminconsole.NewSuspensionService(queries, apps, sqlStore)

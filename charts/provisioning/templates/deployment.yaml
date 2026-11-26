@@ -41,6 +41,14 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+            {{- if .Values.netmeter.enabled }}
+            - name: FEATURE_NETMETER
+              value: "true"
+            - name: NETMETER_KUBELET_CA_FILE
+              value: /etc/excalibase/kubelet-ca/ca.crt
+            - name: NETMETER_KUBELET_PORT
+              value: {{ .Values.netmeter.kubeletPort | quote }}
+            {{- end }}
             - name: PUBLIC_PORT
               value: {{ .Values.service.publicPort | quote }}
             - name: TRUSTED_PROXY_CIDRS
@@ -89,6 +97,11 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.netmeter.enabled }}
+            - name: kubelet-ca
+              mountPath: /etc/excalibase/kubelet-ca
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           livenessProbe:
@@ -109,3 +122,8 @@ spec:
             claimName: provisioning-data
         - name: tmp
           emptyDir: {}
+        {{- if .Values.netmeter.enabled }}
+        - name: kubelet-ca
+          configMap:
+            name: {{ .Values.netmeter.kubeletCAConfigMap }}
+        {{- end }}

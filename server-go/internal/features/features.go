@@ -156,6 +156,11 @@ const (
 	// automatically" instead of being asked to retry (EXC-873). Off: only the
 	// admin purge route and auto-pause's own sweep retry, as before.
 	SelfHeal Feature = "selfheal"
+	// NetMeter measures each customer app's network rx/tx once a minute (kubelet
+	// counters on Kubernetes, engine counters on a single host) into per-app
+	// history, the input of behaviour-based abuse review (EXC-844). It only
+	// measures; it never stops anything. Off: nothing is read or stored.
+	NetMeter Feature = "netmeter"
 	// StudioV2 is the cloud-console layout of Studio: new top bar, navigation
 	// and shared tables. Frontend only; the server just reports it (EXC-762).
 	StudioV2 Feature = "studio_v2"
@@ -163,7 +168,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails, SelfHeal}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails, SelfHeal, NetMeter}
 }
 
 type Flags interface {

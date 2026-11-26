@@ -170,6 +170,9 @@ jobs:
       - name: Chart lets provisioning check a volume can grow
         run: sh charts/provisioning/tests/disk-resize-rbac.sh
 
+      - name: Chart grants network metering only while it is on
+        run: sh charts/provisioning/tests/netmeter-rbac.sh
+
       - name: Chart lets provisioning read the sandbox RuntimeClass
         run: sh charts/provisioning/tests/runtimeclass-rbac.sh
 

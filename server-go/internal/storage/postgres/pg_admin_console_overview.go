@@ -127,9 +127,14 @@ func (a *AdminConsole) signups(ctx context.Context, since time.Time) (int, []adm
 }
 
 // topEgress ranks projects by the transmit rate of their containers' newest
-// sample. Only a single host records it; on a cluster the table is empty.
+// sample. Only a single host with host monitoring records container_metrics;
+// with the net meter on, app_net_samples answers instead, on a cluster too.
 func (a *AdminConsole) topEgress(ctx context.Context) ([]adminconsole.ProjectBrief, error) {
-	rows, err := a.db.QueryContext(ctx, topEgressSQL, topProjects)
+	query := topEgressSQL
+	if a.netSamples {
+		query = topEgressNetSamplesSQL
+	}
+	rows, err := a.db.QueryContext(ctx, query, topProjects)
 	if err != nil {
 		return nil, fmt.Errorf("top egress: %w", err)
 	}
@@ -154,6 +159,27 @@ const topEgressSQL = `
 			ORDER BY container_name, timestamp DESC
 		), egress AS (
 			SELECT project_id, SUM(network_tx_bytes_per_sec) AS tx FROM newest GROUP BY project_id
+		)
+		SELECT di.project_id, COALESCE(di.project_name, ''), di.org_id, COALESCE(u.email, ''), ` + statusExpr + `,
+		       di.status, egress.tx
+		FROM egress
+		JOIN database_instances di ON di.project_id = egress.project_id
+		JOIN orgs o ON o.id = di.org_id
+		JOIN users u ON u.id = o.owner_id
+		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
+		WHERE egress.tx > 0
+		ORDER BY egress.tx DESC LIMIT $1`
+
+// topEgressNetSamplesSQL is the same card from the net meter: each app's newest
+// live sample, added up per project.
+const topEgressNetSamplesSQL = `
+		WITH newest AS (
+			SELECT DISTINCT ON (project_id, app_id) project_id, tx_bps
+			FROM app_net_samples
+			WHERE ts > NOW() - INTERVAL '` + metricsWindow + `'
+			ORDER BY project_id, app_id, ts DESC
+		), egress AS (
+			SELECT project_id, SUM(tx_bps) AS tx FROM newest GROUP BY project_id
 		)
 		SELECT di.project_id, COALESCE(di.project_name, ''), di.org_id, COALESCE(u.email, ''), ` + statusExpr + `,
 		       di.status, egress.tx

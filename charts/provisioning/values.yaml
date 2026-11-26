@@ -125,3 +125,14 @@ serviceAccount:
 pdb:
   enabled: true
   minAvailable: 1
+
+# Per-app network metering (EXC-844): provisioning reads each node's kubelet
+# summary (GET https://<node>:10250/stats/summary) with its service account.
+# Off by default. On: the role may get nodes/stats and read nodes, the pod
+# mounts the CA that signed the kubelet's serving certificate from the
+# ConfigMap below (created by the node install, never a hostPath), and a
+# Cilium cluster gets a policy for the kubelet port.
+netmeter:
+  enabled: false
+  kubeletCAConfigMap: kubelet-serving-ca
+  kubeletPort: 10250

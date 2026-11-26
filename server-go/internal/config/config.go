@@ -140,6 +140,8 @@ type AppConfig struct {
 	RequestMetricsTargets []string
 	// HostMetrics is where single-host monitoring reads (EXC-670).
 	HostMetrics HostMetrics
+	// NetMeter is where per-app network metering reads the kubelet (EXC-844).
+	NetMeter NetMeter
 	// HostLogs is a single host's stored log search (EXC-672).
 	HostLogs HostLogs
 
@@ -570,6 +572,7 @@ func load() AppConfig {
 		LogForwarderToken:              os.Getenv("LOG_FORWARDER_TOKEN"),
 		RequestMetricsTargets:          loadRequestMetricsTargets(),
 		HostMetrics:                    loadHostMetrics(),
+		NetMeter:                       loadNetMeter(),
 		HostLogs:                       loadHostLogs(),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),

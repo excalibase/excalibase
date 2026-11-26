@@ -196,6 +196,8 @@ var darkWork = map[features.Feature]string{
 	features.SuspensionEmails: "TestSuspendSendsNothingWhileTheFlagIsOff",
 	// Off, no retry sweep, no extra alert and the old "retry to continue" text (cmd/server, internal/service).
 	features.SelfHeal: "TestSelfHeal_WantedOnlyWithItsFlag",
+	// Off, nothing is read from the kubelet or the engine and nothing is stored (cmd/server).
+	features.NetMeter: "TestNetMeterSampler_OffWhileTheFlagIsOff",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }

@@ -13,10 +13,22 @@ import (
 
 // AdminConsole reads and writes what the platform admin's console shows. It
 // reads across every tenant, so it is mounted only behind platform_admin.
-type AdminConsole struct{ db *sql.DB }
+type AdminConsole struct {
+	db *sql.DB
+	// netSamples reads the top-egress card from the net meter's table instead
+	// of single-host monitoring's, so one source answers it once the meter is on (EXC-844).
+	netSamples bool
+}
 
 // NewAdminConsole serves the console from the platform database's connection.
 func NewAdminConsole(db *sql.DB) *AdminConsole { return &AdminConsole{db: db} }
+
+// WithNetSamples returns the console reading egress from the net meter's samples while on.
+func (a *AdminConsole) WithNetSamples(on bool) *AdminConsole {
+	copied := *a
+	copied.netSamples = on
+	return &copied
+}
 
 // AdminConsole is the console's queries on this store's connection.
 func (s *Store) AdminConsole() *AdminConsole { return NewAdminConsole(s.db) }
