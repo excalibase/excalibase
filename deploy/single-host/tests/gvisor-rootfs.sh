@@ -13,7 +13,11 @@ set -eu
 DOCKER=${DOCKER:-docker}
 RUNTIME=${RUNTIME:-runsc}
 IMAGE=${GVISOR_TEST_IMAGE:-docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e}
-[ -z "${IMAGE_MIRROR:-}" ] || IMAGE="$IMAGE_MIRROR/${IMAGE#docker.io/}"
+# The mirror keeps no library/ segment: ghcr.io/excalibase/mirror/busybox@sha256:..., as mirror-images.txt lists it.
+if [ -n "${IMAGE_MIRROR:-}" ]; then
+  name=${IMAGE#docker.io/}
+  IMAGE="$IMAGE_MIRROR/${name#library/}"
+fi
 NAME=gvisor-rootfs-$$
 VOLUME_IMAGE=gvisor-rootfs-volume-$$
 PROBE_VOLUME=gvisor-rootfs-probe-$$

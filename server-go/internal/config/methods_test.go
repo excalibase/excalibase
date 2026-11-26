@@ -7,10 +7,10 @@ import (
 )
 
 func TestIsCloud(t *testing.T) {
-	if !(AppConfig{DeploymentMode: "cloud"}).IsCloud() {
+	if !(AppConfig{AppTmpPercent: 25, DeploymentMode: "cloud"}).IsCloud() {
 		t.Error("DeploymentMode=cloud should be cloud")
 	}
-	if (AppConfig{DeploymentMode: "selfhosted"}).IsCloud() {
+	if (AppConfig{AppTmpPercent: 25, DeploymentMode: "selfhosted"}).IsCloud() {
 		t.Error("DeploymentMode=selfhosted should not be cloud")
 	}
 	if (AppConfig{}).IsCloud() {

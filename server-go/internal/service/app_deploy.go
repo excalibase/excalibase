@@ -57,6 +57,8 @@ type AppDeployService struct {
 	corsOrigins CorsOriginReleaser
 	// images resolves a named image to the digest a deploy pins.
 	images ImageResolver
+	// volumes reads an image's declared VOLUMEs at deploy; nil in tests that do not need them.
+	volumes ImageVolumeReader
 	// localRegistries are operator registries never dialled (self-host only).
 	localRegistries []string
 	// internal is the platform's own registry for git builds (EXC-540); nil without one.
@@ -412,6 +414,10 @@ func (s *AppDeployService) apply(ctx context.Context, app *apphost.App, planned 
 	render.DeployID = deploy.ID
 	render.ReusePinnedImages = s.pinningOn(ctx) && cfg.ImagePull == apphost.ImagePullPublic
 	if render.PullAuth, err = s.pullAuth(app, cfg.Image); err != nil {
+		s.fail(ctx, deploy, err, namespace, name)
+		return deploy, nil, nil
+	}
+	if render.ImageVolumes, err = s.imageVolumes(ctx, app.ProjectID, cfg.Image); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}

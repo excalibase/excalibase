@@ -65,13 +65,29 @@ func newResolver(client *http.Client, plainHTTP bool) *Resolver {
 // Resolve answers the digest image names right now. cred, when set, is sent
 // only to the image's own registry.
 func (r *Resolver) Resolve(ctx context.Context, image string, cred *apphost.RegistryCredential) (string, error) {
-	if err := apphost.ValidateImageReference(image); err != nil {
+	repo, reference, err := r.repository(image, cred)
+	if err != nil {
 		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
+	defer cancel()
+	desc, err := repo.Resolve(ctx, reference)
+	if err != nil {
+		return "", classify(image, err)
+	}
+	return desc.Digest.String(), nil
+}
+
+// repository is the image's repository on its registry, signed in with cred when one is given,
+// and the tag or digest to ask it for.
+func (r *Resolver) repository(image string, cred *apphost.RegistryCredential) (*remote.Repository, string, error) {
+	if err := apphost.ValidateImageReference(image); err != nil {
+		return nil, "", err
 	}
 	location, reference := repositoryLocation(image)
 	repo, err := remote.NewRepository(location)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", apphost.ErrInvalidImage, err)
+		return nil, "", fmt.Errorf("%w: %v", apphost.ErrInvalidImage, err)
 	}
 	repo.PlainHTTP = r.plainHTTP
 	client := &auth.Client{Client: r.client, Cache: auth.NewCache()}
@@ -80,13 +96,7 @@ func (r *Resolver) Resolve(ctx context.Context, image string, cred *apphost.Regi
 			auth.Credential{Username: cred.Username, Password: cred.Password})
 	}
 	repo.Client = client
-	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
-	defer cancel()
-	desc, err := repo.Resolve(ctx, reference)
-	if err != nil {
-		return "", classify(image, err)
-	}
-	return desc.Digest.String(), nil
+	return repo, reference, nil
 }
 
 // repositoryLocation is where the registry API serves the image's repository,

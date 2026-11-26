@@ -13,6 +13,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1050,3 +1051,49 @@ func TestAppResourceRequirementsRefusesUnparseableCatalogue(t *testing.T) {
 }
 
 func hasKey(m map[string]bool, key string) bool { _, ok := m[key]; return ok }
+
+// An image's own VOLUME would be an uncapped directory on the node's disk, even under a read-only
+// root: each declared path becomes a memory emptyDir sharing the /tmp budget; the app's disk keeps its path.
+func TestRenderAppWorkloadCapsEveryImageVolume(t *testing.T) {
+	options := testRenderOptions
+	options.ImageVolumes = []string{"/var/lib/app", "/cache", "/cache/", "/tmp", "/data"}
+	app := diskApp()
+	app.Disk.MountPath = "/data"
+	workload, err := RenderAppWorkload(testNamespace, app, newResolver(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := workload.Deployment.Spec.Template.Spec
+	memory := pod.Containers[0].Resources.Limits.Memory().Value()
+	share := memory * 25 / 100 / 3
+	sizes := map[string]int64{}
+	for _, mounted := range pod.Containers[0].VolumeMounts {
+		for _, volume := range pod.Volumes {
+			if volume.Name == mounted.Name && volume.EmptyDir != nil {
+				if volume.EmptyDir.Medium != corev1.StorageMediumMemory || volume.EmptyDir.SizeLimit == nil {
+					t.Errorf("%s: %+v is not a capped memory emptyDir", mounted.MountPath, volume.EmptyDir)
+					continue
+				}
+				sizes[mounted.MountPath] = volume.EmptyDir.SizeLimit.Value()
+			}
+		}
+	}
+	if len(sizes) != 3 || sizes["/tmp"] != share || sizes["/cache"] != share || sizes["/var/lib/app"] != share {
+		t.Fatalf("scratch mounts %v, want /tmp, /cache and /var/lib/app at %d each", sizes, share)
+	}
+	if _, shadowed := sizes["/data"]; shadowed {
+		t.Fatal("an emptyDir shadows the app's disk")
+	}
+}
+
+func TestRenderAppWorkloadAZeroMemoryLimitNeverRendersAnUnlimitedTmp(t *testing.T) {
+	deployment := &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{}}}}}}
+	if err := mountAppScratch(deployment, corev1.ResourceRequirements{}, 25, nil, ""); err == nil {
+		t.Fatal("a pod with no memory limit got a /tmp")
+	}
+	limits := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2")}}
+	if err := mountAppScratch(deployment, limits, 25, []string{"/v"}, ""); err == nil {
+		t.Fatal("a share of 0 bytes was rendered")
+	}
+}

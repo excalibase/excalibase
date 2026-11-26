@@ -164,8 +164,12 @@ func (h *Handler) authorizeContainer(r *http.Request, id, action string) error {
 	if kind == routeStats {
 		return h.authorizeStats(r, id)
 	}
-	if err := h.requireManaged(r.Context(), id); err != nil {
+	labels, err := h.managedLabels(r.Context(), id)
+	if err != nil {
 		return err
+	}
+	if r.Method == http.MethodPost && action == "/start" && labels[SharedFillLabel] == "true" {
+		return refuse("container %s fills a shared volume and is never started", id)
 	}
 	switch kind {
 	case routeExecCreate:
@@ -202,16 +206,22 @@ func (h *Handler) authorizeExec(r *http.Request, id, action string) error {
 }
 
 func (h *Handler) requireManaged(ctx context.Context, id string) error {
+	_, err := h.managedLabels(ctx, id)
+	return err
+}
+
+// managedLabels are the labels of a container provisioning manages; any other is refused.
+func (h *Handler) managedLabels(ctx context.Context, id string) (map[string]string, error) {
 	var container struct {
 		Config struct{ Labels map[string]string }
 	}
 	if err := h.inspect(ctx, "/containers/"+url.PathEscape(id)+"/json", &container); err != nil {
-		return err
+		return nil, err
 	}
 	if container.Config.Labels[h.policy.ManagedLabel] != "true" {
-		return fmt.Errorf("%w: %s", errNotManaged, id)
+		return nil, fmt.Errorf("%w: %s", errNotManaged, id)
 	}
-	return nil
+	return container.Config.Labels, nil
 }
 
 // requireManagedJoin refuses a create that joins the network namespace of a

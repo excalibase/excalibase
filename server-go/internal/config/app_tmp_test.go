@@ -14,8 +14,8 @@ func TestLoadAppTmpPercent(t *testing.T) {
 }
 
 func TestValidateAppTmpPercentRefusesOutOfRange(t *testing.T) {
-	for _, percent := range []int{-1, 101} {
-		cfg := AppConfig{ProvisionerMode: "k8s", AppTmpPercent: percent}
+	for _, percent := range []int{0, -1, 101} {
+		cfg := AppConfig{ProvisionerMode: "docker", AppTmpPercent: percent}
 		if err := cfg.validateAppTmpPercent(); err == nil {
 			t.Errorf("%d must be refused", percent)
 		}

@@ -11,7 +11,7 @@ import (
 const DefaultAppTmpPercent = 25
 
 // envTmpPercent is the variable's whole number, the default when unset, and -1 when it is
-// anything else, so Validate can name it. Zero means a hand-built config that never loaded.
+// anything else, so Validate can name it.
 func envTmpPercent(key string) int {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -24,12 +24,9 @@ func envTmpPercent(key string) int {
 	return percent
 }
 
-// validateAppTmpPercent refuses a cap that is no cap or no scratch at all; the deploy renderer
-// refuses a zero (a config that never loaded) too.
+// validateAppTmpPercent refuses a cap that is no cap or no scratch at all, in every mode:
+// Kubernetes and the single host both size /tmp from it.
 func (c AppConfig) validateAppTmpPercent() error {
-	if c.ProvisionerMode == "docker" || c.AppTmpPercent == 0 {
-		return nil
-	}
 	if c.AppTmpPercent < 1 || c.AppTmpPercent > 100 {
 		return fmt.Errorf("APP_TMP_PERCENT must be between 1 and 100, got %d", c.AppTmpPercent)
 	}

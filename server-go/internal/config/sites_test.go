@@ -31,20 +31,20 @@ func TestSites_ReadItsSettings(t *testing.T) {
 
 func TestSites_OffUnlessSwitchedOnWithEverySetting(t *testing.T) {
 	complete := SitesConfig{AccountID: "a", APIToken: "t", DispatchNamespace: "n", BaseDomain: "excalibase.app", HostsKVNamespaceID: "k"}
-	if (AppConfig{Sites: complete}).SitesAvailable() {
+	if (AppConfig{AppTmpPercent: 25, Sites: complete}).SitesAvailable() {
 		t.Error("settings without SITES_ENABLED offered Sites")
 	}
-	if !(AppConfig{SitesEnabled: true, Sites: complete}).SitesAvailable() {
+	if !(AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: complete}).SitesAvailable() {
 		t.Error("complete settings did not offer Sites")
 	}
 	missingHosts := complete
 	missingHosts.HostsKVNamespaceID = ""
-	if (AppConfig{SitesEnabled: true, Sites: missingHosts}).SitesAvailable() {
+	if (AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: missingHosts}).SitesAvailable() {
 		t.Error("a missing hosts KV namespace offered Sites")
 	}
 	missingToken := complete
 	missingToken.APIToken = ""
-	if (AppConfig{SitesEnabled: true, Sites: missingToken}).SitesAvailable() {
+	if (AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: missingToken}).SitesAvailable() {
 		t.Error("a missing token offered Sites")
 	}
 }
@@ -60,7 +60,7 @@ func TestSites_TokenNeverFormatted(t *testing.T) {
 
 func TestValidateSites_RefusesABaseDomainThatIsNotAHostname(t *testing.T) {
 	for _, domain := range []string{"https://excalibase.app", "excalibase.app/", "localhost", "-bad.app"} {
-		cfg := AppConfig{SitesEnabled: true, Sites: SitesConfig{AccountID: "a", APIToken: "t", DispatchNamespace: "n", BaseDomain: domain}}
+		cfg := AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: SitesConfig{AccountID: "a", APIToken: "t", DispatchNamespace: "n", BaseDomain: domain}}
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "SITES_BASE_DOMAIN") {
 			t.Errorf("%q: err = %v", domain, err)
 		}
@@ -78,13 +78,13 @@ func TestValidateSites_RefusesABaseDomainOverlappingTheAppDomain(t *testing.T) {
 		{"excalibase.app", "apps.excalibase.app"},
 	} {
 		sites.BaseDomain = pair[0]
-		cfg := AppConfig{SitesEnabled: true, Sites: sites, AppDomain: pair[1]}
+		cfg := AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: sites, AppDomain: pair[1]}
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "APP_DOMAIN") {
 			t.Errorf("sites %q, apps %q: err = %v", pair[0], pair[1], err)
 		}
 	}
 	sites.BaseDomain = "excalibase.app"
-	cfg := AppConfig{SitesEnabled: true, Sites: sites, AppDomain: "notexcalibase.app"}
+	cfg := AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: sites, AppDomain: "notexcalibase.app"}
 	if err := cfg.validateSites(); err != nil {
 		t.Errorf("unrelated domains refused: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestValidateSites_RefusesABadZoneOrTarget(t *testing.T) {
 	} {
 		settings := base
 		change(&settings)
-		err := (AppConfig{SitesEnabled: true, Sites: settings}).Validate()
+		err := (AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: settings}).Validate()
 		if err == nil || !strings.Contains(err.Error(), name) {
 			t.Errorf("%s: err = %v", name, err)
 		}
@@ -138,7 +138,7 @@ func TestSitesConfigReadsTheZoneCap(t *testing.T) {
 	}
 	for _, bad := range []string{"0", "-3", "many"} {
 		t.Setenv("SITES_MAX_ZONE_HOSTNAMES", bad)
-		if err := (AppConfig{SitesEnabled: true, Sites: Load().Sites}).Validate(); err == nil || !strings.Contains(err.Error(), "SITES_MAX_ZONE_HOSTNAMES") {
+		if err := (AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: Load().Sites}).Validate(); err == nil || !strings.Contains(err.Error(), "SITES_MAX_ZONE_HOSTNAMES") {
 			t.Errorf("%q: err = %v", bad, err)
 		}
 	}
@@ -156,7 +156,7 @@ func TestSites_ReadTheOutboundWorker(t *testing.T) {
 
 func TestValidateSites_RefusesAnOutboundWorkerThatIsNotAScriptName(t *testing.T) {
 	for _, name := range []string{"Bad/Name", "-lead", strings.Repeat("a", 64)} {
-		cfg := AppConfig{SitesEnabled: true, Sites: SitesConfig{BaseDomain: "excalibase.app", OutboundWorker: name}}
+		cfg := AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: SitesConfig{BaseDomain: "excalibase.app", OutboundWorker: name}}
 		if err := cfg.validateSites(); err == nil || !strings.Contains(err.Error(), "SITES_OUTBOUND_WORKER") {
 			t.Errorf("%q: err = %v", name, err)
 		}
@@ -202,7 +202,7 @@ func TestSitesConfigReadsThePreviewCap(t *testing.T) {
 	}
 	for _, bad := range []string{"0", "-3", "many"} {
 		t.Setenv("SITES_MAX_PREVIEWS", bad)
-		if err := (AppConfig{SitesEnabled: true, Sites: Load().Sites}).Validate(); err == nil || !strings.Contains(err.Error(), "SITES_MAX_PREVIEWS") {
+		if err := (AppConfig{AppTmpPercent: 25, SitesEnabled: true, Sites: Load().Sites}).Validate(); err == nil || !strings.Contains(err.Error(), "SITES_MAX_PREVIEWS") {
 			t.Errorf("%q: err = %v", bad, err)
 		}
 	}

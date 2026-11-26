@@ -91,7 +91,7 @@ func buildSingleHostAppRuntime(ctx context.Context, cfg config.AppConfig, docker
 		NetworkPrefix: apps.NetworkPrefix, VolumePrefix: apps.VolumePrefix,
 		EdgeContainer: apps.EdgeContainer, EdgeTLSAddress: apps.EdgeTLSAddress, RoutesDir: apps.EdgeRoutesDir,
 		EdgeIssuesLocally: apps.EdgeIssuesLocally(), EdgeAliases: apps.EdgeAliases, EdgeCA: edgeCA(apps),
-		SandboxRuntime: apps.SandboxRuntime, Egress: apps.Egress, Isolate: podman, TmpCopyUp: podman, Userns: apps.Userns, TmpPercent: apps.TmpPercent, LogMaxSize: apps.LogMaxSize, LogMaxFiles: apps.LogMaxFiles,
+		SandboxRuntime: apps.SandboxRuntime, Egress: apps.Egress, Isolate: podman, TmpCopyUp: podman, Userns: apps.Userns, TmpPercent: cfg.AppTmpPercent, LogMaxSize: apps.LogMaxSize, LogMaxFiles: apps.LogMaxFiles,
 		HostFirewall:          appsWaitForHostFirewall(),
 		AcceptUnguardedEgress: apps.AcceptUnguardedEgress,
 		ProbeBinary:           probe, ToolsImage: cfg.AppDiskToolsImage,

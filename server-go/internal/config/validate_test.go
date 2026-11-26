@@ -7,7 +7,7 @@ import "testing"
 // Combining docker + cloud would run a multi-tenant control plane on a runtime
 // that has no cross-tenant isolation — refuse it at boot.
 func TestValidate_DockerCloudRejected(t *testing.T) {
-	c := AppConfig{ProvisionerMode: "docker", DeploymentMode: "cloud"}
+	c := AppConfig{AppTmpPercent: 25, ProvisionerMode: "docker", DeploymentMode: "cloud"}
 	if err := c.Validate(); err == nil {
 		t.Error("docker + cloud must be rejected (multi-tenant on a single-tenant runtime)")
 	}
@@ -15,9 +15,9 @@ func TestValidate_DockerCloudRejected(t *testing.T) {
 
 func TestValidate_AllowedCombos(t *testing.T) {
 	ok := []AppConfig{
-		{ProvisionerMode: "docker", DeploymentMode: "selfhosted"}, // the intended docker shape
-		{ProvisionerMode: "k8s", DeploymentMode: "cloud"},         // the multi-tenant platform
-		{ProvisionerMode: "k8s", DeploymentMode: "selfhosted"},    // single-tenant on k8s
+		{AppTmpPercent: 25, ProvisionerMode: "docker", DeploymentMode: "selfhosted"}, // the intended docker shape
+		{AppTmpPercent: 25, ProvisionerMode: "k8s", DeploymentMode: "cloud"},         // the multi-tenant platform
+		{AppTmpPercent: 25, ProvisionerMode: "k8s", DeploymentMode: "selfhosted"},    // single-tenant on k8s
 	}
 	for _, c := range ok {
 		if err := c.Validate(); err != nil {

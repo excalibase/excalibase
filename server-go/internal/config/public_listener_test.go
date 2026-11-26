@@ -11,7 +11,7 @@ func TestCheckPublicListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	valid := AppConfig{Port: "24005", PublicPort: "24006", TrustedProxyCIDRs: edge}
+	valid := AppConfig{AppTmpPercent: 25, Port: "24005", PublicPort: "24006", TrustedProxyCIDRs: edge}
 	if err := valid.CheckPublicListener(); err != nil {
 		t.Fatalf("valid config refused: %v", err)
 	}

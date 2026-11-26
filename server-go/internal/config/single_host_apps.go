@@ -19,8 +19,6 @@ const (
 	appSandboxOptOut      = "none"
 	defaultAppProbeBinary = "/usr/local/bin/excalibase-app-probe"
 	defaultAppUserns      = "auto"
-	// defaultAppTmpPercent is the share of an app's memory limit its /tmp may fill (EXC-732).
-	defaultAppTmpPercent = 25
 	// defaultAppLogMaxSize and defaultAppLogMaxFiles cap one app container's log at 15 MiB (EXC-732).
 	defaultAppLogMaxSize  = "5m"
 	defaultAppLogMaxFiles = 3
@@ -42,10 +40,6 @@ type SingleHostAppsConfig struct {
 	// Userns is APP_USERNS (auto, per-app or shared): whether unsandboxed apps on rootless
 	// Podman each get their own user range (EXC-682). Validate refuses any other value.
 	Userns string
-	// TmpPercent is APP_TMP_PERCENT: the size of an app's /tmp tmpfs as a percentage of its
-	// memory limit. The root filesystem is read-only, so /tmp and the app's disk are what it
-	// may write. -1 keeps a value that is not a whole number, for Validate to refuse.
-	TmpPercent int
 	// LogMaxSize and LogMaxFiles are APP_LOG_MAX_SIZE and APP_LOG_MAX_FILES: each app container's log
 	// is rotated at that size and keeps that many files. LogMaxFiles is -1 for a value that is not a
 	// whole number, for Validate to refuse.
@@ -85,14 +79,6 @@ func loadSingleHostApps() SingleHostAppsConfig {
 	if cfg.SandboxRuntime == appSandboxOptOut {
 		cfg.SandboxRuntime = ""
 	}
-	cfg.TmpPercent = defaultAppTmpPercent
-	if raw := strings.TrimSpace(os.Getenv("APP_TMP_PERCENT")); raw != "" {
-		percent, err := strconv.Atoi(raw)
-		if err != nil {
-			percent = -1
-		}
-		cfg.TmpPercent = percent
-	}
 	cfg.LogMaxSize = envOr("APP_LOG_MAX_SIZE", defaultAppLogMaxSize)
 	cfg.LogMaxFiles = defaultAppLogMaxFiles
 	if raw := strings.TrimSpace(os.Getenv("APP_LOG_MAX_FILES")); raw != "" {
@@ -124,9 +110,6 @@ func (c AppConfig) validateSingleHostApps() error {
 	case "", "auto", "per-app", "shared":
 	default:
 		return fmt.Errorf("APP_USERNS %q must be auto, per-app or shared", apps.Userns)
-	}
-	if apps.TmpPercent < 1 || apps.TmpPercent > 100 {
-		return errors.New("APP_TMP_PERCENT must be a whole number from 1 to 100")
 	}
 	if !appLogSize.MatchString(apps.LogMaxSize) {
 		return fmt.Errorf("APP_LOG_MAX_SIZE %q must be a whole number and k, m or g, such as 5m", apps.LogMaxSize)

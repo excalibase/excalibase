@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -18,43 +19,64 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 )
 
-const probeVolumeStem = "probe-"
+const (
+	probeVolumeStem  = "probe-"
+	probeReadySuffix = "-ready"
+)
 
 // probeVolume is the platform's own volume holding the readiness probe and, when the edge signs
 // with its own CA, that CA's root. Every app mounts it read-only at /.excalibase: the probe is not
 // copied into a path the app can write, so it is no disk an app can fill. Its name carries a
 // digest of what it holds, so a new probe or CA makes a new volume and a held name is never stale.
-func (r *Runtime) probeVolume(ctx context.Context, image string, edgeCA []byte) (string, error) {
+//
+// A second, empty volume of the same name plus "-ready" is made only once the files are in. A
+// probe volume without it is half filled (a crash between the two) and is removed and filled again.
+func (r *Runtime) probeVolume(ctx context.Context, edgeCA []byte) (string, error) {
 	files := r.probeFiles(edgeCA)
 	name := r.volumeName(probeVolumeStem + files.digest())
+	ready := name + probeReadySuffix
 	r.probeMu.Lock()
 	defer r.probeMu.Unlock()
-	if _, err := r.engine.VolumeInspect(ctx, name); err == nil {
+	if _, err := r.engine.VolumeInspect(ctx, ready); err == nil {
 		return name, nil
 	} else if !errdefs.IsNotFound(err) {
-		return "", fmt.Errorf("look for the probe volume %s: %w", name, err)
+		return "", fmt.Errorf("look for the probe volume %s: %w", ready, err)
 	}
-	if _, err := r.engine.VolumeCreate(ctx, volume.CreateOptions{Name: name, Labels: map[string]string{
-		labelManaged: "true", engineproxy.SharedReadOnlyLabel: "true",
-	}}); err != nil {
-		return "", fmt.Errorf("create the probe volume %s: %w", name, err)
+	// Whatever is there was never finished.
+	if err := r.engine.VolumeRemove(ctx, name, false); err != nil && !errdefs.IsNotFound(err) {
+		return "", fmt.Errorf("remove the half-filled probe volume %s: %w", name, err)
 	}
-	if err := r.fillProbeVolume(ctx, name, image, files); err != nil {
+	if err := r.makeSharedVolume(ctx, name); err != nil {
+		return "", err
+	}
+	if err := r.fillProbeVolume(ctx, name, files); err != nil {
 		return "", errors.Join(err, r.engine.VolumeRemove(ctx, name, false))
 	}
-	r.removeStaleProbeVolumes(ctx, name)
+	if err := r.makeSharedVolume(ctx, ready); err != nil {
+		return "", errors.Join(err, r.engine.VolumeRemove(ctx, name, false))
+	}
+	r.removeStaleProbeVolumes(ctx, name, ready)
 	return name, nil
 }
 
-// fillProbeVolume copies the files in through a container that is created, never started: it
-// runs nothing, and only it may mount the volume writable. RemoveVolumes never takes a named volume.
-func (r *Runtime) fillProbeVolume(ctx context.Context, name, image string, files probeFiles) error {
+func (r *Runtime) makeSharedVolume(ctx context.Context, name string) error {
+	if _, err := r.engine.VolumeCreate(ctx, volume.CreateOptions{Name: name, Labels: map[string]string{
+		labelManaged: "true", engineproxy.SharedReadOnlyLabel: "true",
+	}}); err != nil {
+		return fmt.Errorf("create the probe volume %s: %w", name, err)
+	}
+	return nil
+}
+
+// fillProbeVolume copies the files in through a container of the platform's tools image, created and never
+// started (the proxy refuses to start it): it runs nothing, and only it may mount the volume writable. RemoveVolumes never takes a named volume.
+func (r *Runtime) fillProbeVolume(ctx context.Context, name string, files probeFiles) error {
 	filler := name + "-fill"
 	host := &container.HostConfig{
 		NetworkMode: "none", Runtime: r.opts.SandboxRuntime, ReadonlyRootfs: true,
 		Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: name, Target: "/" + probeDir, VolumeOptions: &mount.VolumeOptions{NoCopy: true}}},
 	}
-	created, err := r.engine.ContainerCreate(ctx, &container.Config{Image: image, Labels: map[string]string{
+	created, err := r.engine.ContainerCreate(ctx, &container.Config{Image: r.opts.ToolsImage, Labels: map[string]string{
 		labelManaged: "true", engineproxy.SharedFillLabel: "true",
 	}}, host, &network.NetworkingConfig{}, nil, filler)
 	if err != nil {
@@ -87,13 +109,13 @@ func (r *Runtime) copyProbeFiles(ctx context.Context, id string, files probeFile
 }
 
 // removeStaleProbeVolumes drops probe volumes of an earlier probe or CA; one an app still mounts stays.
-func (r *Runtime) removeStaleProbeVolumes(ctx context.Context, keep string) {
+func (r *Runtime) removeStaleProbeVolumes(ctx context.Context, keep ...string) {
 	list, err := r.engine.VolumeList(ctx, volume.ListOptions{Filters: labelFilter(engineproxy.SharedReadOnlyLabel, "true")})
 	if err != nil {
 		return
 	}
 	for _, stale := range list.Volumes {
-		if stale.Name != keep {
+		if !slices.Contains(keep, stale.Name) {
 			_ = r.engine.VolumeRemove(ctx, stale.Name, false)
 		}
 	}

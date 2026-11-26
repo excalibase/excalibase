@@ -18,6 +18,33 @@ type ImageResolver interface {
 	Resolve(ctx context.Context, image string, cred *apphost.RegistryCredential) (string, error)
 }
 
+// ImageVolumeReader answers the VOLUME paths an image declares, asking with the credential when one is given.
+type ImageVolumeReader interface {
+	Volumes(ctx context.Context, image string, cred *apphost.RegistryCredential) ([]string, error)
+}
+
+func (s *AppDeployService) SetImageVolumes(volumes ImageVolumeReader) {
+	s.volumes = volumes
+}
+
+// imageVolumes reads what the image declares before it runs: a Kubernetes pod mounts each VOLUME
+// as a directory on the node's disk, so each is capped by the render (EXC-732). An image whose
+// volumes cannot be read is not run.
+func (s *AppDeployService) imageVolumes(ctx context.Context, projectID, image string) ([]string, error) {
+	if s.volumes == nil {
+		return nil, nil
+	}
+	cred, err := s.registryCredential(projectID, image)
+	if err != nil {
+		return nil, err
+	}
+	volumes, err := s.volumes.Volumes(ctx, image, cred)
+	if err != nil {
+		return nil, fmt.Errorf("read the volumes %s declares: %w", image, err)
+	}
+	return volumes, nil
+}
+
 var errNoImageResolver = errors.New("deploying a named image needs a registry resolver, and none is configured")
 
 func (s *AppDeployService) SetImageResolver(images ImageResolver) {

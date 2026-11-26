@@ -126,6 +126,8 @@ type AppRenderOptions struct {
 	// memory limit (1..100). The root filesystem is read-only, so this and the
 	// disk are the only places an app can write.
 	TmpPercent int
+	// ImageVolumes are the VOLUME paths the image declares, read from its registry at deploy time.
+	ImageVolumes []string
 }
 
 // AppObjectName is the name the app's Deployment holds in the project namespace.
@@ -179,7 +181,13 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 	if disk != nil {
 		mountAppDisk(deployment, disk, app.Disk.MountPath)
 	}
-	mountAppTmp(deployment, resources, opts.TmpPercent)
+	diskPath := ""
+	if disk != nil {
+		diskPath = app.Disk.MountPath
+	}
+	if err := mountAppScratch(deployment, resources, opts.TmpPercent, opts.ImageVolumes, diskPath); err != nil {
+		return nil, err
+	}
 	pullSecret, err := buildAppPullSecret(namespace, app, opts.PullAuth)
 	if err != nil {
 		return nil, err

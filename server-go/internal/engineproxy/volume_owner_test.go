@@ -231,3 +231,38 @@ func TestCheckVolumeCreateAdmitsASharedVolumeWithoutAnOwner(t *testing.T) {
 		t.Fatal("a volume that is not shared and names no owner was admitted")
 	}
 }
+
+// The probe filler writes the shared volume and is only ever copied into: starting it would run
+// the image with that volume writable.
+func TestASharedVolumesFillerIsNeverStarted(t *testing.T) {
+	engine, proxy := newProxy(t)
+	engine.containers["excalibase-vol-probe-ab12-fill"] = map[string]string{"excalibase.managed": "true", SharedFillLabel: "true"}
+	resp := call(t, proxy.URL, http.MethodPost, "/v1.47/containers/excalibase-vol-probe-ab12-fill/start", "")
+	if resp.StatusCode != http.StatusForbidden || engine.reached("POST /v1.47/containers/excalibase-vol-probe-ab12-fill/start") {
+		t.Fatalf("the filler was started: status %d", resp.StatusCode)
+	}
+	// Copying into it, removing it and starting an ordinary container still work.
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPut, "/v1.47/containers/excalibase-vol-probe-ab12-fill/archive?path=/.excalibase"},
+		{http.MethodDelete, "/v1.47/containers/excalibase-vol-probe-ab12-fill?force=1&v=1"},
+		{http.MethodPost, "/v1.47/containers/excalibase-p1-postgres/start"},
+	} {
+		if resp := call(t, proxy.URL, tc.method, tc.path, "{}"); resp.StatusCode != http.StatusOK {
+			t.Errorf("%s %s = %d, want forwarded", tc.method, tc.path, resp.StatusCode)
+		}
+	}
+}
+
+// The image-inspect route takes a name, never a path out of /images.
+func TestImageInspectRefusesADotDotName(t *testing.T) {
+	_, proxy := newProxy(t)
+	for _, path := range []string{"/v1.47/images/../containers/json/json", "/v1.47/images/a/../b/json"} {
+		resp := call(t, proxy.URL, http.MethodGet, path, "")
+		if resp.StatusCode == http.StatusOK {
+			t.Errorf("GET %s was forwarded", path)
+		}
+	}
+	if !isImageInspect("/images/acme/web:1/json") || isImageInspect("/images/a/../b/json") || isImageInspect("/images//json") || isImageInspect("/images/json") {
+		t.Fatal("isImageInspect misjudged a name")
+	}
+}

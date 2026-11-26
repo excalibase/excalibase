@@ -79,7 +79,7 @@ func TestProbeVolumeIsMadeOncePerContentAndStaleOnesGo(t *testing.T) {
 	h.deploy(freeApp(), "dep-2")
 	var made []string
 	for _, event := range h.engine.calls {
-		if strings.HasPrefix(event, "volume create excalibase-vol-probe-") {
+		if strings.HasPrefix(event, "volume create excalibase-vol-probe-") && !strings.HasSuffix(event, "-ready") {
 			made = append(made, event)
 		}
 	}
@@ -90,12 +90,18 @@ func TestProbeVolumeIsMadeOncePerContentAndStaleOnesGo(t *testing.T) {
 	h.deploy(freeApp(), "dep-3")
 	var probes []string
 	for name := range h.engine.volumes {
-		if strings.HasPrefix(name, "excalibase-vol-probe-") {
+		if strings.HasPrefix(name, "excalibase-vol-probe-") && !strings.HasSuffix(name, "-ready") {
 			probes = append(probes, name)
 		}
 	}
 	if len(probes) != 1 {
 		t.Fatalf("probe volumes after a new probe: %v, want only the new one", probes)
+	}
+	if !strings.HasPrefix(probes[0]+"-ready", probes[0]) || h.engine.volumes[probes[0]+"-ready"] == nil {
+		t.Fatalf("the new probe volume %s has no ready marker", probes[0])
+	}
+	if len(h.engine.volumes) != 2 {
+		t.Fatalf("volumes after a new probe: %v, want the new volume and its marker only", h.engine.volumes)
 	}
 }
 
@@ -126,6 +132,36 @@ func TestFailedProbeFillRemovesTheVolume(t *testing.T) {
 		if strings.HasPrefix(name, "excalibase-vol-probe-") {
 			t.Fatalf("half-filled volume %s kept", name)
 		}
+	}
+}
+
+// A probe volume with no ready marker was never finished: it is removed and filled again, not trusted.
+func TestHalfFilledProbeVolumeIsFilledAgain(t *testing.T) {
+	h := newHarness(t, nil)
+	h.deploy(freeApp(), "dep-1")
+	var name string
+	for volumeName := range h.engine.volumes {
+		if strings.HasPrefix(volumeName, "excalibase-vol-probe-") && !strings.HasSuffix(volumeName, "-ready") {
+			name = volumeName
+		}
+	}
+	delete(h.engine.volumes, name+"-ready")
+	delete(h.engine.volumeFiles, name)
+	h.deploy(freeApp(), "dep-2")
+	if string(h.engine.volumeFiles[name]["/"+probeDir+"/probe"]) != "probe" {
+		t.Fatalf("the half-filled volume was reused unfilled: %v", h.engine.volumeFiles[name])
+	}
+	if h.engine.volumes[name+"-ready"] == nil {
+		t.Fatal("no ready marker after filling again")
+	}
+}
+
+// The filler runs the platform's own image, never the tenant's.
+func TestProbeFillerUsesThePlatformsToolsImage(t *testing.T) {
+	h := newHarness(t, nil)
+	h.deploy(freeApp(), "dep-1")
+	if h.engine.filler == nil || h.engine.filler.config.Image != "tools:1" {
+		t.Fatalf("filler %+v, want the tools image", h.engine.filler)
 	}
 }
 

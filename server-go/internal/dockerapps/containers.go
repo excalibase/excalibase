@@ -171,7 +171,7 @@ func (r *Runtime) createAppContainer(ctx context.Context, spec containerSpec, re
 	endpoints := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
 		r.networkName(spec.Project): {Aliases: []string{alias}},
 	}}
-	probeVolume, err := r.probeVolume(ctx, spec.Image, edgeCA)
+	probeVolume, err := r.probeVolume(ctx, edgeCA)
 	if err != nil {
 		return "", err
 	}
