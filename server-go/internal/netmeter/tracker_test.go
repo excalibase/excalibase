@@ -7,7 +7,7 @@ import (
 
 var t0 = time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
 
-func reading(key string, at time.Time, started time.Time, rx, tx uint64) Reading {
+func reading(key string, at, started time.Time, rx, tx uint64) Reading {
 	return Reading{Key: key, ProjectID: "proj", AppID: "app", At: at, Started: started, Rx: rx, Tx: tx}
 }
 

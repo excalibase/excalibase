@@ -41,7 +41,7 @@ func netMeterConfig(t *testing.T, mode, flag string) config.AppConfig {
 func TestNetMeterSampler_OffWhileTheFlagIsOff(t *testing.T) {
 	t.Setenv("NETMETER_KUBELET_CA_FILE", writeTestCA(t))
 	cfg := netMeterConfig(t, "", "")
-	if sampler := netMeterSampler(cfg, nullNetStore{}, nullCluster{}); sampler != nil {
+	if netMeterSampler(cfg, nullNetStore{}, nullCluster{}) != nil {
 		t.Fatal("flag off: nothing is built, nothing is read")
 	}
 }
@@ -49,7 +49,7 @@ func TestNetMeterSampler_OffWhileTheFlagIsOff(t *testing.T) {
 func TestNetMeterSampler_KubernetesNeedsAUsableKubeletCA(t *testing.T) {
 	t.Setenv("NETMETER_KUBELET_CA_FILE", filepath.Join(t.TempDir(), "missing.crt"))
 	cfg := netMeterConfig(t, "", "true")
-	if sampler := netMeterSampler(cfg, nullNetStore{}, nullCluster{}); sampler != nil {
+	if netMeterSampler(cfg, nullNetStore{}, nullCluster{}) != nil {
 		t.Fatal("no CA file: the meter stays off, it never falls back to an unverified client")
 	}
 }
@@ -57,20 +57,20 @@ func TestNetMeterSampler_KubernetesNeedsAUsableKubeletCA(t *testing.T) {
 func TestNetMeterSampler_KubernetesWithCAAndCluster(t *testing.T) {
 	t.Setenv("NETMETER_KUBELET_CA_FILE", writeTestCA(t))
 	cfg := netMeterConfig(t, "", "true")
-	if sampler := netMeterSampler(cfg, nullNetStore{}, nullCluster{}); sampler == nil {
+	if netMeterSampler(cfg, nullNetStore{}, nullCluster{}) == nil {
 		t.Fatal("flag on with a CA and a cluster client: the meter runs")
 	}
-	if sampler := netMeterSampler(cfg, nullNetStore{}, nil); sampler != nil {
+	if netMeterSampler(cfg, nullNetStore{}, nil) != nil {
 		t.Fatal("no cluster client: off")
 	}
-	if sampler := netMeterSampler(cfg, struct{}{}, nullCluster{}); sampler != nil {
+	if netMeterSampler(cfg, struct{}{}, nullCluster{}) != nil {
 		t.Fatal("a store without the metering tables: off")
 	}
 }
 
 func TestNetMeterSampler_SingleHostNeedsNoKubeletAndNoHostMetricsFlag(t *testing.T) {
 	cfg := netMeterConfig(t, "docker", "true")
-	if sampler := netMeterSampler(cfg, nullNetStore{}, nil); sampler == nil {
+	if netMeterSampler(cfg, nullNetStore{}, nil) == nil {
 		t.Fatal("single host meters from the engine; FEATURE_HOSTMETRICS is not needed")
 	}
 }

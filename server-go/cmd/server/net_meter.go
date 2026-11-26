@@ -28,7 +28,7 @@ func netMeterOn(cfg config.AppConfig) bool {
 // missing piece is logged and leaves the meter off: it never reads through an
 // unverified connection. cluster is the Kubernetes client (nil on a single
 // host); store must keep the metering tables.
-func netMeterSampler(cfg config.AppConfig, store any, cluster any) service.LoopSampler {
+func netMeterSampler(cfg config.AppConfig, store, cluster any) service.LoopSampler {
 	if !netMeterOn(cfg) {
 		return nil
 	}

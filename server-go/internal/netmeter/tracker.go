@@ -43,27 +43,31 @@ func (t *Tracker) Observe(readings []Reading, unobserved ...string) []Rate {
 		}
 	}
 	for _, current := range readings {
-		baseline, seen := t.previous[current.Key]
-		switch {
-		case !t.primed:
-			next[current.Key] = current
-		case seen:
-			rate, ok := rateBetween(baseline, current)
-			if ok {
-				rates = append(rates, rate)
-				next[current.Key] = current
-			} else {
-				next[current.Key] = baseline
-			}
-		default:
-			if rate, ok := sinceStart(current); ok {
-				rates = append(rates, rate)
-			}
-			next[current.Key] = current
+		rate, ok, baseline := t.judge(current)
+		if ok {
+			rates = append(rates, rate)
 		}
+		next[current.Key] = baseline
 	}
 	t.previous, t.primed = next, true
 	return rates
+}
+
+// judge returns the rate of one reading, if any, and the baseline to keep for it.
+func (t *Tracker) judge(current Reading) (Rate, bool, Reading) {
+	if !t.primed {
+		return Rate{}, false, current
+	}
+	baseline, seen := t.previous[current.Key]
+	if !seen {
+		rate, ok := sinceStart(current)
+		return rate, ok, current
+	}
+	rate, ok := rateBetween(baseline, current)
+	if !ok {
+		return Rate{}, false, baseline
+	}
+	return rate, true, current
 }
 
 func rateBetween(from, to Reading) (Rate, bool) {
