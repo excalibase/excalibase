@@ -235,6 +235,10 @@ type AppConfig struct {
 	// before the platform raises an alert (EXC-784).
 	WALArchiveAlertAfter time.Duration
 
+	// RoleCertAlertAfter is how long a project's role certificate renewal or
+	// watcher restart may fail before the platform raises an alert (EXC-887).
+	RoleCertAlertAfter time.Duration
+
 	// AutoMigrate applies a bundle's declared schema to the project database
 	// at deploy time. EXCALIBASE_AUTO_MIGRATE=false defers it to an explicit
 	// POST /api/projects/{projectId}/schema/apply.
@@ -580,6 +584,7 @@ func load() AppConfig {
 		RestoreReadyTimeout:            envDuration("EXCALIBASE_RESTORE_READY_TIMEOUT", defaultRestoreReadyTimeout),
 		PauseTimeout:                   envDuration("EXCALIBASE_PAUSE_TIMEOUT", defaultPauseTimeout),
 		WALArchiveAlertAfter:           envDuration("EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER", defaultWALArchiveAlertAfter),
+		RoleCertAlertAfter:             envDuration("EXCALIBASE_ROLE_CERT_ALERT_AFTER", defaultWALArchiveAlertAfter),
 		DeployWait:                     envDuration("EXCALIBASE_DEPLOY_WAIT", defaultDeployWait),
 		PlatformDBMaxConns:             envPlatformDBMaxConns(),
 		SchedulerEnabled:               envBool("EXCALIBASE_SCHEDULER_ENABLED", true),

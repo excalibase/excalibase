@@ -249,3 +249,16 @@ func TestLoad_WALArchiveAlertThreshold(t *testing.T) {
 		t.Errorf("configured = %v, want 45m", got)
 	}
 }
+
+func TestLoad_RoleCertAlertThreshold(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	t.Setenv("EXCALIBASE_ROLE_CERT_ALERT_AFTER", "")
+	t.Setenv("EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER", "5m")
+	if got := Load().RoleCertAlertAfter; got != 30*time.Minute {
+		t.Errorf("default = %v, want 30m, whatever the WAL threshold is", got)
+	}
+	t.Setenv("EXCALIBASE_ROLE_CERT_ALERT_AFTER", "2h")
+	if got := Load().RoleCertAlertAfter; got != 2*time.Hour {
+		t.Errorf("configured = %v, want 2h", got)
+	}
+}

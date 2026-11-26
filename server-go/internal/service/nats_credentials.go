@@ -26,8 +26,8 @@ func NewNatsCredentialMinter(store storage.NatsCredentialStore) *NatsCredentialM
 	return &NatsCredentialMinter{store: store}
 }
 
-// MintTenantWatcher rotates the project's watcher credential. Re-provisioning
-// therefore invalidates whatever a previous watcher pod was holding.
+// MintTenantWatcher rotates the project's watcher credential. NATS does not check it
+// today (network policy guards the bus); it is kept for a bus that enforces subjects.
 func (m *NatsCredentialMinter) MintTenantWatcher(ctx context.Context, projectID string) (string, string, error) {
 	if m == nil {
 		return "", "", nil

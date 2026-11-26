@@ -94,6 +94,21 @@ func TestRenewalAlertsFollowTheGuard(t *testing.T) {
 	}
 }
 
+func TestRoleCertAlertsFollowTheGuard(t *testing.T) {
+	alerts := service.NewAlertingService(t.TempDir())
+	renewer := service.NewRoleCertificateRenewer(service.RoleCertificateRenewerConfig{})
+	on := config.AppConfig{DarkFeatures: []features.Feature{features.WALArchiveAlert}, WALArchiveAlertAfter: time.Minute}
+	if !wireRoleCertAlerts(on, renewer, alerts, nil) {
+		t.Error("guard on: role certificate alerts not wired")
+	}
+	if wireRoleCertAlerts(config.AppConfig{}, renewer, alerts, nil) {
+		t.Error("guard off: role certificate alerts wired")
+	}
+	if wireRoleCertAlerts(on, renewer, nil, nil) {
+		t.Error("no alert service: role certificate alerts wired")
+	}
+}
+
 func TestAdminAlertNotifier_NilWithoutAMailerOrUserTable(t *testing.T) {
 	if adminAlertNotifier(config.AppConfig{}, nil, nil, nil) != nil {
 		t.Error("a notifier was built with nothing to mail through")

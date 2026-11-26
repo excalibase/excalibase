@@ -355,7 +355,7 @@ func runServer(cfg config.AppConfig) {
 	defer stopCredentialRenewal()
 	stopRoleReconcile := startPlatformRoleReconcile(cfg, sqlStore, provSvc)
 	defer stopRoleReconcile()
-	stopRoleCertRenewal := startRoleCertificateRenewer(cfg, sqlStore, store, k8sClient, vc, provSvc)
+	stopRoleCertRenewal := startRoleCertificateRenewer(cfg, sqlStore, store, k8sClient, vc, provSvc, alertRoute{alerts: deps.alerts, mail: deps.emailSender})
 	defer stopRoleCertRenewal()
 	stopMySQLTLS := startMySQLTLSMaintenance(cfg, sqlStore, vc, provSvc)
 	defer stopMySQLTLS()
@@ -520,10 +520,16 @@ func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.Platfor
 	return renewer.Start(context.Background(), service.NewLeadership(lock), cfg.BackupCredentialsRenewInterval)
 }
 
+// alertRoute is where a renewer's platform alerts are raised and mailed.
+type alertRoute struct {
+	alerts *service.AlertingService
+	mail   email.Sender
+}
+
 // startRoleCertificateRenewer keeps the platform roles' client certificates
 // ahead of expiry (EXC-410); one replica renews at a time.
 func startRoleCertificateRenewer(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore,
-	k8sClient k8s.KubeClient, vc vaultclient.VaultClient, provSvc *service.ProvisioningService) func() {
+	k8sClient k8s.KubeClient, vc vaultclient.VaultClient, provSvc *service.ProvisioningService, route alertRoute) func() {
 	if k8sClient == nil || vc == nil || cfg.ProvisionerMode == "docker" {
 		return func() {
 			// no Kubernetes project logs in with a client certificate
@@ -535,7 +541,9 @@ func startRoleCertificateRenewer(cfg config.AppConfig, sqlStore storage.Platform
 	}
 	renewer := service.NewRoleCertificateRenewer(service.RoleCertificateRenewerConfig{
 		Instances: store, Kube: k8sClient, Vault: vc, RestartReplication: provSvc.RestartReplication,
+		HoldProject: provSvc.HoldForWatcherRestart,
 	})
+	wireRoleCertAlerts(cfg, renewer, route.alerts, adminAlertNotifier(cfg, sqlStore, route.mail, route.alerts))
 	log.Printf("Role certificate renewal started (every %s)", roleCertRenewInterval)
 	return renewer.Start(context.Background(), service.NewLeadership(lock), roleCertRenewInterval)
 }

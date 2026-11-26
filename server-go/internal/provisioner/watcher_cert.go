@@ -19,14 +19,15 @@ import (
 const (
 	watcherTLSMountPath   = "/etc/watcher-tls"
 	watcherTLSVolume      = "client-tls"
-	watcherCertAnnotation = "excalibase.io/client-cert-sha256"
+	WatcherCertAnnotation = "excalibase.io/client-cert-sha256"
 	// 0440 with the chart's fsGroup: readable by the watcher, not by others.
 	watcherTLSFileMode = 0o440
 )
 
 var ErrWatcherCertificateMissing = errors.New("the watcher has no client certificate to log in with")
 
-func watcherTLSSecretName(projectID string) string {
+// WatcherTLSSecretName is the Secret a project's watcher certificate is stored in.
+func WatcherTLSSecretName(projectID string) string {
 	return projectID + "-cdc-watcher-tls"
 }
 
@@ -53,7 +54,7 @@ func (p *PostgreSQLProvisioner) storeWatcherCertificate(ctx context.Context, spe
 	if _, err := tenantcert.FromRecord(spec.ClientCert.AddTo(nil)); err != nil {
 		return ErrWatcherCertificateMissing
 	}
-	name := watcherTLSSecretName(spec.ProjectID)
+	name := WatcherTLSSecretName(spec.ProjectID)
 	data := map[string][]byte{
 		"tls.crt": []byte(spec.ClientCert.Cert),
 		"tls.key": []byte(spec.ClientCert.Key),
@@ -69,15 +70,21 @@ func (p *PostgreSQLProvisioner) storeWatcherCertificate(ctx context.Context, spe
 	return nil
 }
 
+// WatcherCertFingerprint is what the pod template carries for a certificate:
+// the same value on a running pod means it was deployed with that certificate.
+func WatcherCertFingerprint(material tenantcert.Material) string {
+	fingerprint := sha256.Sum256([]byte(material.Cert + material.RootCert))
+	return hex.EncodeToString(fingerprint[:])
+}
+
 // watcherTLSValues mounts the certificate Secret and stamps its fingerprint on
 // the pod template.
 func watcherTLSValues(spec WatcherSpec) map[string]interface{} {
-	fingerprint := sha256.Sum256([]byte(spec.ClientCert.Cert + spec.ClientCert.RootCert))
 	return map[string]interface{}{
 		"extraVolumes": []interface{}{map[string]interface{}{
 			"name": watcherTLSVolume,
 			"secret": map[string]interface{}{
-				"secretName":  watcherTLSSecretName(spec.ProjectID),
+				"secretName":  WatcherTLSSecretName(spec.ProjectID),
 				"defaultMode": watcherTLSFileMode,
 			},
 		}},
@@ -87,7 +94,7 @@ func watcherTLSValues(spec WatcherSpec) map[string]interface{} {
 			"readOnly":  true,
 		}},
 		"podAnnotations": map[string]interface{}{
-			watcherCertAnnotation: hex.EncodeToString(fingerprint[:]),
+			WatcherCertAnnotation: WatcherCertFingerprint(spec.ClientCert),
 		},
 	}
 }

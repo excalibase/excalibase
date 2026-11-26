@@ -71,7 +71,11 @@ type KubeClient interface {
 	ListCRDs(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
 	ApplyManifestURL(ctx context.Context, url string) error
 	GetDeployment(ctx context.Context, namespace, name string) (bool, error)
+	// InstallHelmChart installs a release that does not exist yet; ErrReleaseInUse otherwise.
 	InstallHelmChart(ctx context.Context, namespace, releaseName, chartPath string, values map[string]interface{}) error
+	// ApplyHelmChart installs the release, or upgrades it when it exists, and
+	// replaces one stuck mid-operation. Use it for a release redeployed in place.
+	ApplyHelmChart(ctx context.Context, namespace, releaseName, chartPath string, values map[string]interface{}) error
 	UninstallHelmChart(ctx context.Context, namespace, releaseName string) error
 
 	// EnsureDenoRuntime idempotently creates the per-project Deno runtime

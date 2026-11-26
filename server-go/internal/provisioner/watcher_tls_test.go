@@ -80,7 +80,7 @@ func TestARenewedCertificateRestartsTheWatcher(t *testing.T) {
 	renewed := watcherSpecForTest()
 	renewed.ClientCert = tenantcert.Material{Cert: "CERT-2", Key: "KEY-2", RootCert: "CA-PEM"}
 	second := deployTestWatcher(t, mock, renewed)["podAnnotations"].(map[string]interface{})
-	if first[watcherCertAnnotation] == second[watcherCertAnnotation] || second[watcherCertAnnotation] == "" {
+	if first[WatcherCertAnnotation] == second[WatcherCertAnnotation] || second[WatcherCertAnnotation] == "" {
 		t.Errorf("pod annotation did not change: %v -> %v", first, second)
 	}
 	if string(mock.Secrets[watcherTLSSecret]["tls.crt"]) != "CERT-2" {
@@ -119,5 +119,20 @@ func TestAFailedCertificateSecretStopsTheDeploy(t *testing.T) {
 	prov.SetWatcherImage(pinnedWatcher)
 	if err := prov.DeployWatcher(context.Background(), watcherSpecForTest()); err == nil || len(mock.HelmReleases) != 0 {
 		t.Fatalf("err = %v, releases = %d", err, len(mock.HelmReleases))
+	}
+}
+
+// A renewal redeploys a watcher whose release already exists (EXC-887): the
+// deploy must upgrade it, not fail with "name still in use".
+func TestDeployingTheWatcherTwiceUpgradesTheRelease(t *testing.T) {
+	mock := k8s.NewMockClient()
+	prov := NewPostgreSQLProvisioner(mock, watcherChartDir)
+	prov.SetWatcherImage(pinnedWatcher)
+	spec := watcherSpecForTest()
+	if err := prov.DeployWatcher(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := prov.DeployWatcher(context.Background(), spec); err != nil {
+		t.Fatalf("second deploy: %v", err)
 	}
 }
