@@ -10,7 +10,7 @@ import (
 )
 
 // reconnectWait is the pause between reconnect attempts. It is long enough
-// not to add to a reconnect storm the auth callout is already working
+// not to add to a reconnect storm the bus is already working
 // through, and short enough that a service is back on the bus within a few
 // seconds of the server returning.
 const reconnectWait = 2 * time.Second
@@ -22,8 +22,8 @@ const reconnectWait = 2 * time.Second
 // cost us delivery: without RetryOnFailedConnect a client that starts before
 // the bus fails construction outright; with a finite MaxReconnects it gives
 // up on a bus that is merely restarting; and nats.go stops reconnecting
-// after two consecutive authorization errors, so a single late auth callout
-// takes a service off the bus for the life of the process unless
+// after two consecutive authorization errors, so a single refused
+// connection takes a service off the bus for the life of the process unless
 // IgnoreAuthErrorAbort is set.
 //
 // The handlers are not decoration: a connection that is silently down looks

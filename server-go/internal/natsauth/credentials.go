@@ -18,7 +18,7 @@ var errDenied = errors.New("nats credential rejected")
 // past bcrypt's useful input and leaves no room for guessing.
 const passwordBytes = 32
 
-// CredentialStore is the minimum the callout needs from persistence: the
+// CredentialStore is the minimum credential verification needs from persistence: the
 // stored bcrypt hash for a principal, if one exists.
 type CredentialStore interface {
 	LookupNatsCredentialHash(ctx context.Context, principal string) (string, bool, error)

@@ -568,8 +568,8 @@ type OrgStore interface {
 	ListPendingInvites(ctx context.Context, orgID string) ([]*domain.PendingInvite, error)
 }
 
-// NatsCredentialStore persists the per-principal NATS bus credentials the
-// auth_callout responder authenticates against (EXC-324). Only bcrypt
+// NatsCredentialStore persists the per-principal NATS bus credentials
+// (EXC-324). Only bcrypt
 // hashes are kept; the plaintext lives in the principal's k8s Secret.
 type NatsCredentialStore interface {
 	UpsertNatsCredential(ctx context.Context, principal, projectID, passwordHash string) error
