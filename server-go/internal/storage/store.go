@@ -573,7 +573,6 @@ type OrgStore interface {
 // hashes are kept; the plaintext lives in the principal's k8s Secret.
 type NatsCredentialStore interface {
 	UpsertNatsCredential(ctx context.Context, principal, projectID, passwordHash string) error
-	LookupNatsCredentialHash(ctx context.Context, principal string) (string, bool, error)
 	DeleteNatsCredential(ctx context.Context, principal string) error
 	DeleteNatsCredentialsForProject(ctx context.Context, projectID string) error
 }

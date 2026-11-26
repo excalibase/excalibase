@@ -1068,7 +1068,8 @@ pods labelled `excalibase.io/component: cdc-watcher` in a namespace labelled
 `excalibase.io/type: project`; provisioning sets both labels, tenants cannot.
 Every other pod, including customer apps, is refused. NATS is never exposed
 outside the cluster. A customer-facing queue, if one is ever built, is a
-separate system with its own auth.
+separate system with its own auth. On a single host the same isolation comes
+from the `excalibase-cdc` network plus the proxy's `PROXY_CDC_IMAGES` allow-list.
 
 Each principal still presents a scoped credential (EXC-324) and a per-principal
 inbox prefix. The server does not check them; they exist so a future bus that
