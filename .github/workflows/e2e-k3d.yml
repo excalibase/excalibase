@@ -37,6 +37,7 @@ on:
       - 'server-go/internal/config/**'
       - 'server-go/internal/wiring/**'
       - 'charts/provisioning/**'
+      - 'scripts/k3d-import-image.sh'
       - '.github/workflows/e2e-k3d.yml'
 
 permissions:
@@ -118,7 +119,9 @@ jobs:
           rm -f "$RUNNER_TEMP/registries.yaml"
 
       - name: Import image into cluster
-        run: k3d image import "$IMAGE" -c "$CLUSTER"
+        # Not `k3d image import`: it can report success after every node failed to read its tarball
+        # (EXC-767). This loads the image itself and checks each node has it.
+        run: bash scripts/k3d-import-image.sh "$CLUSTER" "$IMAGE"
 
       - name: Deploy platform Postgres store
         run: |
