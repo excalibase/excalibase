@@ -49,6 +49,17 @@ spec:
             - name: NETMETER_KUBELET_PORT
               value: {{ .Values.netmeter.kubeletPort | quote }}
             {{- end }}
+            # Who provisioning binds to its tenant role in each project namespace it creates.
+            - name: PROJECT_NAMESPACE_ROLE
+              value: excalibase-provisioning-project
+            - name: PROVISIONING_SERVICE_ACCOUNT
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: PUBLIC_PORT
               value: {{ .Values.service.publicPort | quote }}
             - name: TRUSTED_PROXY_CIDRS

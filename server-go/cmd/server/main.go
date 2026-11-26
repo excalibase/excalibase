@@ -3140,12 +3140,31 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 		}
 		log.Fatalf("Failed to init K8s client: %v", err)
 	}
-	return k8sClient.WithProjectAccess(k8s.ProjectAccess{
+	configured := k8sClient.WithProjectAccess(k8s.ProjectAccess{
 		ClusterRole:    cfg.ProjectNamespaceRole,
 		ServiceAccount: cfg.ProvisioningServiceAccount,
 		Namespace:      cfg.PodNamespace,
 	}).WithMySQL(cfg.MySQLInstalled())
+	backfillProjectAccess(configured, cfg)
+	return configured
 }
+
+// backfillProjectAccess binds provisioning in project namespaces that predate
+// the tenant role. A failure is logged, not fatal: the platform still boots and
+// the namespaces it could bind work.
+func backfillProjectAccess(client *k8s.Client, cfg config.AppConfig) {
+	if cfg.ProjectNamespaceRole == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), projectAccessBackfillBudget)
+	defer cancel()
+	if err := client.BackfillProjectAccess(ctx); err != nil {
+		log.Printf("WARN: project namespace access backfill: %v", err)
+	}
+}
+
+// projectAccessBackfillBudget bounds the boot-time binding of existing project namespaces.
+const projectAccessBackfillBudget = 2 * time.Minute
 
 // buildDocumentBrowser wires the document browser, which reaches a project's
 // gateway as its own Mongo login from vault. It needs Kubernetes, or a single

@@ -39,14 +39,14 @@ if any("nodes/proxy" in r.get("resources", []) for r in role["rules"]): failures
 cilium = [d for d in docs if d["kind"] == "CiliumNetworkPolicy"]
 if check == "off":
     if verbs("", "nodes/stats"): failures.append("nodes/stats granted while netmeter is off")
-    if verbs("", "nodes"): failures.append("nodes readable while netmeter is off")
+    if verbs("", "nodes") != {"get", "list"}: failures.append("nodes verbs %s, want get and list for capacity" % sorted(verbs("", "nodes")))
     if mounts or volumes: failures.append("the kubelet CA is mounted while netmeter is off")
     if "FEATURE_NETMETER" in env: failures.append("FEATURE_NETMETER set while netmeter is off")
     if kubelet_rules: failures.append("egress to the kubelet port while netmeter is off")
     if cilium: failures.append("a Cilium policy rendered while netmeter is off")
 else:
     if verbs("", "nodes/stats") != {"get"}: failures.append("nodes/stats verbs %s, want only get" % sorted(verbs("", "nodes/stats")))
-    if verbs("", "nodes") != {"list"}: failures.append("nodes verbs %s, want only list" % sorted(verbs("", "nodes")))
+    if verbs("", "nodes") != {"get", "list"}: failures.append("nodes verbs %s, want get and list" % sorted(verbs("", "nodes")))
     if env.get("FEATURE_NETMETER") != "true": failures.append("FEATURE_NETMETER is %r, want true" % env.get("FEATURE_NETMETER"))
     if len(mounts) != 1 or len(volumes) != 1: failures.append("the kubelet CA is not mounted")
     else:

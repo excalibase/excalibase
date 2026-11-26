@@ -1,62 +1,48 @@
+# Cluster-wide, provisioning holds only what cannot be scoped to one project
+# namespace: creating project namespaces, reading capacity, and binding its
+# tenant role (tenant-role.yaml) inside a namespace it made. Every Secret, exec
+# and workload permission lives in that tenant role; nothing binds it
+# cluster-wide (EXC-521).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: excalibase-provisioning
 rules:
-  # Namespace lifecycle
+  # One namespace per project. Deleting one is a tenant-role permission.
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list", "create", "delete"]
-  # Pod operations (exec, logs, status)
-  - apiGroups: [""]
-    resources: ["pods", "pods/exec", "pods/log"]
     verbs: ["get", "list", "create"]
-  # Probe events, so a rejected health check path fails its deploy (EXC-651)
+  # Capacity admission sums every node's allocatable and every pod's requests.
   - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["list"]
-  # A disk resize reads the project's volumes and their storage class (EXC-492)
-  - apiGroups: [""]
-    resources: ["persistentvolumeclaims"]
+    resources: ["nodes"]
     verbs: ["get", "list"]
-  - apiGroups: ["storage.k8s.io"]
-    resources: ["storageclasses"]
-    verbs: ["get"]
-  # Secrets (credentials)
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  # CNPG CRDs
-  - apiGroups: ["postgresql.cnpg.io"]
-    resources: ["clusters", "scheduledbackups", "backups"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  # Each project's backup store, read by the Barman Cloud plugin
-  - apiGroups: ["barmancloud.cnpg.io"]
-    resources: ["objectstores"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  # Deployments (operator checks)
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list"]
-  # Metrics server
-  - apiGroups: ["metrics.k8s.io"]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  # PodMonitors (metrics setup)
-  - apiGroups: ["monitoring.coreos.com"]
-    resources: ["podmonitors"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  # The sandbox class's handler is checked before a function runtime starts (EXC-715)
-  - apiGroups: ["node.k8s.io"]
-    resources: ["runtimeclasses"]
-    verbs: ["get"]
 {{- if .Values.netmeter.enabled }}
   # Per-app network metering reads each kubelet's summary (EXC-844). nodes/stats
   # only: nodes/proxy would also reach exec and logs on every node.
   - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["list"]
-  - apiGroups: [""]
     resources: ["nodes/stats"]
     verbs: ["get"]
 {{- end }}
+  # Pods also for capacity; pods and claims to watch a deleted project's
+  # namespace drain. A disk resize reads the volumes (EXC-492). Read only.
+  - apiGroups: [""]
+    resources: ["pods", "persistentvolumeclaims"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get"]
+  # The per-project RoleBinding. Admission (tenant-role.yaml) refuses it outside project namespaces.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: ["excalibase-provisioning-project"]
+  # The sandbox class's handler is checked before a function runtime starts (EXC-715)
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get"]

@@ -1,0 +1,28 @@
+{{- if .Values.operatorCheck.enabled }}
+# The CloudNativePG operator check at setup (/api/setup/status): one Deployment,
+# read only, in the operator's own namespace, which must exist before install.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: excalibase-provisioning-operator-check
+  namespace: {{ .Values.operatorCheck.namespace }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+    resourceNames: ["cnpg-controller-manager"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: excalibase-provisioning-operator-check
+  namespace: {{ .Values.operatorCheck.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name }}
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: excalibase-provisioning-operator-check
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

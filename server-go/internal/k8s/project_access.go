@@ -151,3 +151,27 @@ func (c *Client) canManagePolicies(ctx context.Context, namespace string) (bool,
 	}
 	return result.Status.Allowed, nil
 }
+
+// BackfillProjectAccess binds provisioning in every project namespace that has
+// no binding yet. Only creating a namespace made one, so namespaces from before
+// the tenant role would otherwise stay out of reach after an upgrade. A
+// namespace that cannot be bound is reported and the rest are still done.
+func (c *Client) BackfillProjectAccess(ctx context.Context) error {
+	if err := c.projectAccess.validate(); err != nil {
+		return err
+	}
+	namespaces, err := c.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: "excalibase.io/type=project"})
+	if err != nil {
+		return fmt.Errorf("list project namespaces: %w", err)
+	}
+	var failures []error
+	for _, ns := range namespaces.Items {
+		if ns.DeletionTimestamp != nil {
+			continue
+		}
+		if err := c.bindProjectAccess(ctx, ns.Name); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
