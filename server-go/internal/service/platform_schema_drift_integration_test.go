@@ -51,59 +51,149 @@ func TestPlatformSchemas_CustomerRolesCannotChangeThem(t *testing.T) {
 	}
 }
 
-const driftedOwnersProbe = `SELECT coalesce(string_agg(n.nspname || ':' || r.rolname, ',' ORDER BY n.nspname), '')
-	FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner
-	WHERE n.nspname IN ('auth', 'excalibase_cdc', 'excalibase') AND NOT r.rolsuper`
+// customerOwnedInPlatformSchemas counts the objects of a customer role (any role
+// that is not a superuser and not the platform's) left in auth or excalibase_cdc.
+const customerOwnedInPlatformSchemas = `
+SELECT count(*) FROM (
+  SELECT c.relowner AS owner, c.relnamespace AS ns FROM pg_class c
+  UNION ALL SELECT p.proowner, p.pronamespace FROM pg_proc p
+  UNION ALL SELECT t.typowner, t.typnamespace FROM pg_type t WHERE t.typrelid = 0 AND t.typcategory <> 'A'
+  UNION ALL SELECT o.oprowner, o.oprnamespace FROM pg_operator o
+) objects JOIN pg_roles r ON r.oid = objects.owner
+WHERE objects.ns IN ('auth'::regnamespace, 'excalibase_cdc'::regnamespace)
+  AND NOT r.rolsuper AND r.rolname NOT IN ('auth_admin', 'cdc_watcher')`
 
-// A schema handed to a customer role, a grant to one, and what it owns or
-// planted in the platform's schemas: the reconcile sees it and puts it back.
-func TestPlatformSchemas_ReconcileRepairsDrift(t *testing.T) {
+func (c *platformSchemaCase) probe(t *testing.T) bool {
+	t.Helper()
+	return scanBool(t, c.admin, platformSchemaDriftProbeSQL())
+}
+
+// EXC-821 review, finding 1 (critical): a SECURITY DEFINER function a customer
+// planted in auth was handed to auth_admin, so a customer view over it read
+// auth.users. A customer's object is moved out, still the customer's, and
+// gains nothing. The same for types, domains, operators and a table with a
+// rule, default and policy, and for roles beyond the owner.
+func TestPlatformSchemas_CustomerObjectsAreQuarantinedNotAdopted(t *testing.T) {
 	c := newPlatformSchemaCase(t)
 	c.register(t)
 	c.seedAuthUsers(t)
-	if scanBool(t, c.admin, platformSchemaDriftProbeSQL(customerOwner)) {
-		t.Fatal("a freshly registered project reads as drifted")
-	}
-
 	for _, statement := range []string{
-		`ALTER SCHEMA auth OWNER TO excalibase_app`,
-		`ALTER SCHEMA excalibase_cdc OWNER TO excalibase_app`,
-		`GRANT CREATE, USAGE ON SCHEMA excalibase_cdc TO ` + customerOwner,
-		`GRANT USAGE ON SCHEMA auth TO ` + customerOwner,
-		`ALTER TABLE auth.users OWNER TO excalibase_app`,
-		`CREATE FUNCTION public.app_trigger() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`,
-		`ALTER FUNCTION public.app_trigger() OWNER TO excalibase_app`,
-		`CREATE TRIGGER planted BEFORE INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.app_trigger()`,
-		`CREATE FUNCTION auth.planted() RETURNS int LANGUAGE sql AS 'SELECT 1'`,
-		`ALTER FUNCTION auth.planted() OWNER TO excalibase_app`,
+		`CREATE ROLE cust_extra NOLOGIN`,
+		`CREATE FUNCTION auth.leak() RETURNS SETOF text LANGUAGE sql SECURITY DEFINER AS 'SELECT email FROM auth.users'`,
+		`ALTER FUNCTION auth.leak() OWNER TO excalibase_app`,
+		`CREATE VIEW public.leak AS SELECT * FROM auth.leak()`,
+		`ALTER VIEW public.leak OWNER TO excalibase_app`,
+		`CREATE FUNCTION excalibase_cdc.held() RETURNS int LANGUAGE sql AS 'SELECT 1'`,
+		`ALTER FUNCTION excalibase_cdc.held() OWNER TO cust_extra`,
+		`CREATE TYPE auth.mood AS ENUM ('ok')`,
+		`ALTER TYPE auth.mood OWNER TO excalibase_app`,
+		`CREATE DOMAIN auth.positive AS int CHECK (VALUE > 0)`,
+		`ALTER DOMAIN auth.positive OWNER TO ` + customerOwner,
+		`CREATE FUNCTION auth.opfn(int, int) RETURNS int LANGUAGE sql AS 'SELECT 1'`,
+		`CREATE OPERATOR auth.### (LEFTARG = int, RIGHTARG = int, FUNCTION = auth.opfn)`,
+		`ALTER OPERATOR auth.### (int, int) OWNER TO excalibase_app`,
+		`ALTER FUNCTION auth.opfn(int, int) OWNER TO excalibase_app`,
+		`CREATE TABLE auth.planted (id int DEFAULT 1)`,
+		`ALTER TABLE auth.planted OWNER TO ` + customerOwner,
+		`CREATE RULE planted_rule AS ON INSERT TO auth.planted DO ALSO NOTHING`,
+		`GRANT USAGE ON SCHEMA auth TO cust_extra`,
+		`GRANT SELECT ON auth.users TO cust_extra`,
 	} {
 		mustExec(t, c.admin, statement)
 	}
-	if !scanBool(t, c.admin, platformSchemaDriftProbeSQL(customerOwner)) {
-		t.Fatal("the drift probe did not see a schema handed to a customer role")
+	if !c.probe(t) {
+		t.Fatal("the probe did not see customer objects in the platform schemas")
 	}
 
 	c.register(t)
 
-	if scanBool(t, c.admin, platformSchemaDriftProbeSQL(customerOwner)) {
-		t.Fatal("the registration SQL left drift behind")
+	if n := scanString(t, c.admin, customerOwnedInPlatformSchemas); n != "0" {
+		t.Fatalf("%s customer-owned object(s) are still in the platform schemas", n)
 	}
-	if drifted := scanString(t, c.admin, driftedOwnersProbe); drifted != "" {
-		t.Fatalf("schemas still owned by a non-superuser: %s", drifted)
+	if owner := scanString(t, c.admin, `SELECT proowner::regrole::text FROM pg_proc WHERE proname = 'leak' AND pronamespace = 'excalibase_quarantine_auth'::regnamespace`); owner != roleApp {
+		t.Fatalf("the planted function is owned by %q in quarantine, want it still excalibase_app's", owner)
 	}
+	// The view still exists but the function runs as its own customer owner now.
+	mustBeRefused(t, c.app, `SELECT * FROM public.leak`)
 	for _, check := range []string{
-		`SELECT NOT has_schema_privilege('` + customerOwner + `', 'excalibase_cdc', 'CREATE') AND NOT has_schema_privilege('` + customerOwner + `', 'auth', 'USAGE')`,
-		`SELECT NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'planted')`,
-		`SELECT NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'auth'::regnamespace AND c.relowner = 'excalibase_app'::regrole)`,
-		`SELECT NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'auth'::regnamespace AND p.proowner = 'excalibase_app'::regrole)`,
+		`SELECT NOT EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace IN ('auth'::regnamespace, 'excalibase_cdc'::regnamespace) AND has_function_privilege('public', oid, 'EXECUTE'))`,
+		`SELECT NOT has_schema_privilege('cust_extra', 'auth', 'USAGE') AND NOT has_table_privilege('cust_extra', 'auth.users', 'SELECT')`,
+		`SELECT NOT has_schema_privilege('excalibase_app', 'auth', 'USAGE') AND NOT has_schema_privilege('` + customerOwner + `', 'excalibase_cdc', 'USAGE')`,
 	} {
 		if !scanBool(t, c.admin, check) {
 			t.Errorf("not repaired: %s", check)
 		}
 	}
-	// The auth service keeps its table, and the customer still cannot read it.
+	if c.probe(t) {
+		t.Fatal("the registration SQL left drift behind")
+	}
+	// The auth service is unharmed.
 	mustExec(t, c.authAdmin, `UPDATE auth.users SET email = 'ada@example.org'`)
-	mustBeRefused(t, c.app, `SELECT email FROM auth.users`)
+	mustExec(t, c.authAdmin, `CREATE TABLE auth.sessions (id int)`)
+}
+
+// Finding 2 (critical): a trigger on a platform table survived because the
+// routine behind it was moved first. A trigger the platform did not put there is
+// dropped whoever owns its function.
+func TestPlatformSchemas_PlantedTriggerOnAPlatformTableIsDropped(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	for _, statement := range []string{
+		`CREATE FUNCTION auth.trig() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN NEW; END $$`,
+		`ALTER FUNCTION auth.trig() OWNER TO excalibase_app`,
+		`CREATE TRIGGER planted_in_schema BEFORE INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION auth.trig()`,
+		`CREATE FUNCTION public.trig() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`,
+		`ALTER FUNCTION public.trig() OWNER TO excalibase_app`,
+		`CREATE TRIGGER planted_in_public BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION public.trig()`,
+	} {
+		mustExec(t, c.admin, statement)
+	}
+	if !c.probe(t) {
+		t.Fatal("the probe did not see a trigger on a platform table")
+	}
+	c.register(t)
+	if scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname LIKE 'planted_in_%')`) {
+		t.Fatal("a planted trigger survived")
+	}
+	if c.probe(t) {
+		t.Fatal("the registration SQL left drift behind")
+	}
+}
+
+// Finding 3 (high): a rule on a platform table is dropped; a policy or default
+// that calls a routine the platform does not own is not adopted, the repair
+// refuses and leaves the table for an operator.
+func TestPlatformSchemas_RulesAreDroppedAndTaintedTablesAreRefused(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	mustExec(t, c.admin, `CREATE FUNCTION public.evil() RETURNS boolean LANGUAGE sql AS 'SELECT true'`)
+	mustExec(t, c.admin, `ALTER FUNCTION public.evil() OWNER TO excalibase_app`)
+
+	mustExec(t, c.admin, `CREATE RULE planted_rule AS ON INSERT TO auth.users DO ALSO NOTHING`)
+	c.register(t)
+	if scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_rewrite WHERE rulename = 'planted_rule')`) {
+		t.Fatal("a planted rule survived")
+	}
+
+	for name, statement := range map[string]string{
+		"policy":  `CREATE POLICY planted ON auth.users USING (public.evil())`,
+		"default": `ALTER TABLE auth.users ADD COLUMN planted boolean DEFAULT public.evil()`,
+		"check":   `ALTER TABLE auth.users ADD CONSTRAINT planted CHECK (public.evil())`,
+	} {
+		mustExec(t, c.admin, statement)
+		if !c.probe(t) {
+			t.Errorf("%s: the probe did not see it", name)
+		}
+		err := c.pg.psqlErr(mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
+		if err == nil || !strings.Contains(err.Error(), "left for an operator") {
+			t.Errorf("%s: registration did not refuse the table: %v", name, err)
+		}
+		mustExec(t, c.admin, map[string]string{
+			"policy": `DROP POLICY planted ON auth.users`, "default": `ALTER TABLE auth.users DROP COLUMN planted`,
+			"check": `ALTER TABLE auth.users DROP CONSTRAINT planted`}[name])
+	}
 }
 
 // A password changed in SQL by the role itself is not stopped, and the
@@ -177,14 +267,17 @@ func TestPlatformSchemas_EachKindOfDriftIsSeenAndRepaired(t *testing.T) {
 		"customer-owned function":      `CREATE FUNCTION auth.planted() RETURNS int LANGUAGE sql AS 'SELECT 1'; ALTER FUNCTION auth.planted() OWNER TO excalibase_app`,
 		"customer function trigger":    `CREATE TRIGGER planted BEFORE INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.app_trigger()`,
 		"customer-owned table":         `CREATE TABLE excalibase_cdc.planted (id int); ALTER TABLE excalibase_cdc.planted OWNER TO ` + customerOwner,
+		"customer-owned type":          `CREATE TYPE auth.planted_type AS (one int); ALTER TYPE auth.planted_type OWNER TO excalibase_app`,
+		"any other customer role":      `CREATE ROLE cust_extra NOLOGIN; GRANT USAGE ON SCHEMA auth TO cust_extra`,
+		"public may execute":           `CREATE FUNCTION auth.helper() RETURNS int LANGUAGE sql AS 'SELECT 1'`,
 		"tainted excalibase schema":    `CREATE TABLE excalibase.planted (id int); ALTER TABLE excalibase.planted OWNER TO excalibase_app`,
 	} {
 		mustExec(t, c.admin, statement)
-		if !scanBool(t, c.admin, platformSchemaDriftProbeSQL(customerOwner)) {
+		if !c.probe(t) {
 			t.Errorf("%s: the probe did not see it", name)
 		}
 		c.register(t)
-		if scanBool(t, c.admin, platformSchemaDriftProbeSQL(customerOwner)) {
+		if c.probe(t) {
 			t.Errorf("%s: registration did not put it back", name)
 		}
 	}

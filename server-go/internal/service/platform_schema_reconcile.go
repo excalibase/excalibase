@@ -109,20 +109,12 @@ func (s *ProvisioningService) rolesPending(ctx context.Context, inst *domain.Dat
 		return unfiled, err
 	}
 	exec := s.roleSQLExecer(inst.Namespace, inst.ProjectID+primaryPodSuffix)
-	if reaches, err := appReachesAuth(ctx, exec, inst.DatabaseName); err != nil || reaches {
-		return reaches, err
+	state, err := probePlatform(ctx, exec, inst)
+	if err != nil || state.appReachesAuth || state.schemasDrifted {
+		return err == nil, err
 	}
-	return s.platformDriftPending(ctx, exec, inst)
-}
-
-// platformDriftPending reports a platform schema a customer role holds or
-// owns, or a password changed in SQL (EXC-821).
-func (s *ProvisioningService) platformDriftPending(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance) (bool, error) {
-	if drifted, err := platformSchemasDrifted(ctx, exec, inst.DatabaseName, inst.Username); err != nil || drifted {
-		return drifted, err
-	}
-	passwords, err := s.driftedPasswords(ctx, exec, inst)
-	return len(passwords) > 0, err
+	drifted, err := s.passwordsDrifted(inst, state.stored)
+	return len(drifted) > 0, err
 }
 
 // missingSchedulerLogin reports whether vault holds no excalibase_scheduler
@@ -188,18 +180,7 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
 		return fmt.Errorf("re-run registration SQL: %w", err)
 	}
-	// A grant the revokes cannot take away (another grantor's, a chain of
-	// roles) must surface, not pass as reconciled every pass.
-	if reaches, err := appReachesAuth(ctx, exec, spec.databaseName); err != nil || reaches {
-		if err == nil {
-			err = errors.New("excalibase_app still reaches auth after the registration SQL")
-		}
-		return err
-	}
-	if still, err := platformSchemasDrifted(ctx, exec, spec.databaseName, spec.adminUsername); err != nil || still {
-		if err == nil {
-			err = errors.New("a platform schema still holds customer changes after the registration SQL")
-		}
+	if err := verifyPlatformClean(ctx, exec, inst); err != nil {
 		return err
 	}
 	if err := s.ensureClusterCertLogins(ctx, inst); err != nil {
@@ -421,4 +402,36 @@ func (s *ProvisioningService) RunRoleReconcile(ctx context.Context, leader Leade
 		log.Printf("platform role reconcile: %d project(s) reconciled, %d failed", report.Reconciled, len(report.Failed))
 	}
 	return report
+}
+
+// passwordRepairFor is the SQL that sets back every password changed in SQL.
+// It reads the vault and the database under the project's lease, so a rotation
+// that finished since the probe is not mistaken for drift.
+func (s *ProvisioningService) passwordRepairFor(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance) (string, error) {
+	state, err := probePlatform(ctx, exec, inst)
+	if err != nil {
+		return "", err
+	}
+	drifted, err := s.passwordsDrifted(inst, state.stored)
+	if err != nil {
+		return "", err
+	}
+	return passwordRepairSQL(drifted)
+}
+
+// verifyPlatformClean is the check after the registration SQL: a grant the
+// revokes cannot take away (another grantor's, a chain of roles) or a platform
+// schema the repair left unclean must surface, not pass as reconciled every pass.
+func verifyPlatformClean(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance) error {
+	state, err := probePlatform(ctx, exec, inst)
+	if err != nil {
+		return err
+	}
+	if state.appReachesAuth {
+		return errors.New("excalibase_app still reaches auth after the registration SQL")
+	}
+	if state.schemasDrifted {
+		return errors.New("a platform schema still holds customer changes after the registration SQL")
+	}
+	return nil
 }

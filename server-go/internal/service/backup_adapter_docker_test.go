@@ -456,6 +456,9 @@ func (f *fakeDockerClientForAdapter) ExecInContainerStdin(_ context.Context, _ s
 	if strings.Contains(strings.Join(cmd, " "), "pg_walfile_name") {
 		return f.walName + "\n", nil
 	}
+	if strings.Contains(strings.Join(cmd, " "), probeAuthTag) {
+		return probeAnswer("f"), nil // the batched probe: excalibase_app reaches nothing, the schemas are clean
+	}
 	if strings.Contains(strings.Join(cmd, " "), "has_schema_privilege") {
 		return "f\n", nil // the auth probe: excalibase_app reaches nothing there
 	}

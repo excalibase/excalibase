@@ -1289,33 +1289,52 @@ proves it, and only then promotes it. A password changed any other way is not
 what the platform holds.
 
 **Schemas.** `excalibase`, `auth` and `excalibase_cdc` belong to the platform.
-Customer SQL (`excalibase_app`) and the owner's own login cannot create in them,
-rename, drop or take ownership of them, or grant themselves anything there;
-integration tests pin each statement (`platform_schema_drift_integration_test.go`).
-`excalibase` is the superuser's, and registration rebuilds it if anything in it
-is not (section 6.9). `auth` belongs to `auth_admin`'s service and
-`excalibase_cdc` to `cdc_watcher`'s; the schema owner is the superuser.
-The `nosql` schema is not platform-managed: the removed NoSQL surface created it
-as `excalibase_app`, so it is the customer's.
+Customer SQL (`excalibase_app`), the owner's login and every role the owner
+creates cannot create in them, rename, drop or take ownership of them, or grant
+themselves anything there; integration tests pin each statement
+(`platform_schema_drift_integration_test.go`). A customer role is any role that
+is not a superuser and not one the platform holds; `excalibase_app` is the one
+platform-named role that counts as a customer. `excalibase` is the superuser's,
+and registration rebuilds it if anything in it is not (section 6.9).
+The `nosql` schema is not platform-managed: the function deploy still creates it
+as `excalibase_app` (`edgefn/migrator.go`), so it is the customer's.
 
-**Drift is repaired.** Every reconcile pass (10 minutes, leading replica, ACTIVE
-Postgres projects) probes each project. A schema owned by a customer role, a
-customer role holding CREATE or USAGE on `auth` or `excalibase_cdc`, an object or
-function in them owned by a customer role, or a trigger there that runs a customer
-role's function counts as drift. The registration SQL then returns ownership to
-the superuser, revokes the customer roles' privileges, moves their objects to the
-schema's service role and drops those triggers.
+**Drift is repaired, and customer objects are never adopted.** Every reconcile
+pass (10 minutes, leading replica, ACTIVE Postgres projects) probes each project
+in one `psql` call. It counts as drift when, in `auth` or `excalibase_cdc`:
+a customer role owns the schema; a customer role holds any privilege on the schema
+or its tables, or PUBLIC can execute a function; a customer role owns a table,
+view, sequence, composite type, function, procedure, type, domain or operator; a
+trigger on a platform table is not the platform's; or a platform table has a rule.
+The registration SQL then:
+
+- drops triggers and rules on the platform's own tables that the platform did not
+  put there, whoever owns their function, before anything is moved;
+- moves every customer-owned object out to `excalibase_quarantine_<schema>`, the
+  customer still its owner, so it gains nothing and loses nothing (the schema's
+  owner may use it there); nothing is dropped with CASCADE;
+- revokes every grant customer roles hold on the schemas and their objects, and
+  EXECUTE on their functions from PUBLIC.
+
+A platform table whose policy, column default, CHECK or index calls a routine or
+operator the platform does not own is not repaired: registration refuses
+("left for an operator"), the reconcile reports the project every pass, and the
+table is left as it is until someone reviews it. That is the chosen alternative to
+rewriting such definitions. The `excalibase` schema still uses its existing
+rebuild (section 6.9), which drops the schema with CASCADE.
 
 **What is not prevented.** Postgres lets any role change its own password with
 `ALTER ROLE ... PASSWORD`, and has no event trigger for it, so customer SQL can do
 it for `excalibase_app`, and the owner for its own login. The platform does not stop
 this. It finds it: each pass compares the verifier Postgres stores for the owner,
 `excalibase_app`, `excalibase_reader` and `excalibase_runtime` with the password the
-vault holds, and sets the database back to the vault's password. A role with a
-rotation in flight (a `pending/<role>` entry) is skipped. So a password changed in
-SQL stops working within one reconcile interval, and until then the vault's copy
-and the database disagree, so a platform call made as that role can fail. Projects
-that are paused, busy or failing at a pass are repaired at a later one.
+vault holds, and sets the database back to the vault's password. A verifier whose
+iteration count is not the platform's 4096 is drift without being hashed, so a
+tenant cannot stall the pass with a huge count. A role with a rotation in flight (a
+`pending/<role>` entry, or a current record marked pending) is skipped. So a
+password changed in SQL stops working within one reconcile interval, and until then
+the vault's copy and the database disagree, so a platform call made as that role can
+fail. Projects that are paused, busy or failing at a pass are repaired at a later one.
 
 ## 7. Image upgrade
 

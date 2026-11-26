@@ -75,41 +75,53 @@ func hmacSHA256(key []byte, message string) []byte {
 }
 
 // Matches reports whether stored, a verifier in Postgres' format, was made
-// from password. Anything that is not such a verifier matches nothing.
+// from password. Anything that is not such a verifier matches nothing, and so
+// does a verifier with any iteration count but Iterations: the count is chosen
+// by whoever set the password, so it is never fed to PBKDF2 (EXC-821).
 func Matches(stored, password string) bool {
-	rest, found := strings.CutPrefix(stored, "SCRAM-SHA-256$")
-	if !found {
+	salt, storedKey, serverKey, ok := parseVerifier(stored)
+	if !ok {
 		return false
 	}
-	params, keys, found := strings.Cut(rest, "$")
-	if !found {
-		return false
-	}
-	iterations, saltText, found := strings.Cut(params, ":")
-	if !found {
-		return false
-	}
-	count, err := strconv.Atoi(iterations)
-	if err != nil || count < 1 {
-		return false
-	}
-	storedKey, _, found := strings.Cut(keys, ":")
-	if !found {
-		return false
-	}
-	salt, err := base64.StdEncoding.DecodeString(saltText)
-	if err != nil {
-		return false
-	}
-	want, err := base64.StdEncoding.DecodeString(storedKey)
-	if err != nil {
-		return false
-	}
-	salted, err := pbkdf2.Key(sha256.New, prepare(password), salt, count, sha256.Size)
+	salted, err := pbkdf2.Key(sha256.New, prepare(password), salt, Iterations, sha256.Size)
 	if err != nil {
 		return false
 	}
 	clientKey := hmacSHA256(salted, "Client Key")
-	got := sha256.Sum256(clientKey)
-	return subtle.ConstantTimeCompare(got[:], want) == 1
+	gotStored := sha256.Sum256(clientKey)
+	gotServer := hmacSHA256(salted, "Server Key")
+	// Both keys are compared, without short-circuiting.
+	storedOK := subtle.ConstantTimeCompare(gotStored[:], storedKey)
+	serverOK := subtle.ConstantTimeCompare(gotServer, serverKey)
+	return storedOK&serverOK == 1
+}
+
+// parseVerifier splits SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>
+// and accepts it only with the platform's iteration count.
+func parseVerifier(stored string) (salt, storedKey, serverKey []byte, ok bool) {
+	rest, found := strings.CutPrefix(stored, "SCRAM-SHA-256$")
+	if !found {
+		return nil, nil, nil, false
+	}
+	params, keys, found := strings.Cut(rest, "$")
+	if !found {
+		return nil, nil, nil, false
+	}
+	iterations, saltText, found := strings.Cut(params, ":")
+	if !found {
+		return nil, nil, nil, false
+	}
+	if count, err := strconv.Atoi(iterations); err != nil || count != Iterations {
+		return nil, nil, nil, false
+	}
+	storedText, serverText, found := strings.Cut(keys, ":")
+	if !found {
+		return nil, nil, nil, false
+	}
+	decode := base64.StdEncoding.DecodeString
+	var errs [3]error
+	salt, errs[0] = decode(saltText)
+	storedKey, errs[1] = decode(storedText)
+	serverKey, errs[2] = decode(serverText)
+	return salt, storedKey, serverKey, errs[0] == nil && errs[1] == nil && errs[2] == nil
 }

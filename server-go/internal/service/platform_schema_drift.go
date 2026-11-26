@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/pgscram"
 )
 
@@ -17,24 +19,9 @@ var platformServiceSchemas = []struct{ schema, serviceRole string }{
 	{"excalibase_cdc", roleWatcher},
 }
 
-// customerRolesSQL is the roles customer SQL can run as, as a SQL array of
-// literals: excalibase_app, and the project's owner login.
-func customerRolesSQL(owner string) string {
-	return "ARRAY[" + sqlTextLiteral(roleApp) + ", " + sqlTextLiteral(owner) + "]::text[]"
-}
-
-// platformSchemaRepairSQL puts the platform's schemas back in the platform's
-// hands, and is safe to run on a clean project (EXC-821). A schema a customer
-// role owns, or holds anything on, goes back to the superuser; what such a role
-// owns inside auth or excalibase_cdc goes to the schema's service role; a
-// trigger a customer role's function runs on a table there is dropped, since
-// it would run as whoever writes the row. The excalibase schema is the rebuild's.
-func platformSchemaRepairSQL(owner string) string {
-	return strings.NewReplacer(
-		"{{CUSTOMER_ROLES}}", customerRolesSQL(owner),
-		"{{SERVICE_ROLES}}", serviceRolesArray(),
-	).Replace(platformSchemaRepairTemplate)
-}
+// platformSchemaNames are the schemas a routine or operator may live in and
+// still count as the platform's, with the built-in ones.
+var platformSchemaNames = []string{"pg_catalog", "information_schema", "auth", "excalibase", "excalibase_cdc"}
 
 func serviceRolesArray() string {
 	var pairs []string
@@ -44,94 +31,69 @@ func serviceRolesArray() string {
 	return strings.Join(pairs, ", ")
 }
 
-const platformSchemaRepairTemplate = `
-DO $excalibase_schema_repair$
-DECLARE
-  customer_roles CONSTANT text[] := {{CUSTOMER_ROLES}};
-  entry record;
-  object_row record;
-  customer_role text;
-BEGIN
-  FOR entry IN SELECT * FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role) LOOP
-    IF to_regnamespace(entry.schema_name) IS NULL OR to_regrole(entry.service_role) IS NULL THEN
-      CONTINUE;
-    END IF;
-    IF EXISTS (SELECT 1 FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner
-               WHERE n.nspname = entry.schema_name AND NOT r.rolsuper AND r.rolname <> entry.service_role) THEN
-      EXECUTE format('ALTER SCHEMA %I OWNER TO CURRENT_USER', entry.schema_name);
-    END IF;
-    FOREACH customer_role IN ARRAY customer_roles LOOP
-      IF to_regrole(customer_role) IS NULL THEN
-        CONTINUE;
-      END IF;
-      EXECUTE format('REVOKE ALL ON SCHEMA %I FROM %I', entry.schema_name, customer_role);
-    END LOOP;
-    FOR object_row IN
-      SELECT c.oid::regclass::text AS name FROM pg_class c
-      JOIN pg_roles r ON r.oid = c.relowner
-      WHERE c.relnamespace = to_regnamespace(entry.schema_name) AND r.rolname = ANY (customer_roles)
-        AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
-    LOOP
-      EXECUTE format('ALTER TABLE %s OWNER TO %I', object_row.name, entry.service_role);
-      -- A revoke made while the customer role owned it may have taken the owner's own privileges.
-      EXECUTE format('GRANT ALL ON TABLE %s TO %I', object_row.name, entry.service_role);
-    END LOOP;
-    FOR object_row IN
-      SELECT p.oid::regprocedure::text AS name FROM pg_proc p
-      JOIN pg_roles r ON r.oid = p.proowner
-      WHERE p.pronamespace = to_regnamespace(entry.schema_name) AND r.rolname = ANY (customer_roles)
-    LOOP
-      EXECUTE format('ALTER ROUTINE %s OWNER TO %I', object_row.name, entry.service_role);
-    END LOOP;
-    FOR object_row IN
-      SELECT t.tgname, t.tgrelid::regclass::text AS relation FROM pg_trigger t
-      JOIN pg_class c ON c.oid = t.tgrelid
-      JOIN pg_proc p ON p.oid = t.tgfoid
-      JOIN pg_roles r ON r.oid = p.proowner
-      WHERE c.relnamespace = to_regnamespace(entry.schema_name) AND NOT t.tgisinternal
-        AND r.rolname = ANY (customer_roles)
-    LOOP
-      EXECUTE format('DROP TRIGGER %I ON %s', object_row.tgname, object_row.relation);
-    END LOOP;
-  END LOOP;
-END
-$excalibase_schema_repair$;
-`
-
-// platformSchemaDriftProbeSQL answers t while the platform's schemas are not as
-// registration leaves them: the excalibase schema is tainted, a customer role
-// holds CREATE or USAGE on, owns or has planted something in auth or
-// excalibase_cdc, or a schema there has a customer owner (EXC-821).
-func platformSchemaDriftProbeSQL(owner string) string {
-	return strings.NewReplacer(
-		"{{CUSTOMER_ROLES}}", customerRolesSQL(owner),
-		"{{TAINTED}}", excalibaseSchemaTaintedCondition,
-		"{{SERVICE_ROLES}}", serviceRolesArray(),
-	).Replace(platformSchemaDriftProbeTemplate)
+func textArraySQL(values []string) string {
+	literals := make([]string, 0, len(values))
+	for _, value := range values {
+		literals = append(literals, sqlTextLiteral(value))
+	}
+	return "ARRAY[" + strings.Join(literals, ", ") + "]::text[]"
 }
 
-const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
-  (to_regnamespace('excalibase') IS NOT NULL AND {{TAINTED}})
-  OR EXISTS (
-    SELECT 1 FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role)
-    CROSS JOIN unnest({{CUSTOMER_ROLES}}) AS customer(role_name)
-    WHERE to_regnamespace(v.schema_name) IS NOT NULL AND to_regrole(customer.role_name) IS NOT NULL
-      AND (
-        EXISTS (SELECT 1 FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner
-                WHERE n.nspname = v.schema_name AND NOT r.rolsuper AND r.rolname <> v.service_role)
-        OR has_schema_privilege(customer.role_name, v.schema_name, 'CREATE')
-        OR has_schema_privilege(customer.role_name, v.schema_name, 'USAGE')
-        OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
-                   WHERE c.relnamespace = to_regnamespace(v.schema_name) AND r.rolname = customer.role_name
-                     AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S'))
-        OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
-                   WHERE p.pronamespace = to_regnamespace(v.schema_name) AND r.rolname = customer.role_name)
-        OR EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
-                   JOIN pg_proc p ON p.oid = t.tgfoid JOIN pg_roles r ON r.oid = p.proowner
-                   WHERE c.relnamespace = to_regnamespace(v.schema_name) AND NOT t.tgisinternal
-                     AND r.rolname = customer.role_name)
-      )
-  ), false)`
+// customerRolePredicate is true for a role customer SQL can act as: any role
+// that is not a superuser and not one the platform holds. excalibase_app is
+// the one platform-named role customer SQL runs as. The owner, which holds
+// CREATEROLE, and every role it creates are customers.
+func customerRolePredicate(alias string) string {
+	platform := make([]string, 0)
+	for _, name := range pgroles.ReservedNames() {
+		if name != roleApp {
+			platform = append(platform, name)
+		}
+	}
+	return strings.NewReplacer("{{R}}", alias, "{{NAMES}}", textArraySQL(platform), "{{PREFIXES}}", textArraySQL(pgroles.ReservedPrefixes()),
+		"{{APP}}", sqlTextLiteral(roleApp)).Replace(
+		`(NOT {{R}}.rolsuper AND ({{R}}.rolname = {{APP}} OR NOT (lower({{R}}.rolname) = ANY ({{NAMES}})
+    OR EXISTS (SELECT 1 FROM unnest({{PREFIXES}}) AS prefix_list(prefix) WHERE starts_with(lower({{R}}.rolname), prefix_list.prefix)))))`)
+}
+
+// SQL fragments both the repair and the probe read, so they cannot disagree.
+func platformSchemaFragments() *strings.Replacer {
+	foreignRoutine := func(alias, ownerColumn, namespaceColumn string) string {
+		return "(" + alias + "." + namespaceColumn + " NOT IN (SELECT oid FROM pg_namespace WHERE nspname = ANY (" + textArraySQL(platformSchemaNames) + "))" +
+			" OR EXISTS (SELECT 1 FROM pg_roles routine_owner WHERE routine_owner.oid = " + alias + "." + ownerColumn +
+			" AND " + customerRolePredicate("routine_owner") + "))"
+	}
+	return strings.NewReplacer(
+		"{{SERVICE_ROLES}}", serviceRolesArray(),
+		"{{CUSTOMER_R}}", customerRolePredicate("r"),
+		"{{CUSTOMER_O}}", customerRolePredicate("o"),
+		"{{FOREIGN_PROC}}", foreignRoutine("p", "proowner", "pronamespace"),
+		"{{FOREIGN_OP}}", foreignRoutine("op", "oprowner", "oprnamespace"),
+		"{{TAINTED}}", excalibaseSchemaTaintedCondition,
+	)
+}
+
+// customerOwnedObjects lists the owner of every object kind the quarantine
+// moves, for the schema named by {{NS}}.
+const customerOwnedObjects = `(
+    SELECT c.relowner AS owner FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'c')
+    UNION ALL SELECT p.proowner FROM pg_proc p WHERE p.pronamespace = {{NS}}
+    UNION ALL SELECT t.typowner FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
+    UNION ALL SELECT op.oprowner FROM pg_operator op WHERE op.oprnamespace = {{NS}}
+  )`
+
+// taintedTables are tables in {{NS}} with a policy, column default, CHECK or
+// index expression that calls a routine or operator the platform does not own.
+const taintedTables = `(
+    SELECT x.rel FROM (
+      SELECT a.adrelid AS rel, d.refclassid, d.refobjid FROM pg_attrdef a JOIN pg_depend d ON d.classid = 'pg_attrdef'::regclass AND d.objid = a.oid
+      UNION ALL SELECT c.conrelid, d.refclassid, d.refobjid FROM pg_constraint c JOIN pg_depend d ON d.classid = 'pg_constraint'::regclass AND d.objid = c.oid WHERE c.conrelid <> 0
+      UNION ALL SELECT pl.polrelid, d.refclassid, d.refobjid FROM pg_policy pl JOIN pg_depend d ON d.classid = 'pg_policy'::regclass AND d.objid = pl.oid
+      UNION ALL SELECT i.indrelid, d.refclassid, d.refobjid FROM pg_index i JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = i.indexrelid
+    ) x
+    WHERE (x.refclassid = 'pg_proc'::regclass AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = x.refobjid AND {{FOREIGN_PROC}}))
+       OR (x.refclassid = 'pg_operator'::regclass AND EXISTS (SELECT 1 FROM pg_operator op WHERE op.oid = x.refobjid AND {{FOREIGN_OP}}))
+  )`
 
 // storedRoleVerifier is one role and the verifier pg_authid holds for it.
 type storedRoleVerifier struct{ Role, Verifier string }
@@ -160,20 +122,18 @@ func superuserProbeCommand(dbName, statement string) []string {
 	return []string{"psql", "-X", "-tA", "-U", "postgres", "-d", superuserConninfo(dbName, 0), "-c", statement}
 }
 
-// platformSchemasDrifted asks the database whether the platform's schemas are
-// as registration leaves them. An answer that is neither t nor f is an error.
-func platformSchemasDrifted(ctx context.Context, exec roleSQLExecer, dbName, owner string) (bool, error) {
-	out, err := exec(ctx, superuserProbeCommand(dbName, platformSchemaDriftProbeSQL(owner)), "")
-	if err != nil {
-		return false, fmt.Errorf("probe the platform schemas: %w", withoutVerifiers(err))
-	}
-	switch strings.TrimSpace(out) {
-	case "t":
-		return true, nil
-	case "f":
-		return false, nil
-	}
-	return false, fmt.Errorf("probe the platform schemas: unexpected answer %q", strings.TrimSpace(out))
+// Tags that start the probe's two answer lines. A stored verifier line starts
+// with a role name, which can never begin with a tilde the platform chose.
+const (
+	probeAuthTag    = "~excalibase-auth"
+	probeSchemasTag = "~excalibase-schemas"
+)
+
+// platformState is what one probe of a project's database found.
+type platformState struct {
+	appReachesAuth bool
+	schemasDrifted bool
+	stored         []storedRoleVerifier
 }
 
 // passwordDriftRoles are the logins customer SQL can run as or hand out, whose
@@ -182,26 +142,52 @@ func passwordDriftRoles(owner string) []string {
 	return []string{owner, roleApp, roleReader, roleRuntime}
 }
 
-// storedVerifiersSQL lists the verifier Postgres holds for each of roles.
-func storedVerifiersSQL(roles []string) string {
-	literals := make([]string, 0, len(roles))
-	for _, role := range roles {
-		literals = append(literals, sqlTextLiteral(role))
-	}
-	return "SELECT rolname || E'\\t' || coalesce(rolpassword, '') FROM pg_authid WHERE rolname = ANY (ARRAY[" +
-		strings.Join(literals, ", ") + "]::text[])"
+// platformProbeSQL asks everything the reconcile checks in one statement: the
+// auth access probe, the platform-schema probe and the stored verifiers. One
+// call costs far less than three.
+func platformProbeSQL(roles []string) string {
+	return "SELECT '" + probeAuthTag + "' || E'\\t' || CASE WHEN (" + authAccessProbeSQL + ") THEN 't' ELSE 'f' END\n" +
+		"UNION ALL SELECT '" + probeSchemasTag + "' || E'\\t' || CASE WHEN (" + platformSchemaDriftProbeSQL() + ") THEN 't' ELSE 'f' END\n" +
+		"UNION ALL SELECT rolname || E'\\t' || coalesce(rolpassword, '') FROM pg_authid WHERE rolname = ANY (" + textArraySQL(roles) + ")"
 }
 
-// parseStoredVerifiers reads the probe's role-tab-verifier lines.
-func parseStoredVerifiers(out string) []storedRoleVerifier {
-	var stored []storedRoleVerifier
+// probePlatform runs the batched probe. An answer missing either flag is an
+// error, never a guess.
+func probePlatform(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance) (platformState, error) {
+	out, err := exec(ctx, superuserProbeCommand(inst.DatabaseName, platformProbeSQL(passwordDriftRoles(inst.Username))), "")
+	if err != nil {
+		return platformState{}, fmt.Errorf("probe the project's auth access and platform schemas: %w", withoutVerifiers(err))
+	}
+	return parsePlatformState(out)
+}
+
+func parsePlatformState(out string) (platformState, error) {
+	var state platformState
+	seen := map[string]bool{}
 	for _, line := range strings.Split(out, "\n") {
-		role, verifier, found := strings.Cut(strings.TrimSpace(line), "\t")
-		if found && role != "" {
-			stored = append(stored, storedRoleVerifier{Role: role, Verifier: verifier})
+		role, value, found := strings.Cut(strings.TrimSpace(line), "\t")
+		if !found {
+			continue
+		}
+		switch role {
+		case probeAuthTag, probeSchemasTag:
+			if value != "t" && value != "f" {
+				return platformState{}, fmt.Errorf("probe the project's auth access and platform schemas: unexpected answer %q", value)
+			}
+			seen[role] = true
+			if role == probeAuthTag {
+				state.appReachesAuth = value == "t"
+			} else {
+				state.schemasDrifted = value == "t"
+			}
+		default:
+			state.stored = append(state.stored, storedRoleVerifier{Role: role, Verifier: value})
 		}
 	}
-	return stored
+	if !seen[probeAuthTag] || !seen[probeSchemasTag] {
+		return platformState{}, errors.New("probe the project's auth access and platform schemas: the answer was incomplete")
+	}
+	return state, nil
 }
 
 // filedPasswords is the password the vault holds for each of roles, left out
@@ -230,20 +216,16 @@ func (s *ProvisioningService) filedPasswords(projectID string, roles []string, v
 	return passwords, nil
 }
 
-// driftedPasswords returns the roles whose password was changed in SQL, each
-// with the password the vault holds, which is what the repair sets back.
-func (s *ProvisioningService) driftedPasswords(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance) ([]RolePassword, error) {
+// passwordsDrifted returns the roles whose stored verifier is not the vault's
+// password, each with the vault's password, which is what the repair sets back.
+func (s *ProvisioningService) passwordsDrifted(inst *domain.DatabaseInstance, stored []storedRoleVerifier) ([]RolePassword, error) {
 	roles := passwordDriftRoles(inst.Username)
 	vaultRoles := map[string]string{inst.Username: roleAdmin, roleApp: roleApp, roleReader: roleReader, roleRuntime: roleRuntime}
 	want, err := s.filedPasswords(inst.ProjectID, roles, vaultRoles)
 	if err != nil || len(want) == 0 {
 		return nil, err
 	}
-	out, err := exec(ctx, superuserProbeCommand(inst.DatabaseName, storedVerifiersSQL(roles)), "")
-	if err != nil {
-		return nil, fmt.Errorf("read the stored password verifiers: %w", withoutVerifiers(err))
-	}
-	return passwordDrift(parseStoredVerifiers(out), want), nil
+	return passwordDrift(stored, want), nil
 }
 
 // passwordRepairSQL sets each drifted role back to the password the vault
@@ -259,15 +241,4 @@ func passwordRepairSQL(drifted []RolePassword) (string, error) {
 			sqlTextLiteral(entry.Role), sqlTextLiteral(entry.Verifier), raiseWithoutContext)
 	}
 	return b.String(), nil
-}
-
-// passwordRepairFor is the SQL that sets back every password changed in SQL.
-// It reads the vault and the database under the project's lease, so a rotation
-// that finished since the probe is not mistaken for drift.
-func (s *ProvisioningService) passwordRepairFor(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance) (string, error) {
-	drifted, err := s.driftedPasswords(ctx, exec, inst)
-	if err != nil {
-		return "", err
-	}
-	return passwordRepairSQL(drifted)
 }

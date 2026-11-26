@@ -1,8 +1,10 @@
 package pgscram
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
 
 func fixedSalt() []byte {
@@ -106,5 +108,37 @@ func TestMatchesRefusesWhatIsNotAScramVerifier(t *testing.T) {
 		if Matches(stored, "right-password") {
 			t.Errorf("%q matched", stored)
 		}
+	}
+}
+
+// The iteration count is set by whoever set the password: a verifier that asks
+// for any other count is refused without being hashed (EXC-821).
+func TestMatchesNeverHashesWithACustomerChosenIterationCount(t *testing.T) {
+	verifier, err := VerifierWithSalt("right-password", fixedSalt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, count := range []string{"0", "1", "4095", "4097", "2000000000", "-5", "x"} {
+		forged := strings.Replace(verifier, "$4096:", "$"+count+":", 1)
+		start := time.Now()
+		if Matches(forged, "right-password") {
+			t.Errorf("iteration count %s matched", count)
+		}
+		if took := time.Since(start); took > 50*time.Millisecond {
+			t.Errorf("iteration count %s was hashed: %s", count, took)
+		}
+	}
+}
+
+// A verifier whose StoredKey is right and ServerKey is not is not the password's.
+func TestMatchesComparesTheServerKeyToo(t *testing.T) {
+	verifier, err := VerifierWithSalt("right-password", fixedSalt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _, _ := strings.Cut(strings.TrimPrefix(verifier, "SCRAM-SHA-256$4096:AAECAwQFBgcICQoLDA0ODw==$"), ":")
+	forged := "SCRAM-SHA-256$4096:AAECAwQFBgcICQoLDA0ODw==$" + stored + ":" + base64.StdEncoding.EncodeToString(make([]byte, 32))
+	if Matches(forged, "right-password") {
+		t.Fatal("a wrong ServerKey matched")
 	}
 }

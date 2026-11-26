@@ -78,9 +78,9 @@ func TestReconcileProjectRoles_CreatesTheRuntimeLoginOfAnOlderProject(t *testing
 	if h.vault.data[vaultCredentialPath(rotProject, roleRuntime)]["password"] != filed {
 		t.Fatal("a second pass minted a new runtime password")
 	}
-	// The auth probe, the platform-schema probe and the stored-verifier probe (EXC-821).
-	if len(h.kube.ExecCommands) != execs+3 {
-		t.Fatalf("a second pass ran more than its three probes: %d commands", len(h.kube.ExecCommands)-execs)
+	// One batched probe: auth access, platform schemas and stored verifiers (EXC-821).
+	if len(h.kube.ExecCommands) != execs+1 {
+		t.Fatalf("a second pass ran more than the one probe: %d commands", len(h.kube.ExecCommands)-execs)
 	}
 }
 

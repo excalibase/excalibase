@@ -33,10 +33,10 @@ func (h *rotationHarness) seedPreSchedulerCluster(t *testing.T) {
 	h.kube.CRDs[rotNamespace+"/"+rotProject+postgresClusterSuffix] = cluster
 	// The database answers the auth probe "f" (EXC-628) and runs all else.
 	h.kube.ExecAnswer = func(cmd []string) (string, error) {
-		if strings.Contains(strings.Join(cmd, " "), authProbeMarker) {
-			return "f\n", nil
+		if strings.Contains(strings.Join(cmd, " "), probeAuthTag) {
+			return probeAnswer("f"), nil
 		}
-		return otherProbeAnswer(cmd, "ALTER ROLE"), nil
+		return "ALTER ROLE", nil
 	}
 }
 
@@ -60,13 +60,11 @@ func TestReconcileProjectRoles_BringsAnOlderProjectUpToDate(t *testing.T) {
 	if report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	// The reconcile probes the server version, runs the registration SQL, then
-	// checks excalibase_app reaches nothing in auth and the platform schemas hold
-	// nothing of a customer's (EXC-821).
-	if len(h.kube.ExecCommands) != 5 || !strings.Contains(h.kube.ExecCommands[0], "FROM pg_authid") ||
-		!strings.Contains(h.kube.ExecCommands[3], authProbeMarker) ||
-		!strings.Contains(h.kube.ExecCommands[4], "to_regnamespace('excalibase') IS NOT NULL") {
-		t.Fatalf("exec calls = %d, want the verifier probe, a version probe, the registration SQL, the auth probe and the schema probe", len(h.kube.ExecCommands))
+	// The reconcile probes the project, then the server version, runs the
+	// registration SQL and probes again for what the SQL should have removed.
+	if len(h.kube.ExecCommands) != 4 || !strings.Contains(h.kube.ExecCommands[0], probeAuthTag) ||
+		!strings.Contains(h.kube.ExecCommands[3], probeAuthTag) {
+		t.Fatalf("exec calls = %d, want a probe, a version probe, the registration SQL and a probe", len(h.kube.ExecCommands))
 	}
 	if !strings.Contains(h.kube.ExecCommands[1], "server_version_num") {
 		t.Fatalf("second exec is not the version probe: %q", h.kube.ExecCommands[1])
@@ -106,9 +104,8 @@ func TestReconcileProjectRoles_LeavesAReconciledProjectAlone(t *testing.T) {
 	if report.Reconciled != 0 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(h.kube.ExecCommands) != execsAfterFirst+3 || !strings.Contains(h.kube.ExecCommands[execsAfterFirst], authProbeMarker) ||
-		!strings.Contains(h.kube.ExecCommands[execsAfterFirst+1], "to_regnamespace('excalibase') IS NOT NULL") {
-		t.Fatalf("a second pass ran more than the auth and schema probes: %d commands", len(h.kube.ExecCommands)-execsAfterFirst)
+	if len(h.kube.ExecCommands) != execsAfterFirst+1 || !strings.Contains(h.kube.ExecCommands[execsAfterFirst], probeAuthTag) {
+		t.Fatalf("a second pass ran more than one probe: %d commands", len(h.kube.ExecCommands)-execsAfterFirst)
 	}
 	if got := h.vault.data[rotSchedulerCurrent]["password"]; got != filed {
 		t.Fatal("a second pass minted a new scheduler password")
@@ -127,15 +124,15 @@ func TestReconcileProjectRoles_RevokesAuthFromAProjectWhoseAppRoleStillReadsIt(t
 	h.vault.data[rotSchedulerCurrent] = map[string]string{
 		"host": "h.local", "port": "5432", "database": "app", "username": roleScheduler, "password": "Filed-1",
 	}
-	h.kube.ExecAnswer = authProbeAnswers("t", "f")
+	h.kube.ExecAnswer = authProbeAnswers("t", "t", "f")
 
 	report := h.svc.ReconcileProjectRoles(context.Background())
 	if report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(h.kube.ExecCommands) != 6 || !strings.Contains(h.kube.ExecCommands[0], authProbeMarker) ||
-		!strings.Contains(h.kube.ExecCommands[4], authProbeMarker) {
-		t.Fatalf("exec calls = %d, want the auth probe, the verifier probe, the version probe, the registration SQL, the auth probe again and the schema probe", len(h.kube.ExecCommands))
+	if len(h.kube.ExecCommands) != 5 || !strings.Contains(h.kube.ExecCommands[0], probeAuthTag) ||
+		!strings.Contains(h.kube.ExecCommands[4], probeAuthTag) {
+		t.Fatalf("exec calls = %d, want the probe, the probe under the lease, the version probe, the registration SQL and the probe again", len(h.kube.ExecCommands))
 	}
 	if len(h.kube.ExecStdin) != 1 || !strings.Contains(h.kube.ExecStdin[0], `REVOKE ALL ON SCHEMA auth FROM "excalibase_app", PUBLIC`) {
 		t.Fatal("the registration SQL that ran does not revoke auth")
@@ -151,7 +148,7 @@ func TestReconcileProjectRoles_ReportsAuthAccessTheSQLDidNotRemove(t *testing.T)
 	h := newRotationHarness(t)
 	h.seedPreSchedulerCluster(t)
 	h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
-	h.kube.ExecAnswer = authProbeAnswers("t", "t")
+	h.kube.ExecAnswer = authProbeAnswers("t", "t", "t")
 
 	report := h.svc.ReconcileProjectRoles(context.Background())
 	if report.Reconciled != 0 || len(report.Failed) != 1 || !strings.Contains(report.Failed[0].Error(), "still reaches auth") {
@@ -159,35 +156,25 @@ func TestReconcileProjectRoles_ReportsAuthAccessTheSQLDidNotRemove(t *testing.T)
 	}
 }
 
-// authProbeMarker is the text only the auth probe holds.
-const authProbeMarker = "has_schema_privilege('excalibase_app', 'auth'"
-
-// otherProbeAnswer answers the platform-schema drift probe "f" and the stored
-// verifier probe with no rows (EXC-821); any other command gets fallback.
-func otherProbeAnswer(cmd []string, fallback string) string {
-	text := strings.Join(cmd, " ")
-	switch {
-	case strings.Contains(text, "to_regnamespace('excalibase') IS NOT NULL"):
-		return "f\n"
-	case strings.Contains(text, "FROM pg_authid"):
-		return ""
-	}
-	return fallback
+// probeAnswer is the batched probe's answer: the auth access flag, the
+// platform-schema flag (clean) and no stored verifiers (EXC-821).
+func probeAnswer(auth string) string {
+	return probeAuthTag + "\t" + auth + "\n" + probeSchemasTag + "\tf\n"
 }
 
 // authProbeAnswers answers the auth probe with each answer in turn and every
 // other command with nothing.
 func authProbeAnswers(answers ...string) func(cmd []string) (string, error) {
 	return func(cmd []string) (string, error) {
-		if !strings.Contains(strings.Join(cmd, " "), authProbeMarker) {
-			return otherProbeAnswer(cmd, ""), nil
+		if !strings.Contains(strings.Join(cmd, " "), probeAuthTag) {
+			return "", nil
 		}
 		if len(answers) == 0 {
 			return "", errors.New("no probe answer left")
 		}
 		answer := answers[0]
 		answers = answers[1:]
-		return answer + "\n", nil
+		return probeAnswer(answer), nil
 	}
 }
 
@@ -325,7 +312,7 @@ func TestReconcileProjectRoles_SingleHostFilesAPasswordLogin(t *testing.T) {
 	if report := h.svc.ReconcileProjectRoles(context.Background()); report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(docker.execs) != 5 || !strings.Contains(docker.stdins[2], "excalibase_scheduler_role") {
+	if len(docker.execs) != 4 || !strings.Contains(docker.stdins[2], "excalibase_scheduler_role") {
 		t.Fatalf("container execs = %d", len(docker.execs))
 	}
 	if !strings.Contains(strings.Join(docker.execs[1], " "), "server_version_num") {
