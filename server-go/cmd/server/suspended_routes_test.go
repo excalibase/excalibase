@@ -54,7 +54,7 @@ func suspendedMatrixWho(t *testing.T, suspended bool) (*chi.Mux, callers) {
 			return map[string]bool{}, nil
 		})
 		deps.orgHandler = handler.NewOrgHandler(platform, nil)
-		deps.orgHandler.SetOrgGuard(deps.orgGuard)
+		configureOrgHandler(deps.orgHandler, instances, deps.orgGuard, nil, nil)
 	})
 	mux, ok := router.(*chi.Mux)
 	if !ok {

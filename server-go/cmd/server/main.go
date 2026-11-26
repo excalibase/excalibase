@@ -1674,12 +1674,18 @@ func buildBackupService(
 // before operating on it (prevents cross-org project-member enumeration).
 func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceStore, nodes handler.NodePlacement, planChanged func()) *handler.OrgHandler {
 	h := handler.NewOrgHandler(sqlStore, sqlStore)
-	h.SetInstanceStore(instances)
-	h.SetOrgGuard(newOrgGuard(instances, sqlStore))
-	h.SetNodePlacement(nodes)
-	h.SetPlanChangeHook(planChanged)
+	configureOrgHandler(h, instances, newOrgGuard(instances, sqlStore), nodes, planChanged)
 	h.SetAudit(sqlStore)
 	return h
+}
+
+// configureOrgHandler is the wiring every org handler gets, shared with the
+// router tests so they run the production setup rather than their own.
+func configureOrgHandler(h *handler.OrgHandler, instances storage.InstanceStore, guard *orgguard.Guard, nodes handler.NodePlacement, planChanged func()) {
+	h.SetInstanceStore(instances)
+	h.SetOrgGuard(guard)
+	h.SetNodePlacement(nodes)
+	h.SetPlanChangeHook(planChanged)
 }
 
 // newAlertHandler wires the stores the platform-wide alert reads scope their

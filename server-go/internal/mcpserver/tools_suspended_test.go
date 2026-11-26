@@ -47,26 +47,33 @@ func TestEveryWriteToolEitherWritesThroughTheRouterOrIsDeclaredDirect(t *testing
 			continue
 		}
 		t.Run(tc.name, func(t *testing.T) {
-			routes := newFakeRoutes()
-			if tc.setup != nil {
-				tc.setup(routes)
+			if !writesThroughTheRouter(t, tc) {
+				t.Errorf("%s changes things without a write through the router: add it to directTrafficTools", tc.tool)
 			}
-			settings := testSettings
-			if tc.plane != nil {
-				plane := httptest.NewServer(tc.plane)
-				t.Cleanup(plane.Close)
-				settings.DataPlaneURL = plane.URL
-			}
-			cs := sessionWith(t, routes, &recordingAudit{}, writeCaller(), withFeatures(settings, tc))
-			callTool(t, cs, tc.tool, tc.args)
-			for _, call := range routes.calls {
-				if call.Method != http.MethodGet {
-					return
-				}
-			}
-			t.Errorf("%s changes things without a write through the router: add it to directTrafficTools", tc.tool)
 		})
 	}
+}
+
+func writesThroughTheRouter(t *testing.T, tc routeCase) bool {
+	t.Helper()
+	routes := newFakeRoutes()
+	if tc.setup != nil {
+		tc.setup(routes)
+	}
+	settings := testSettings
+	if tc.plane != nil {
+		plane := httptest.NewServer(tc.plane)
+		t.Cleanup(plane.Close)
+		settings.DataPlaneURL = plane.URL
+	}
+	cs := sessionWith(t, routes, &recordingAudit{}, writeCaller(), withFeatures(settings, tc))
+	callTool(t, cs, tc.tool, tc.args)
+	for _, call := range routes.calls {
+		if call.Method != http.MethodGet {
+			return true
+		}
+	}
+	return false
 }
 
 func isWriteTool(name string) bool {

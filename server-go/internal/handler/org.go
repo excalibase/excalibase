@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -781,15 +782,22 @@ func (h *OrgHandler) denyOrgAction(w http.ResponseWriter, r *http.Request, orgID
 func (h *OrgHandler) refuseSuspendedMemberWrites(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r.Context())
-		if h.orgGuard == nil || user == nil || r.Method == http.MethodGet || r.Method == http.MethodHead ||
-			r.Method == http.MethodOptions || r.Method == http.MethodDelete {
+		if user == nil || isReadOrDelete(r.Method) {
 			next.ServeHTTP(w, r)
+			return
+		}
+		if h.orgGuard == nil {
+			writeOrgGuardError(w, orgguard.ErrCheckUnavailable)
 			return
 		}
 		orgID := chi.URLParam(r, "orgId")
 		member, err := h.orgStore.GetOrgMember(r.Context(), orgID, user.ID)
-		if err != nil || member == nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows), err == nil && member == nil:
 			next.ServeHTTP(w, r)
+			return
+		case err != nil:
+			writeOrgGuardError(w, fmt.Errorf("%w: read the membership: %w", orgguard.ErrCheckUnavailable, err))
 			return
 		}
 		if err := h.orgGuard.CheckOrg(r.Context(), orgID); err != nil {
@@ -798,4 +806,12 @@ func (h *OrgHandler) refuseSuspendedMemberWrites(next http.Handler) http.Handler
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isReadOrDelete(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodDelete:
+		return true
+	}
+	return false
 }

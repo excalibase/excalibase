@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"net/http"
 	"strings"
 	"testing"
@@ -121,4 +123,9 @@ func TestSuspendedOrgIsNotRevealedToANonMember(t *testing.T) {
 	if code != http.StatusNotFound || strings.Contains(body, orgguard.Message) {
 		t.Fatalf("a non-member got %d %q, want the plain 404", code, body)
 	}
+}
+
+// goodStandingGuard is the production guard over a world with no suspension.
+func goodStandingGuard(instances storage.InstanceStore) *orgguard.Guard {
+	return orgguard.New(instances, func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil })
 }
