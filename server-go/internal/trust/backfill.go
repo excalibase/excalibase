@@ -26,10 +26,16 @@ var ErrBackfillMissing = errors.New("FEATURE_LIMITEDTRIAL is on but the grandfat
 	"with the flag on, an account with no trust decision is limited, so every existing account would be limited. " +
 	"Run the backfill (it records a marker) before turning the flag on")
 
+// ErrBackfillCutoffMismatch refuses a start whose recorded backfill used another cutoff than the configured one.
+var ErrBackfillCutoffMismatch = errors.New("the recorded grandfather backfill used a different cutoff than TRUST_GRANDFATHER_BEFORE")
+
+const cutoffLayout = "2006-01-02"
+
 // RequireBackfill is the boot guard: with the flag on it demands a recorded
-// backfill. Flag off, it reads nothing. A marker that cannot be read refuses
-// too, since an unknown answer must not switch the trial on.
-func RequireBackfill(ctx context.Context, flags features.Flags, markers BackfillMarkers) error {
+// backfill that used the configured cutoff. Flag off, it reads nothing. A
+// marker that cannot be read refuses too, since an unknown answer must not
+// switch the trial on.
+func RequireBackfill(ctx context.Context, flags features.Flags, markers BackfillMarkers, cutoff time.Time) error {
 	if !features.Enabled(ctx, flags, features.LimitedTrial) {
 		return nil
 	}
@@ -42,6 +48,10 @@ func RequireBackfill(ctx context.Context, flags features.Flags, markers Backfill
 	}
 	if run == nil {
 		return ErrBackfillMissing
+	}
+	if !run.Cutoff.Equal(cutoff) {
+		return fmt.Errorf("%w: recorded %s, configured %s; run the backfill again with the configured cutoff or set TRUST_GRANDFATHER_BEFORE back",
+			ErrBackfillCutoffMismatch, run.Cutoff.UTC().Format(cutoffLayout), cutoff.UTC().Format(cutoffLayout))
 	}
 	return nil
 }

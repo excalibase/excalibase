@@ -44,7 +44,8 @@ func TestEveryWriteRouteHasATrustClass(t *testing.T) {
 
 // A route that touches apps, functions, sites or MCP may not call itself unrelated.
 func TestTrustNoneIsNeverUsedOnAWorkloadRoute(t *testing.T) {
-	workload := []string{"/apps", "app-templates", "app-network", "registry-credentials", "/projects/{projectId}/functions", "/functions/v1", "/sites", "site-builds", "/mcp"}
+	workload := []string{"/apps", "app-templates", "app-network", "registry-credentials", "/projects/{projectId}/functions", "/functions/v1", "/sites", "site-builds", "/mcp",
+		"log-drains", "auth-hooks", "db-endpoint", "s3-keys", "/internal/runtime/projects/{projectId}/scheduler"}
 	for _, row := range writeRows() {
 		if row.Trust != trustNone {
 			continue
@@ -70,5 +71,27 @@ func TestResumeAndUnsuspendAreExempt(t *testing.T) {
 	}
 	if seen < 3 {
 		t.Errorf("found %d resume/unsuspend routes, want at least 3", seen)
+	}
+}
+
+// Sites are exempt in v1; the reason must say what actually runs where, not only "Cloudflare".
+func TestSitesAreExemptForAnAccurateReason(t *testing.T) {
+	seen := 0
+	for _, row := range writeRows() {
+		if !strings.Contains(row.Pattern, "/sites") {
+			continue
+		}
+		seen++
+		if row.Trust != trustExempt {
+			t.Errorf("%v %s is %q; sites are exempt in v1", row.Methods, row.Pattern, row.Trust)
+		}
+		for _, part := range []string{"builds", "gVisor", "Workers", "our Cloudflare account", "EXC-844"} {
+			if !strings.Contains(row.TrustWhy, part) {
+				t.Errorf("%v %s: the reason does not mention %q: %s", row.Methods, row.Pattern, part, row.TrustWhy)
+			}
+		}
+	}
+	if seen < 10 {
+		t.Errorf("found %d site write routes, want at least 10", seen)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -14,6 +15,13 @@ import (
 type platformWithoutMarker struct{}
 
 type platformWithMarker struct{ run *trust.BackfillRun }
+
+type platformThatHangs struct{}
+
+func (platformThatHangs) LatestBackfill(ctx context.Context) (*trust.BackfillRun, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
 
 func (p platformWithMarker) LatestBackfill(context.Context) (*trust.BackfillRun, error) {
 	return p.run, nil
@@ -57,5 +65,27 @@ func TestRunServerCallsTheTrustBackfillCheck(t *testing.T) {
 	}
 	if !strings.Contains(string(source), "trustBackfillCheck(cfg, sqlStore)") {
 		t.Error("runServer does not call trustBackfillCheck")
+	}
+}
+
+func TestBootRefusesAMarkerFromAnotherCutoff(t *testing.T) {
+	run := &trust.BackfillRun{FinishedAt: time.Now(), Cutoff: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	if err := trustBackfillCheck(trustCfg(t, "true"), platformWithMarker{run: run}); !errors.Is(err, trust.ErrBackfillCutoffMismatch) {
+		t.Errorf("got %v, want a cutoff mismatch", err)
+	}
+}
+
+// A database that never answers must stop the boot, not hang it.
+func TestBootGivesUpWhenTheMarkerNeverAnswers(t *testing.T) {
+	previous := trustBackfillTimeout
+	trustBackfillTimeout = 20 * time.Millisecond
+	defer func() { trustBackfillTimeout = previous }()
+	start := time.Now()
+	err := trustBackfillCheck(trustCfg(t, "true"), platformThatHangs{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("got %v, want a deadline error", err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Errorf("took %s", time.Since(start))
 	}
 }
