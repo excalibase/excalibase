@@ -134,6 +134,8 @@ type destruction struct {
 	tool   string
 	target confirmTarget
 	token  string
+	// needsAdmin is set when the route that deletes sits on the admin rung, not the developer one.
+	needsAdmin bool
 	// describe says what would be destroyed; it is read only while the guard is on.
 	describe func(ctx context.Context) (string, error)
 }
@@ -149,6 +151,9 @@ type confirmArg struct {
 func (c *call) guard(ctx context.Context, d destruction) (map[string]any, error) {
 	if !features.Enabled(ctx, c.settings.Features, features.MCPConfirm) {
 		return nil, nil
+	}
+	if err := c.checkDeleteRights(ctx, d); err != nil {
+		return nil, err
 	}
 	description, err := d.describe(ctx)
 	if err != nil {
@@ -176,6 +181,26 @@ func (c *call) guard(ctx context.Context, d destruction) (map[string]any, error)
 			" again with the same arguments and confirmation_token set to this token. It works once, for this target only. " +
 			"The call that deletes is still checked against the caller's project role (the one this tool's description names), so it is refused if that role may not delete this.",
 	}, nil
+}
+
+// checkDeleteRights refuses a caller who may not delete here before they are asked to confirm,
+// by asking the same role gates the delete routes use (EXC-824). A caller whose rights cannot be
+// read is refused too: nothing is offered that the delete might then fail.
+func (c *call) checkDeleteRights(ctx context.Context, d destruction) error {
+	var rights struct {
+		CanDelete     bool `json:"canDelete"`
+		CanAdminister bool `json:"canAdminister"`
+	}
+	if err := c.get(ctx, projectsAPI+d.target.project+"/access/", nil, &rights); err != nil {
+		return fmt.Errorf("could not check your rights on this project, so nothing was offered for deletion: %w", err)
+	}
+	if d.needsAdmin && !rights.CanAdminister {
+		return errors.New("insufficient project role: you need the admin role on this project to do this, and this connection does not have it. Nothing was deleted")
+	}
+	if !rights.CanDelete {
+		return errors.New("insufficient project role: you do not have the right to delete here, it needs the developer role on this project and a token that may write. Nothing was deleted")
+	}
+	return nil
 }
 
 // What a call did about confirmation, for the audit entry.

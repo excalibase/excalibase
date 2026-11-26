@@ -107,7 +107,7 @@ func revokeS3Key(ctx context.Context, c *call, in s3KeyArgs) (any, error) {
 		return nil, errors.New("key_id must be a key's id (s3k_ and 32 hex characters), as list_s3_keys shows it")
 	}
 	preview, err := c.guard(ctx, destruction{
-		tool: "revoke_s3_key", target: confirmTarget{projectID, in.KeyID}, token: in.ConfirmationToken,
+		tool: "revoke_s3_key", target: confirmTarget{projectID, in.KeyID}, token: in.ConfirmationToken, needsAdmin: true,
 		describe: func(ctx context.Context) (string, error) {
 			listed, err := getS3Keys(ctx, c, projectID)
 			if err != nil {
