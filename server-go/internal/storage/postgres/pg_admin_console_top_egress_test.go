@@ -42,7 +42,7 @@ func TestAdminConsoleTopEgressSourceFollowsTheNetMeterFlag(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			console := NewAdminConsole(store.db).WithNetSamples(tc.netMeter)
+			console := NewAdminConsole(store.db).WithNetSamples(func() bool { return tc.netMeter })
 			overview, err := console.Overview(ctx, time.Now().Add(-24*time.Hour))
 			if err != nil {
 				t.Fatal(err)

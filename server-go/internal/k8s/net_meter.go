@@ -29,26 +29,27 @@ func (c *Client) AppPods(ctx context.Context) ([]netmeter.AppPod, error) {
 		if project == "" || app == "" || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			continue
 		}
-		pods = append(pods, netmeter.AppPod{UID: string(pod.UID), ProjectID: project, AppID: app})
+		pods = append(pods, netmeter.AppPod{UID: string(pod.UID), ProjectID: project, AppID: app, NodeName: pod.Spec.NodeName})
 	}
 	return pods, nil
 }
 
-// NodeAddresses are the nodes' internal IPs, sorted; a node without one is skipped.
-func (c *Client) NodeAddresses(ctx context.Context) ([]string, error) {
+// Nodes are the cluster's nodes with their internal IPs, by name; a node
+// without an internal IP is skipped.
+func (c *Client) Nodes(ctx context.Context) ([]netmeter.Node, error) {
 	list, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
 	}
-	var addresses []string
+	var nodes []netmeter.Node
 	for _, node := range list.Items {
 		for _, address := range node.Status.Addresses {
 			if address.Type == corev1.NodeInternalIP {
-				addresses = append(addresses, address.Address)
+				nodes = append(nodes, netmeter.Node{Name: node.Name, Address: address.Address})
 				break
 			}
 		}
 	}
-	sort.Strings(addresses)
-	return addresses, nil
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
+	return nodes, nil
 }

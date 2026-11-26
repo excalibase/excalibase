@@ -29,10 +29,19 @@ func (t *Tracker) Reset() {
 //   - a reading no later than a second after its baseline gives no rate and
 //     keeps the older baseline;
 //   - an instance missing from a round loses its baseline; what it sent
-//     between its last reading and its end is not counted.
-func (t *Tracker) Observe(readings []Reading) []Rate {
+//     between its last reading and its end is not counted;
+//   - an instance named in unobserved was not read because its source failed,
+//     not because it ended: it keeps its baseline for the round that follows.
+func (t *Tracker) Observe(readings []Reading, unobserved ...string) []Rate {
 	var rates []Rate
 	next := make(map[string]Reading, len(readings))
+	if t.primed {
+		for _, key := range unobserved {
+			if baseline, seen := t.previous[key]; seen {
+				next[key] = baseline
+			}
+		}
+	}
 	for _, current := range readings {
 		baseline, seen := t.previous[current.Key]
 		switch {

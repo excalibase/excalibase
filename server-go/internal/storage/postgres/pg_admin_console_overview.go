@@ -131,7 +131,7 @@ func (a *AdminConsole) signups(ctx context.Context, since time.Time) (int, []adm
 // with the net meter on, app_net_samples answers instead, on a cluster too.
 func (a *AdminConsole) topEgress(ctx context.Context) ([]adminconsole.ProjectBrief, error) {
 	query := topEgressSQL
-	if a.netSamples {
+	if a.ReadsNetSamples() {
 		query = topEgressNetSamplesSQL
 	}
 	rows, err := a.db.QueryContext(ctx, query, topProjects)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"sync/atomic"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/enginestats"
@@ -10,6 +11,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/netmeter"
 	"github.com/excalibase/provisioning-poc/internal/service"
 )
+
+// netMeterStarted is whether a meter was built, so the admin console switches
+// its egress card only once something is being measured.
+var netMeterStarted atomic.Bool
+
+func netMeterRunning() bool { return netMeterStarted.Load() }
 
 // netMeterOn is the netmeter flag; it does not depend on host monitoring.
 func netMeterOn(cfg config.AppConfig) bool {
@@ -35,6 +42,7 @@ func netMeterSampler(cfg config.AppConfig, store any, cluster any) service.LoopS
 		return nil
 	}
 	log.Printf("net meter: on (%s)", cfg.ProvisionerMode)
+	netMeterStarted.Store(true)
 	return netmeter.NewMeter(source, tables, metricsSampleInterval)
 }
 

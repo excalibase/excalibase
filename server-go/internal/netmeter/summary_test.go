@@ -44,3 +44,17 @@ func TestParseSummary_RefusesAnOversizedAnswer(t *testing.T) {
 		t.Fatal("an answer past the limit is refused")
 	}
 }
+
+func TestParseSummary_AMissingCounterIsNotZero(t *testing.T) {
+	doc := `{"pods":[
+	 {"podRef":{"uid":"no-rx","namespace":"n","name":"a"},"network":{"time":"2026-11-26T10:00:00Z","txBytes":5}},
+	 {"podRef":{"uid":"no-tx","namespace":"n","name":"b"},"network":{"time":"2026-11-26T10:00:00Z","rxBytes":5}},
+	 {"podRef":{"uid":"idle","namespace":"n","name":"c"},"network":{"time":"2026-11-26T10:00:00Z","rxBytes":0,"txBytes":0}}]}`
+	pods, err := ParseSummary(strings.NewReader(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pods) != 1 || pods[0].UID != "idle" {
+		t.Fatalf("a pod with a counter the kubelet did not report is skipped, a measured zero is kept: %+v", pods)
+	}
+}

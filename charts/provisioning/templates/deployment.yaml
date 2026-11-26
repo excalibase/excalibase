@@ -126,4 +126,6 @@ spec:
         - name: kubelet-ca
           configMap:
             name: {{ .Values.netmeter.kubeletCAConfigMap }}
+            # Missing, the pod still starts and the meter says why and stays off.
+            optional: true
         {{- end }}

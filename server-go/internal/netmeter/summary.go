@@ -27,14 +27,14 @@ type summaryDoc struct {
 		StartTime time.Time `json:"startTime"`
 		Network   *struct {
 			Time    time.Time `json:"time"`
-			RxBytes uint64    `json:"rxBytes"`
-			TxBytes uint64    `json:"txBytes"`
+			RxBytes *uint64   `json:"rxBytes"`
+			TxBytes *uint64   `json:"txBytes"`
 		} `json:"network"`
 	} `json:"pods"`
 }
 
 // ParseSummary reads a kubelet /stats/summary answer. A pod with no network
-// counters is left out.
+// counters, or with only one of the two, is left out.
 func ParseSummary(reader io.Reader) ([]PodNet, error) {
 	body, err := io.ReadAll(io.LimitReader(reader, maxSummaryBytes+1))
 	if err != nil {
@@ -49,12 +49,13 @@ func ParseSummary(reader io.Reader) ([]PodNet, error) {
 	}
 	pods := make([]PodNet, 0, len(doc.Pods))
 	for _, pod := range doc.Pods {
-		if pod.Network == nil {
+		// A counter the kubelet did not report is unmeasured, never zero.
+		if pod.Network == nil || pod.Network.RxBytes == nil || pod.Network.TxBytes == nil {
 			continue
 		}
 		pods = append(pods, PodNet{
 			Namespace: pod.PodRef.Namespace, Name: pod.PodRef.Name, UID: pod.PodRef.UID,
-			Started: pod.StartTime, At: pod.Network.Time, Rx: pod.Network.RxBytes, Tx: pod.Network.TxBytes,
+			Started: pod.StartTime, At: pod.Network.Time, Rx: *pod.Network.RxBytes, Tx: *pod.Network.TxBytes,
 		})
 	}
 	return pods, nil

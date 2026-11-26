@@ -150,3 +150,67 @@ func TestKubeletFetcher_RefusesAMissingOrEmptyCA(t *testing.T) {
 		t.Error("a CA file with no certificate is an error")
 	}
 }
+
+func TestKubeletFetcher_NeverFollowsARedirectWithTheToken(t *testing.T) {
+	var elsewhereHits int
+	elsewhere := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhereHits++
+		_, _ = w.Write([]byte(summaryJSON))
+	}))
+	defer elsewhere.Close()
+	redirecting := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/stats/summary", http.StatusFound)
+	}))
+	defer redirecting.Close()
+	fetcher, err := NewKubeletFetcher(writeCA(t, redirecting), writeToken(t, "secret-token"), serverPort(t, redirecting))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fetcher.Summary(context.Background(), "127.0.0.1"); err == nil || !strings.Contains(err.Error(), "302") {
+		t.Fatalf("a redirect is an error answer, got %v", err)
+	}
+	if elsewhereHits != 0 {
+		t.Fatalf("the token was sent to the redirect target %d times", elsewhereHits)
+	}
+}
+
+func TestKubeletFetcher_PicksUpARotatedCAWithoutARestart(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(summaryJSON))
+	}))
+	defer server.Close()
+	caPath := writeUnrelatedCA(t) // the CA of before the rotation: it signed nothing the server uses
+	fetcher, err := NewKubeletFetcher(caPath, writeToken(t, "t"), serverPort(t, server))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fetcher.Summary(context.Background(), "127.0.0.1"); err == nil {
+		t.Fatal("the old CA does not verify the server")
+	}
+	rotated := block(server)
+	if err := os.WriteFile(caPath, rotated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(caPath, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fetcher.Summary(context.Background(), "127.0.0.1"); err != nil {
+		t.Fatalf("the rotated CA is read when the file changes: %v", err)
+	}
+	// A bad replacement keeps the last good CA.
+	if err := os.WriteFile(caPath, []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	later = later.Add(time.Minute)
+	if err := os.Chtimes(caPath, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fetcher.Summary(context.Background(), "127.0.0.1"); err != nil {
+		t.Fatalf("an unreadable replacement must not break a working fetcher: %v", err)
+	}
+}
+
+func block(server *httptest.Server) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+}

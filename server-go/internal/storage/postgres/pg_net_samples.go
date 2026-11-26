@@ -84,29 +84,34 @@ func (s *Store) ListNetHourly(ctx context.Context, projectID, appID string, sinc
 	return out, rows.Err()
 }
 
-// rollupNetHoursSQL folds every finished hour still held as minutes into its
-// hourly row; running it again gives the same rows.
+// rollupNetHoursSQL folds the finished hours after the last rolled one into
+// their hourly rows. A rolled hour is never built again: its minute rows may
+// be partly gone by then, and a rebuild from what is left would overwrite the
+// complete row, so a conflict does nothing.
 const rollupNetHoursSQL = `
 	INSERT INTO app_net_hourly (hour, project_id, app_id, samples, avg_rx_bps, avg_tx_bps, max_tx_bps, max_instance_tx_bps)
 	SELECT date_trunc('hour', ts AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', project_id, app_id,
 	       COUNT(*), AVG(rx_bps), AVG(tx_bps), MAX(tx_bps), MAX(max_instance_tx_bps)
 	FROM app_net_samples
-	WHERE ts < date_trunc('hour', $1::timestamptz AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+	WHERE ts >= COALESCE((SELECT MAX(hour) + INTERVAL '1 hour' FROM app_net_hourly), '-infinity'::timestamptz)
+	  AND ts < $1
 	GROUP BY 1, 2, 3
-	ON CONFLICT (project_id, app_id, hour) DO UPDATE SET
-		samples = EXCLUDED.samples, avg_rx_bps = EXCLUDED.avg_rx_bps, avg_tx_bps = EXCLUDED.avg_tx_bps,
-		max_tx_bps = EXCLUDED.max_tx_bps, max_instance_tx_bps = EXCLUDED.max_instance_tx_bps`
+	ON CONFLICT (project_id, app_id, hour) DO NOTHING`
 
-// PruneNetSamples rolls finished hours up first, then deletes minutes past 48
-// hours and hourly rows past 30 days, a batch at a time.
+// PruneNetSamples rolls finished hours up first, then deletes whole hours:
+// minute rows before the hour that holds now minus 48 hours, hourly rows
+// before the hour that holds now minus 30 days, a batch at a time. Cutting on
+// an hour boundary keeps an hour's minutes together until the whole hour is
+// old enough, so no hour is ever half there.
 func (s *Store) PruneNetSamples(ctx context.Context, now time.Time) error {
-	if _, err := s.db.ExecContext(ctx, rollupNetHoursSQL, now.UTC()); err != nil {
+	now = now.UTC()
+	if _, err := s.db.ExecContext(ctx, rollupNetHoursSQL, now.Truncate(time.Hour)); err != nil {
 		return fmt.Errorf("roll up net samples: %w", err)
 	}
-	if err := s.deleteInBatches(ctx, "app_net_samples", "ts", now.Add(-netMinuteRetention)); err != nil {
+	if err := s.deleteInBatches(ctx, "app_net_samples", "ts", now.Add(-netMinuteRetention).Truncate(time.Hour)); err != nil {
 		return err
 	}
-	return s.deleteInBatches(ctx, "app_net_hourly", "hour", now.Add(-netHourlyRetention))
+	return s.deleteInBatches(ctx, "app_net_hourly", "hour", now.Add(-netHourlyRetention).Truncate(time.Hour))
 }
 
 // deleteInBatches removes rows older than the cutoff; table and column are

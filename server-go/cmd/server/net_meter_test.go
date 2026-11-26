@@ -16,6 +16,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/netmeter"
+	"github.com/excalibase/provisioning-poc/internal/storage/postgres"
 )
 
 type nullNetStore struct{}
@@ -25,7 +26,7 @@ func (nullNetStore) PruneNetSamples(context.Context, time.Time) error          {
 
 type nullCluster struct{}
 
-func (nullCluster) NodeAddresses(context.Context) ([]string, error)    { return nil, nil }
+func (nullCluster) Nodes(context.Context) ([]netmeter.Node, error)     { return nil, nil }
 func (nullCluster) AppPods(context.Context) ([]netmeter.AppPod, error) { return nil, nil }
 
 func netMeterConfig(t *testing.T, mode, flag string) config.AppConfig {
@@ -105,4 +106,38 @@ func writeTestCA(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// EXC-844: the top-egress card follows the meter that actually started, not the
+// bare flag, and nothing about it depends on host monitoring.
+func TestNetMeter_TopEgressSourceFollowsTheMeterAcrossHostMetricsAndNetMeter(t *testing.T) {
+	for _, hostMetrics := range []string{"", "true"} {
+		for _, netMeter := range []string{"", "true"} {
+			t.Run("hostmetrics="+hostMetrics+" netmeter="+netMeter, func(t *testing.T) {
+				netMeterStarted.Store(false)
+				t.Setenv("FEATURE_HOSTMETRICS", hostMetrics)
+				cfg := netMeterConfig(t, "docker", netMeter)
+				sampler := netMeterSampler(cfg, nullNetStore{}, nil)
+				if (sampler != nil) != (netMeter == "true") {
+					t.Fatalf("meter built = %v with netmeter=%q", sampler != nil, netMeter)
+				}
+				console := postgres.NewAdminConsole(nil).WithNetSamples(netMeterRunning)
+				if console.ReadsNetSamples() != (netMeter == "true") {
+					t.Fatalf("console reads net samples = %v with netmeter=%q hostmetrics=%q", console.ReadsNetSamples(), netMeter, hostMetrics)
+				}
+			})
+		}
+	}
+}
+
+func TestNetMeter_ABrokenKubeletCAMeansTheCardKeepsReadingHostMonitoring(t *testing.T) {
+	netMeterStarted.Store(false)
+	t.Setenv("NETMETER_KUBELET_CA_FILE", filepath.Join(t.TempDir(), "missing.crt"))
+	cfg := netMeterConfig(t, "", "true")
+	if netMeterSampler(cfg, nullNetStore{}, nullCluster{}) != nil {
+		t.Fatal("no CA: the meter does not start")
+	}
+	if postgres.NewAdminConsole(nil).WithNetSamples(netMeterRunning).ReadsNetSamples() {
+		t.Fatal("the flag is on but nothing is being measured: the card must not switch to an empty table")
+	}
 }

@@ -55,7 +55,7 @@ rules:
   # only: nodes/proxy would also reach exec and logs on every node.
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["get", "list"]
+    verbs: ["list"]
   - apiGroups: [""]
     resources: ["nodes/stats"]
     verbs: ["get"]

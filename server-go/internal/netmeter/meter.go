@@ -2,6 +2,7 @@ package netmeter
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 )
@@ -33,20 +34,31 @@ func NewMeter(source Source, store Store, interval time.Duration) *Meter {
 }
 
 // Sample takes one round. A gap of more than three intervals since the last
-// round means this replica was not sampling (a leader change, a stalled loop),
-// so baselines are dropped and that round only records new ones: a rate over
-// an hour would hide a burst.
+// round that read anything means this replica was not sampling (a leader
+// change, a long outage), so baselines are dropped and that round only records
+// new ones: a rate over an hour would hide a burst. A round that read nothing
+// because the source failed leaves the baselines alone; a partial failure keeps
+// the baselines of what the failed part would have covered.
 func (m *Meter) Sample(ctx context.Context) {
 	now := m.now()
 	if !m.lastSample.IsZero() && now.Sub(m.lastSample) > 3*m.interval {
 		m.tracker.Reset()
 	}
-	m.lastSample = now
 	readings, err := m.source.Read(ctx)
+	var unobserved []string
 	if err != nil {
 		log.Printf("net meter: read: %v", err)
+		var partial *PartialError
+		if errors.As(err, &partial) {
+			unobserved = partial.Unobserved
+		}
+		if len(readings) == 0 {
+			m.pruneIfDue(ctx, now)
+			return
+		}
 	}
-	samples := Aggregate(now, m.tracker.Observe(readings))
+	m.lastSample = now
+	samples := Aggregate(now, m.tracker.Observe(readings, unobserved...))
 	if len(samples) > 0 {
 		if err := m.store.AppendNetSamples(ctx, samples); err != nil {
 			log.Printf("net meter: store %d samples: %v", len(samples), err)

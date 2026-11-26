@@ -12,6 +12,7 @@ import (
 func labelledPod(namespace, name, uid string, labels map[string]string, phase corev1.PodPhase) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, UID: types.UID(uid), Labels: labels},
+		Spec:       corev1.PodSpec{NodeName: "node-of-" + name},
 		Status:     corev1.PodStatus{Phase: phase},
 	}
 }
@@ -44,13 +45,18 @@ func TestAppPods_ListsCustomerAppPodsOnly(t *testing.T) {
 	for _, pod := range pods {
 		got[pod.UID] = pod.ProjectID + "/" + pod.AppID
 	}
+	for _, pod := range pods {
+		if pod.UID == "u1" && pod.NodeName != "node-of-app-web-1" {
+			t.Errorf("the pod's node is kept so a failed node can be named: %+v", pod)
+		}
+	}
 	want := map[string]string{"u1": "proj-1/web", "u2": "proj-2/api"}
 	if len(got) != len(want) || got["u1"] != want["u1"] || got["u2"] != want["u2"] {
 		t.Fatalf("pods = %v, want %v: only component=app and managed-by, with both ids, not finished", got, want)
 	}
 }
 
-func TestNodeAddresses_ReturnsInternalIPsOfNodes(t *testing.T) {
+func TestNodes_ReturnsNameAndInternalIPOfNodes(t *testing.T) {
 	node := func(name string, addresses ...corev1.NodeAddress) *corev1.Node {
 		return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: corev1.NodeStatus{Addresses: addresses}}
 	}
@@ -59,11 +65,11 @@ func TestNodeAddresses_ReturnsInternalIPsOfNodes(t *testing.T) {
 		node("n2", corev1.NodeAddress{Type: corev1.NodeExternalIP, Address: "1.2.3.4"}),
 		node("n3", corev1.NodeAddress{Type: corev1.NodeInternalIP, Address: "10.0.0.3"}),
 	)
-	addresses, err := client.NodeAddresses(context.Background())
+	nodes, err := client.Nodes(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(addresses) != 2 || addresses[0] != "10.0.0.1" || addresses[1] != "10.0.0.3" {
-		t.Fatalf("addresses = %v: internal IPs only, nodes without one skipped", addresses)
+	if len(nodes) != 2 || nodes[0].Name != "n1" || nodes[0].Address != "10.0.0.1" || nodes[1].Name != "n3" || nodes[1].Address != "10.0.0.3" {
+		t.Fatalf("nodes = %+v: internal IPs only, nodes without one skipped", nodes)
 	}
 }

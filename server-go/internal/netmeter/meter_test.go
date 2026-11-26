@@ -147,3 +147,68 @@ func TestMeter_PrunesAtMostOncePerHour(t *testing.T) {
 		t.Fatalf("pruned at start and again after an hour, got %d: %v", len(store.pruned), store.pruned)
 	}
 }
+
+func TestMeter_ATotalFailureDoesNotPoisonTheNextRound(t *testing.T) {
+	failing := &flakySource{rounds: []flakyRound{
+		{readings: round(t0, 0, 0)},
+		{err: errors.New("kubelet down")},
+		{readings: round(t0.Add(2*time.Minute), 12000, 12000)},
+	}}
+	store := &memoryStore{}
+	c := &clock{now: t0}
+	meter := newTestMeter(failing, store, c)
+	for _, step := range []time.Duration{0, time.Minute, 2 * time.Minute} {
+		c.now = t0.Add(step)
+		meter.Sample(context.Background())
+	}
+	if len(store.appended) != 1 || store.appended[0][0].RxBps != 100 {
+		t.Fatalf("the round after a failed one is rated from the baseline that survived it: %+v", store.appended)
+	}
+}
+
+func TestMeter_APartialFailureKeepsTheBaselineOfWhatItDidNotSee(t *testing.T) {
+	both := []Reading{{Key: "a", ProjectID: "p", AppID: "x", At: t0}, {Key: "b", ProjectID: "p", AppID: "y", At: t0}}
+	source := &flakySource{rounds: []flakyRound{
+		{readings: both},
+		{readings: []Reading{{Key: "b", ProjectID: "p", AppID: "y", At: t0.Add(time.Minute), Rx: 60, Tx: 60}}, err: &PartialError{Unobserved: []string{"a"}, Err: errors.New("node a down")}},
+		{readings: []Reading{
+			{Key: "a", ProjectID: "p", AppID: "x", At: t0.Add(2 * time.Minute), Rx: 12000, Tx: 12000},
+			{Key: "b", ProjectID: "p", AppID: "y", At: t0.Add(2 * time.Minute), Rx: 120, Tx: 120},
+		}},
+	}}
+	store := &memoryStore{}
+	c := &clock{now: t0}
+	meter := newTestMeter(source, store, c)
+	for _, step := range []time.Duration{0, time.Minute, 2 * time.Minute} {
+		c.now = t0.Add(step)
+		meter.Sample(context.Background())
+	}
+	if len(store.appended) != 2 {
+		t.Fatalf("batches = %d", len(store.appended))
+	}
+	var a *Sample
+	for i := range store.appended[1] {
+		if store.appended[1][i].AppID == "x" {
+			a = &store.appended[1][i]
+		}
+	}
+	if a == nil || a.RxBps != 100 {
+		t.Fatalf("a is rated over the 120 s since its kept baseline: %+v", a)
+	}
+}
+
+type flakyRound struct {
+	readings []Reading
+	err      error
+}
+
+type flakySource struct {
+	rounds []flakyRound
+	calls  int
+}
+
+func (f *flakySource) Read(context.Context) ([]Reading, error) {
+	round := f.rounds[f.calls]
+	f.calls++
+	return round.readings, round.err
+}

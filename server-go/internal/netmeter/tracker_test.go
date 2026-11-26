@@ -122,3 +122,31 @@ func TestTracker_ResetForgetsEverything(t *testing.T) {
 		t.Fatalf("after Reset the next observation is a baseline again: %+v", rates)
 	}
 }
+
+func TestTracker_UnobservedKeysKeepTheirBaselineAcrossAFailedRead(t *testing.T) {
+	tracker := NewTracker()
+	started := t0.Add(-time.Hour) // a pod judged by its start time would show a tiny lifetime average
+	tracker.Observe([]Reading{reading("a", t0, started, 0, 0), reading("b", t0, started, 0, 0)})
+	rates := tracker.Observe([]Reading{reading("b", t0.Add(60*time.Second), started, 6000, 6000)}, "a")
+	if len(rates) != 1 || rates[0].Key != "b" {
+		t.Fatalf("only the node that answered gives rates: %+v", rates)
+	}
+	rates = tracker.Observe([]Reading{reading("a", t0.Add(120*time.Second), started, 12000, 24000), reading("b", t0.Add(120*time.Second), started, 12000, 12000)})
+	var a *Rate
+	for i := range rates {
+		if rates[i].Key == "a" {
+			a = &rates[i]
+		}
+	}
+	if a == nil || a.RxBps != 100 || a.TxBps != 200 {
+		t.Fatalf("a came back: 12000 and 24000 bytes over the 120 s since its kept baseline, got %+v", a)
+	}
+}
+
+func TestTracker_UnobservedKeyWithoutABaselineStaysUnknown(t *testing.T) {
+	tracker := NewTracker()
+	tracker.Observe([]Reading{reading("b", t0, time.Time{}, 0, 0)})
+	if rates := tracker.Observe([]Reading{reading("b", t0.Add(10*time.Second), time.Time{}, 10, 10)}, "ghost"); len(rates) != 1 {
+		t.Fatalf("naming a key with no baseline changes nothing: %+v", rates)
+	}
+}
