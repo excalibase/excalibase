@@ -1,10 +1,10 @@
 #!/bin/bash
-# E2E full-flow test for Docker provisioner mode in CLOUD storage shape:
-# Postgres platform store + Postgres vault store (the same shape AIO helm
-# uses in K8s, but with the Docker provisioner instead of CNPG). Catches
-# bugs that only surface with the bootstrap-Job init flow (no auto-init) —
-# e.g. vault barrier serialization, schema migrations, concurrent
-# transaction handling.
+# E2E full-flow test for the Docker provisioner with the Postgres platform store
+# and Postgres vault barrier, vault initialised by hand (no auto-init), the
+# shape a single-host install runs. DEPLOYMENT_MODE=cloud with the Docker
+# provisioner is refused at boot on purpose (multi-tenant control plane on a
+# runtime with no cross-tenant isolation), so this runs self-hosted. Catches bugs
+# in vault barrier serialization, schema migrations and concurrent transactions.
 #
 # Prerequisites:
 #   - Docker 24+ running (docker ps works)
@@ -24,6 +24,7 @@ DATA_DIR=$(mktemp -d)
 PLATFORM_DB_CONTAINER="excalibase-e2e-platform-db-$$"
 PLATFORM_DB_PORT=$((25400 + RANDOM % 100))
 SERVER_PID=""
+PROJECT_ID=""
 DENO_PID=""
 PASS=0
 FAIL=0
@@ -37,7 +38,10 @@ cleanup() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null && wait "$SERVER_PID" 2>/dev/null || true
   [ -n "$DENO_PID" ] && kill "$DENO_PID" 2>/dev/null && wait "$DENO_PID" 2>/dev/null || true
   docker rm -fv "$PLATFORM_DB_CONTAINER" >/dev/null 2>&1 || true
-  docker ps -a --filter "label=excalibase.managed=true" --format '{{.Names}}' | xargs -r docker rm -fv 2>/dev/null || true
+  # Only the tenant this run provisioned: other managed containers on the host are not ours.
+  if [ -n "$PROJECT_ID" ] && [ "$PROJECT_ID" != null ]; then
+    docker ps -a --filter "label=excalibase.managed=true" --filter "name=$PROJECT_ID" --format '{{.Names}}' | xargs -r docker rm -fv 2>/dev/null || true
+  fi
   rm -rf "$DATA_DIR"
   echo "Cleanup done."
 }
@@ -55,13 +59,13 @@ go build -o "$DATA_DIR/excalibase-server" ./cmd/server/ 2>&1
 pass "server binary built"
 
 # --- Step 1: Start platform-db Postgres container ---
-echo "1. Start platform-db Postgres (cloud mode shape)"
+echo "1. Start platform-db Postgres"
 docker run -d --name "$PLATFORM_DB_CONTAINER" \
   -p "$PLATFORM_DB_PORT:5432" \
   -e POSTGRES_DB=platform \
   -e POSTGRES_USER=platform \
   -e POSTGRES_PASSWORD=platformpass \
-  postgres:16-alpine > /dev/null
+  "${IMAGE_MIRROR:+$IMAGE_MIRROR/}postgres:16-alpine" > /dev/null
 # Wait for ready
 for i in $(seq 1 30); do
   if docker exec "$PLATFORM_DB_CONTAINER" pg_isready -U platform -d platform > /dev/null 2>&1; then
@@ -96,11 +100,19 @@ done
 curl -sf -H "X-Runtime-Secret: $DENO_RUNTIME_SECRET" http://127.0.0.1:8000/health > /dev/null 2>&1 \
   && pass "deno runtime healthy" || fail "deno" "not healthy after 15s"
 
-# --- Step 3: Start provisioning server in cloud mode ---
-echo "3. Start provisioning server (PROVISIONER_MODE=docker, cloud → Postgres + Postgres-vault)"
+SETUP_TOKEN="e2e-setup-token-$(date +%s)-0123456789abcdef"
+
+# --- Step 3: Start provisioning server ---
+echo "3. Start provisioning server (PROVISIONER_MODE=docker, selfhosted → Postgres + Postgres-vault)"
 cd "$ROOT"
 PORT=24056 \
-DEPLOYMENT_MODE=cloud \
+PUBLIC_PORT=24057 \
+KUBECONFIG=/nonexistent \
+TRUSTED_PROXY_CIDRS="127.0.0.1/32" \
+STUDIO_URL="http://localhost:5174" \
+SETUP_TOKEN="$SETUP_TOKEN" \
+DEPLOYMENT_MODE=selfhosted \
+VAULT_UNSEAL_PROVIDER=manual \
 PROVISIONER_MODE=docker \
 PLATFORM_DB_URL="$PLATFORM_DB_URL" \
 STORAGE_PATH="$DATA_DIR" \
@@ -123,24 +135,16 @@ curl -sf http://localhost:24056/healthz > /dev/null 2>&1 \
 
 API="http://localhost:24056"
 
-# --- Step 4: Confirm cloud mode + Postgres backend ---
-echo "4. Confirm storage backends are Postgres-Postgres"
+# --- Step 4: Confirm self-hosted mode ---
+echo "4. Confirm deployment mode"
 R=$(curl -s "$API/api/config")
-echo "$R" | jq -r '.deploymentMode' 2>/dev/null | grep -q cloud && pass "cloud mode" || fail "config" "$R"
-
-# Inspect server log to confirm both stores chose the Postgres path
-grep -q "Cloud mode: using PostgreSQL platform store" "$DATA_DIR/server.log" \
-  && pass "platform store = Postgres" \
-  || fail "platform store" "expected Cloud mode log line"
-grep -q "Cloud mode: using PostgreSQL vault store" "$DATA_DIR/server.log" \
-  && pass "vault store = Postgres" \
-  || fail "vault store" "expected Cloud mode log line"
+echo "$R" | jq -r '.deploymentMode' 2>/dev/null | grep -q selfhosted && pass "selfhosted mode" || fail "config" "$R"
 
 # --- Step 5: Register first admin (wizard step 4) ---
 # Runs BEFORE the vault steps, which need an operator credential.
 echo "5. Register platform admin"
 ADMIN_PASS="E2eAdmin123!"
-REG_BODY=$(jq -n --arg p "$ADMIN_PASS" '{username:"admin", email:"admin@e2e.local", password:$p}')
+REG_BODY=$(jq -n --arg p "$ADMIN_PASS" --arg t "$SETUP_TOKEN" '{username:"admin", email:"admin@e2e.local", password:$p, setupToken:$t}')
 R=$(curl -s -X POST "$API/api/auth/register" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' -d "$REG_BODY")
 TOKEN=$(echo "$R" | jq -r '.token' 2>/dev/null)
 ROLE=$(echo "$R" | jq -r '.user.role' 2>/dev/null)
@@ -157,8 +161,10 @@ fi
 # refusal as "already initialised" — so the vault step tested nothing.
 echo "6. Vault init + unseal"
 if curl -s "$API/api/vault/status" | jq -r '.initialized' 2>/dev/null | grep -q true; then
-  R=$(curl -s "$API/api/vault/status")
-  echo "$R" | jq -r '.sealed' 2>/dev/null | grep -q false && pass "vault already unsealed" || fail "vault" "$R"
+  # Manual unseal provider: a fresh database is never initialised, so this means
+  # the vault init and unseal below would not run. That is a failed test.
+  fail "vault" "already initialised before the init step: $(curl -s "$API/api/vault/status")"
+  exit 1
 else
   VAULT_INIT=$(curl -s -X POST "$API/api/vault/init" \
     -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
@@ -186,22 +192,21 @@ BARRIER_COUNT=$(docker exec "$PLATFORM_DB_CONTAINER" psql -U platform -d platfor
   && pass "vault barrier persisted in platform-db" \
   || fail "vault barrier" "expected 1 row in vault_barrier, got '$BARRIER_COUNT'"
 
-# --- Step 7: Cloud mode: orgs are not auto-bootstrapped ---
-# Cloud mode skips BootstrapDefaultOrg (orgs created on-demand via API).
-# Create one explicitly so the rest of the flow has somewhere to provision.
-echo "7. Create org via API (cloud mode)"
-R=$(curl -s -X POST "$API/api/orgs/" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"E2E Cloud Org","slug":"e2e-cloud","tier":"FREE"}')
-ORG_ID=$(echo "$R" | jq -r '.id' 2>/dev/null)
-[ -n "$ORG_ID" ] && [ "$ORG_ID" != "null" ] \
-  && pass "org created (id=$ORG_ID)" \
-  || fail "org create" "$R"
+# --- Step 7: Default org ---
+# Self-hosted bootstraps one org; cloud mode alone creates orgs on demand.
+echo "7. Default org"
+R=$(curl -s "$API/api/orgs/" -H "Authorization: Bearer $TOKEN")
+ORG_ID=$(echo "$R" | jq -r '.[0].id' 2>/dev/null)
+[ "$(echo "$R" | jq -r '.[0].slug' 2>/dev/null)" = "default" ] \
+  && pass "default org exists (id=$ORG_ID)" \
+  || fail "default org" "$R"
 
 # --- Step 8: Provision project (Docker mode) ---
+# Backups are off here: this run covers the Postgres stores, and a backup target needs an object store.
 echo "8. Provision project"
 R=$(curl -s -X POST "$API/api/provision/" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"e2e-cloud-test\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\"}")
+  -d "{\"projectName\":\"e2e-cloud-test\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"postgresVersion\":\"17\",\"backup\":{\"enabled\":false}}")
 PROJECT_ID=$(echo "$R" | jq -r '.projectId' 2>/dev/null)
 [ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" == proj-* ]] \
   && pass "provision started (ref=$PROJECT_ID)" \
@@ -235,7 +240,7 @@ echo "10. Verify per-project credentials in Postgres vault"
 # auth_admin (4 paths total). Read them back through the vault API.
 for role in admin excalibase_app cdc_watcher auth_admin; do
   R=$(curl -s -H "Authorization: Bearer $TOKEN" \
-    "$API/api/vault/secrets/projects/e2e-cloud/$PROJECT_ID/credentials/$role")
+    "$API/api/vault/secrets/projects/default/$PROJECT_ID/credentials/$role")
   echo "$R" | jq -r '.username' 2>/dev/null | grep -q "." \
     && pass "vault has $role credentials" \
     || fail "vault" "missing $role: $R"
@@ -243,7 +248,7 @@ done
 
 # --- Step 11: Deprovision ---
 # The owner's own delete (Admin role or higher), not the operator console: this
-# server runs cloud mode without ADMIN_HOST, so /api/admin answers 404 by design
+# server runs without ADMIN_HOST, so /api/admin answers 404 by design
 # (EXC-757). A new project is deletion-protected, so the owner turns that off
 # first. The delete stops the tenant (a grace period holds the rest), so the
 # container must be gone from the running list.
