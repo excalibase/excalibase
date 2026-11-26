@@ -26,3 +26,20 @@ func TestVaultSecretRouteSaysAProjectHasNoDatabase(t *testing.T) {
 		t.Errorf("a non-database secret was refused as a database login: %d", w.Code)
 	}
 }
+
+// EXC-832: a paused project's database is shut down, so the engine is told
+// 423 and can answer "project paused" instead of failing to connect.
+func TestVaultSecretRouteSaysAProjectIsPaused(t *testing.T) {
+	h, _ := vaultHandlerWithProject(t, "proj-1", "PAUSED")
+
+	for _, role := range []string{"excalibase_app", "auth_admin", "admin"} {
+		w := getVaultSecret(t, h, "projects/proj-1/credentials/"+role)
+		if w.Code != http.StatusLocked || !strings.Contains(w.Body.String(), "project is paused") {
+			t.Errorf("%s: got %d %s, want 423 project is paused", role, w.Code, w.Body.String())
+		}
+	}
+
+	if w := getVaultSecret(t, h, "projects/proj-1/credentials/jwt_keys/anon_token"); w.Code == http.StatusLocked {
+		t.Errorf("a non-database secret was refused as a paused database login: %d", w.Code)
+	}
+}
