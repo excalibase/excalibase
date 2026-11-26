@@ -78,7 +78,9 @@ type TierResolver func(ctx context.Context, tier domain.TierType) (config.TierCo
 
 // IdlePauser is the slice of PauseService the sweep needs.
 type IdlePauser interface {
-	Pause(ctx context.Context, projectID, reason string) error
+	// PauseIdle pauses a project only while it is still ACTIVE under the
+	// lease; admitted runs once just before the work and judges it again.
+	PauseIdle(ctx context.Context, projectID, reason string, admitted func() error) error
 	// PauseStuck finishes a pause only while the row is still PAUSING under the
 	// lease; admitted runs once just before the work.
 	PauseStuck(ctx context.Context, projectID, reason string, admitted func() error) error
@@ -143,6 +145,9 @@ type IdlePauseReport struct {
 	Paused  []string
 	Resumed []string
 	Failed  []string
+	// Skipped are the projects an idle pause stood down on, because under
+	// their lease they were no longer idle.
+	Skipped []string
 }
 
 // IdlePauseScheduler pauses idle projects. Every Interval it takes the
@@ -486,14 +491,50 @@ func warningDue(row domain.ProjectActivity, seen bool, lastSeen time.Time) bool 
 	return !seen || row.IdleWarnedAt == nil || row.IdleWarnedAt.Before(lastSeen)
 }
 
+// pause pauses a project the listing showed idle. The listing may be many
+// minutes old by the time its turn comes, so the pause judges it again under
+// the project's lease and stands down when it is no longer idle.
 func (s *IdlePauseScheduler) pause(ctx context.Context, inst *domain.DatabaseInstance, idle time.Duration, report *IdlePauseReport) {
-	if err := s.pauser.Pause(ctx, inst.ProjectID, domain.PauseReasonIdle); err != nil {
+	err := s.pauser.PauseIdle(ctx, inst.ProjectID, domain.PauseReasonIdle, s.stillIdle(ctx, inst.ProjectID))
+	if errors.Is(err, ErrNoLongerIdle) {
+		s.logger.Printf("idle-pause: %s is no longer idle; not paused", inst.ProjectID)
+		report.Skipped = append(report.Skipped, inst.ProjectID)
+		return
+	}
+	if err != nil {
 		s.logger.Printf("idle-pause: pause %s failed: %v", inst.ProjectID, err)
 		report.Failed = append(report.Failed, inst.ProjectID)
 		return
 	}
 	s.logAudit(ctx, AuditActionIdlePause, inst.ProjectID, fmt.Sprintf("paused after %.1f idle days", idle.Hours()/24))
 	report.Paused = append(report.Paused, inst.ProjectID)
+}
+
+// stillIdle is the check a pause runs under the project's lease: the row, its
+// plan and its activity are read again, and the project must still be idle by
+// the same rule the sweep applied.
+func (s *IdlePauseScheduler) stillIdle(ctx context.Context, projectID string) func() error {
+	return func() error {
+		inst, err := s.instances.FindByProjectID(projectID)
+		if err != nil || inst == nil {
+			return fmt.Errorf("project not found: %s", projectID)
+		}
+		pauseAfterDays, tiered := s.autoPauseDays(ctx, inst)
+		now := s.now()
+		if !tiered || inst.Status != "ACTIVE" || inst.NoDatabase || domain.IsNotServable(inst.Status) || s.resumedRecently(inst, now) {
+			return ErrNoLongerIdle
+		}
+		row, seen, err := s.activity.GetProjectActivity(ctx, projectID)
+		if err != nil {
+			return fmt.Errorf("read activity of %s: %w", projectID, err)
+		}
+		row, seen, judged := s.withEngineActivity(ctx, inst, row, seen, now)
+		lastSeen, known := effectiveLastSeen(inst, row, seen)
+		if !judged || !known || now.Sub(lastSeen) < time.Duration(pauseAfterDays)*idleDay {
+			return ErrNoLongerIdle
+		}
+		return nil
+	}
 }
 
 func (s *IdlePauseScheduler) warn(ctx context.Context, inst *domain.DatabaseInstance, lastSeen, pauseAt, now time.Time, report *IdlePauseReport) {
