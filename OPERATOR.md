@@ -1429,7 +1429,7 @@ every interface with `DOCKER_DB_PUBLIC`), so there is no port to close per
 project. The project then reads as unknown to the data plane:
 `GET /api/projects/{id}/info` and the vault credential read answer 404 (503 if
 the standing cannot be read), public storage files answer 404, and every write
-on a project route answers 403 for the org's other members. DELETE and `/pause`
+on a project route answers 403 for the org's other members, and so does a write on an org route (rename, add or re-role a member, project members). DELETE and `/pause`
 stay open, and so does the read-only `GET /api/schema/{id}/query`. A platform
 admin keeps the override. The engine and the auth service keep their last copy
 until their caches expire (the engine's pool up to 30 minutes, the auth service
