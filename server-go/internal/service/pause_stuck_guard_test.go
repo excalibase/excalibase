@@ -94,3 +94,33 @@ func TestStuckRetry_BusyProjectIsNotCounted(t *testing.T) {
 		t.Fatalf("err %v, admitted %d", err, admitted)
 	}
 }
+
+// The sweep read ACTIVE up to a tick ago. An idle pause acts only on a row that
+// is still ACTIVE under the lease, and only once the sweep's own check agrees.
+func TestIdlePause_ServiceActsOnlyOnAnActiveRowTheSweepStillJudgesIdle(t *testing.T) {
+	for _, status := range []domain.ProvisioningStage{domain.StatusPaused, domain.StatusPausing, domain.StatusResuming} {
+		f := newObservedPause(t)
+		f.setStatus(t, status)
+		judged := 0
+
+		err := f.svc.PauseIdle(context.Background(), observedPauseProject, domain.PauseReasonIdle, func() error { judged++; return nil })
+
+		if !errors.Is(err, ErrNoLongerIdle) || judged != 0 || len(f.pauser.log) != 0 {
+			t.Fatalf("%s: err %v, judged %d, calls %v", status, err, judged, f.pauser.log)
+		}
+	}
+
+	f := newObservedPause(t)
+	f.setStatus(t, "ACTIVE")
+	err := f.svc.PauseIdle(context.Background(), observedPauseProject, domain.PauseReasonIdle, func() error { return ErrNoLongerIdle })
+	if !errors.Is(err, ErrNoLongerIdle) || len(f.pauser.log) != 0 || f.reload(t).Status != "ACTIVE" {
+		t.Fatalf("a project judged not idle was paused: %v %v", err, f.pauser.log)
+	}
+
+	if err := f.svc.PauseIdle(context.Background(), observedPauseProject, domain.PauseReasonIdle, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reload(t).Status; got != string(domain.StatusPaused) {
+		t.Fatalf("status %s, want PAUSED", got)
+	}
+}
