@@ -73,11 +73,10 @@ describe('BackupsPage restore job', () => {
   // Without the background orchestrator the server answers with the new project itself.
   test('a synchronous restore answer shows the new instance and is not polled', async () => {
     stubJob(STARTED);
-    await startRestore({ projectId: 'proj-sync', status: 'ACTIVE', recoveryType: 'PITR' });
+    await startRestore({ projectId: 'proj-sync', status: 'ACTIVE' });
     const result = await screen.findByTestId('restore-result');
     expect(result).toHaveTextContent(/Restore started/);
     expect(result).toHaveTextContent('proj-sync');
-    expect(result).toHaveTextContent('PITR');
     expect(result).toHaveAttribute('data-tone', 'ok');
     expect(api.get).not.toHaveBeenCalledWith(expect.stringContaining('/backup/restore/'));
   });

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -157,5 +158,32 @@ func TestGetWaitEvents(t *testing.T) {
 	}
 	if events[0].Count != 5 {
 		t.Errorf("first event count: got %d", events[0].Count)
+	}
+}
+
+// EXC-893: a database that cannot be reached is not one with the extension
+// off. Studio offers "Enable", which restarts the database, only for the second.
+func TestGetSummaryFailsWhenTheDatabaseCannotBeAsked(t *testing.T) {
+	svc, mock := setupPerfTest(t)
+	mock.ExecError[testPerfDBPod] = errors.New("pod is not running")
+
+	summary, err := svc.GetSummary(context.Background(), testPerfDB)
+
+	if err == nil {
+		t.Fatalf("answered %+v, want an error", summary)
+	}
+	if strings.Contains(err.Error(), "pg_stat_statements") {
+		t.Fatalf("the error names the extension, which Studio reads as it being off: %v", err)
+	}
+}
+
+func TestGetSummaryMissingExtensionIsUnavailableWithItsReason(t *testing.T) {
+	svc, mock := setupPerfTest(t)
+	mock.ExecOutput[testPerfDBPod] = ""
+
+	summary, err := svc.GetSummary(context.Background(), testPerfDB)
+
+	if err != nil || summary.Available || summary.UnavailableReason != "pg_stat_statements extension is not enabled" {
+		t.Fatalf("summary %+v, err %v", summary, err)
 	}
 }

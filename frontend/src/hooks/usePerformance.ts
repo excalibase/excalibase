@@ -1,36 +1,34 @@
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { api } from '../api/client';
 
+// What GET /provision/{id}/performance/{summary,top-queries,wait-events} send.
 export interface QueryStat {
   query: string;
   calls: number;
-  totalTimeMs: number;
-  meanTimeMs: number;
+  totalExecTimeMs: number;
+  avgExecTimeMs: number;
+  minExecTimeMs: number;
+  maxExecTimeMs: number;
   rows: number;
-  hitPercent: number;
 }
 
+// Wait events come grouped: how many sessions wait on each event.
 export interface WaitEvent {
-  pid: number;
   waitEventType: string;
   waitEvent: string;
-  state: string;
-  query: string;
-  duration: string;
+  count: number;
 }
 
+// `available` is false, with a reason, when pg_stat_statements is off.
 export interface PerformanceSummary {
-  projectId: string;
-  cacheHitRatio: number;
-  activeConnections: number;
-  idleConnections: number;
-  totalConnections: number;
-  maxConnections: number;
-  databaseSizeBytes: number;
-  slowQueryCount: number;
-  topQueries: QueryStat[];
-  waitEvents: WaitEvent[];
-  collectedAt: string;
+  activeConnections: number | null;
+  totalConnections: number | null;
+  cacheHitRatio: number | null;
+  databaseSize?: string;
+  slowQueryCount: number | null;
+  avgQueryTimeMs: number | null;
+  available: boolean;
+  unavailableReason?: string;
 }
 
 export const usePerformanceSummary = (projectId: string) => {

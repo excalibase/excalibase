@@ -27,7 +27,6 @@ export interface SiteDomain {
   createdAt: string;
   updatedAt: string;
   checkedAt: string;
-  activatedAt?: string;
 }
 
 export interface SiteDomainInput {
