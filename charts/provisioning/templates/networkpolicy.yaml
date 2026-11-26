@@ -36,6 +36,15 @@ spec:
           port: 443
         - protocol: TCP
           port: 6443
+    {{- if .Values.netmeter.enabled }}
+    # Per-app network metering reads each node's kubelet (EXC-844). On Cilium
+    # the node is not matched by an address, so netmeter-cilium-policy.yaml
+    # names it by entity as well.
+    - to: []
+      ports:
+        - protocol: TCP
+          port: {{ .Values.netmeter.kubeletPort }}
+    {{- end }}
     # The platform store (platform-db) in the platform namespace.
     - to:
         - namespaceSelector:

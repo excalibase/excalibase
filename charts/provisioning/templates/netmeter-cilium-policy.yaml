@@ -1,0 +1,22 @@
+{{- if and .Values.netmeter.enabled (.Capabilities.APIVersions.Has "cilium.io/v2") }}
+# The node's kubelet is the host or a remote node to Cilium, which an ipBlock
+# rule does not reliably match, so it is named by entity (EXC-844). Rendered only
+# where the Cilium API exists, so a cluster on another CNI still installs.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: provisioning-kubelet-stats
+  namespace: {{ .Values.namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app: provisioning
+  egress:
+    - toEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: {{ .Values.netmeter.kubeletPort | quote }}
+              protocol: TCP
+{{- end }}

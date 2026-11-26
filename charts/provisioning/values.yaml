@@ -125,3 +125,17 @@ serviceAccount:
 pdb:
   enabled: true
   minAvailable: 1
+
+# Per-app network metering (EXC-844): provisioning reads each node's kubelet
+# summary (GET https://<node>:10250/stats/summary) with its service account.
+# Off by default. On: the role may get nodes/stats and read nodes, the pod
+# mounts the CA that signed the kubelet's serving certificate from the
+# ConfigMap below (never a hostPath; the pod starts without it and the meter
+# stays off), and the pod's egress policy lets it reach the kubelet port.
+# kube-root-ca.crt is the cluster CA Kubernetes publishes to every namespace;
+# on RKE2 and k3s it is the one that signs the kubelet. Name another ConfigMap
+# holding ca.crt where it is not (kind and kubeadm self-sign the kubelet).
+netmeter:
+  enabled: false
+  kubeletCAConfigMap: kube-root-ca.crt
+  kubeletPort: 10250
