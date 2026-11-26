@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"os"
@@ -159,7 +160,7 @@ func startDocumentDBLab(t *testing.T) *documentDBLab {
 	if err := imagepull.EnsureLocal(ctx, documentDBLiveK3s); err != nil {
 		t.Fatal(err)
 	}
-	container, err := k3s.Run(ctx, documentDBLiveK3s)
+	container, err := k3s.Run(ctx, documentDBLiveK3s, k3smirror.Option())
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)
 	}

@@ -9,8 +9,11 @@
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-IMG=docker.io/library/python:3.12-alpine
-DIND=${DIND_IMAGE:-docker.io/library/docker:29-dind}
+# EXC-881: CI pulls Docker Hub images from its mirror (IMAGE_MIRROR); unset, the names are unchanged.
+# shellcheck disable=SC1091
+. "$DIR/../../ci/mirror-images.sh"
+IMG=$(mirror_ref docker.io/library/python:3.12-alpine)
+DIND=${DIND_IMAGE:-$(mirror_ref docker.io/library/docker:29-dind)}
 M=exc687-fence-$$
 PUBLIC=203.0.113.5
 DENIED=198.51.100.5

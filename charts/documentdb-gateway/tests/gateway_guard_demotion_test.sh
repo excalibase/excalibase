@@ -7,6 +7,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CATALOG="$HERE/../../../server-go/internal/config/postgres_catalog.yaml"
 POSTGRES_IMAGE="$(awk '/major: "17"/ {found=1} found && /image:/ {print $2; exit}' "$CATALOG")"
 [ -n "$POSTGRES_IMAGE" ] || { echo "no Postgres 17 image in the catalogue"; exit 2; }
+# EXC-881: CI pulls Docker Hub images from its mirror (IMAGE_MIRROR); unset, the name is unchanged.
+# shellcheck disable=SC1091
+. "$HERE/../../../deploy/ci/mirror-images.sh"
+POSTGRES_IMAGE="$(mirror_ref "$POSTGRES_IMAGE")"
 
 NAME="exc587-$$"
 VOLUME="$NAME-data"
