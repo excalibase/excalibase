@@ -401,3 +401,17 @@ func TestReviews_AnOwnerLevelFindingIsOneRowPerTierBucket(t *testing.T) {
 		t.Fatalf("and leaves the Standard bucket's open row alone: %v", got)
 	}
 }
+
+func TestReviews_ADismissedBucketDoesNotMuteTheOwnersOtherBucket(t *testing.T) {
+	store := testStore(t)
+	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	free, standard := reviewFinding("", 90), reviewFinding("", 90)
+	free.Tier, standard.Tier = "free", "standard"
+	record(t, store, free, t0)
+	if err := store.DismissReview(context.Background(), listAll(t, store)[0].ID, "a", t0, 14); err != nil {
+		t.Fatal(err)
+	}
+	if got := record(t, store, standard, t0.Add(time.Hour)); got != behaviour.OutcomeOpened {
+		t.Fatalf("the same signal in the Standard bucket is its own finding: %v", got)
+	}
+}

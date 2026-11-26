@@ -66,6 +66,18 @@ sessions at the edge (HAProxy session duration, phase P2b) and one app talking
 to many distinct peers (Hubble fan-out, phase P5). Volume review is the net;
 those are the tools for the small fish.
 
+An evenly spread relay at the incident's volume (about 2.6 KB/s each way all
+day) sits under the floor and raises nothing; a test pins this. The full
+evasion rule: a relay is not seen by volume if it stays under 10 KB/s in every
+hour, or is above it in 5 hours or fewer, or keeps rx/tx outside 0.5 to 2.0,
+and in each case also sends under 3 GB a day.
+
+Main expected noise: an app that reads its own database and returns the data
+looks symmetric, because database traffic counts on the pod's network. A thin
+API or SSR site at about 10 KB/s or more for 6 hours will be flagged (a test
+pins 15 KB/s out and 14 in for 8 hours). Reviews are only for a person to look
+at, and P2b (HAProxy, external traffic only) is the planned discriminator.
+
 Padding: a relay can add dummy traffic in one direction to push its ratio out
 of the band. The band is wide (0.5 to 2), the all-day signal judges it over
 hours, and padding costs the operator bandwidth that makes `sustained_egress`

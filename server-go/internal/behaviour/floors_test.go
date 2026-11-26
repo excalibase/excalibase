@@ -37,7 +37,7 @@ func bytesOf(hours []netmeter.Hourly) float64 {
 // days. That is 0.5 GB a day, a fraction of a percent of a 10 Mbit/s reference, so
 // nothing scaled to the reference can see it. A symmetric relay that holds about
 // 10 KB/s each way for six hours of a day is what those totals look like.
-func TestEvaluate_TheRealIncidentVolumeIsFlaggedByTheAbsoluteFloors(t *testing.T) {
+func TestEvaluate_ABurstyRelayAtTheIncidentsVolumeIsFlaggedByTheAbsoluteFloors(t *testing.T) {
 	cfg := DefaultConfig()
 	day := hoursOf(firstHours(6), 10.5*kb, 10.5*kb)
 	if three := 3 * bytesOf(day); three >= 1.5e9 {
@@ -138,5 +138,32 @@ func TestEvaluate_OrdinaryAppsStayQuietUnderTheDefaultFloors(t *testing.T) {
 		if got := Evaluate(cfg, app("free"), freeRef, seen); len(got) != 0 {
 			t.Errorf("%s was flagged: %+v", name, got)
 		}
+	}
+}
+
+// The known miss, pinned: the incident's volume (about 0.45 GB a day each way
+// over three days) spread evenly over the whole day is under every floor, so
+// nothing is raised. The connection signals are what catch it.
+func TestEvaluate_TheIncidentsVolumeSpreadEvenlyAllDayRaisesNothing(t *testing.T) {
+	cfg := DefaultConfig()
+	perSecond := 2.6 * kb // 2.6 KB/s each way is 225 MB a day each way
+	hours := hoursOf(always, perSecond, perSecond)
+	if three := 3 * bytesOf(hours); three >= 1.5e9 {
+		t.Fatalf("the model moves %.2f GB in three days", three/1e9)
+	}
+	seen := Observed{Minutes: series(60, 0.2, 1.0), Hours: hours, Totals: Totals{TxDay: perSecond * 86400, RxDay: perSecond * 86400}}
+	if got := Evaluate(cfg, app("free"), freeRef, seen); len(got) != 0 {
+		t.Fatalf("an evenly spread relay at this volume is under the floor and is not seen: %+v", got)
+	}
+}
+
+// The main expected noise, pinned: an app that reads its own database and
+// returns the data looks symmetric, because database traffic counts on the pod's
+// network. A thin API or SSR site at this rate is flagged until the edge signal
+// (external traffic only) can tell the two apart.
+func TestEvaluate_ADatabaseBackedAppAtFifteenKBpsIsAKnownFalsePositive(t *testing.T) {
+	got := signals(Evaluate(DefaultConfig(), app("free"), freeRef, Observed{Hours: hoursOf(firstHours(8), 15*kb, 14*kb)}))
+	if got[SignalRelayDay].Signal == "" {
+		t.Fatalf("15 KB/s out and 14 in for 8 hours raises relay_symmetry_day: %+v", got)
 	}
 }
