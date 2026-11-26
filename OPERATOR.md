@@ -1322,11 +1322,13 @@ PUBLIC's EXECUTE; it cannot refuse), the password repair, the registration SQL
   `refresh_tokens`, `password_reset_tokens`, `email_verification_tokens`,
   `email_otps`, `auth_codes`, `flow_states`, `api_keys`) that a customer role owns
   goes back to `auth_admin` in place and is never moved. A table the auth
-  service adds later belongs in that list.
+  service adds later belongs in that list and in
+  `testdata/auth_migration_tables.txt`, which a test pins to the auth migrations.
 - Customer-owned routines, types, domains and operators move to
   `excalibase_quarantine_<schema>`, the customer still the owner. The schema is
   taken over if it exists (owner to the superuser, CREATE revoked); an object whose
-  name is taken there goes to a schema of its own. Nothing is dropped with CASCADE.
+  name is taken there goes to a schema of its own, and when eight such names are
+  taken the repair refuses (alert) instead of looping. The repair scripts run with a 60 s statement_timeout. Nothing is dropped with CASCADE.
 - Any other relation a customer role owns, and a platform table whose policy,
   default, CHECK or index calls a routine or operator the platform does not own,
   is not touched: registration refuses ("left for an operator") after the

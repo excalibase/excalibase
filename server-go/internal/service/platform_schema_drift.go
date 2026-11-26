@@ -22,9 +22,10 @@ var platformServiceSchemas = []struct {
 	schema, serviceRole string
 	tables              []string
 }{
-	{"auth", roleAuthAdmin, []string{"users", "refresh_tokens", "password_reset_tokens", "email_verification_tokens",
-		"email_otps", "auth_codes", "flow_states", "api_keys"}},
-	{"excalibase_cdc", roleWatcher, nil},
+	{"auth", roleAuthAdmin, []string{"api_keys", "audit_log", "auth_codes", "email_change_tokens", "email_otp_lock", "email_otps",
+		"email_verification_tokens", "flow_states", "guest_lock", "guest_sign_ups", "identities", "mfa_challenges", "mfa_factors",
+		"mfa_failures", "mfa_recovery_codes", "password_reset_tokens", "refresh_tokens", "role_changes", "schema_migrations", "users"}},
+	{"excalibase_cdc", roleWatcher, []string{"excalibase_cdc_slot_owners"}},
 }
 
 // platformSchemaLeftMarker is in the refusal's message, and in the error a
@@ -82,36 +83,44 @@ func platformSchemaFragments() *strings.Replacer {
 	)
 }
 
+// typeOwnerOf is the owner a type counts as having: a multirange is the owner's
+// whose range type it belongs to, since Postgres keeps it with the superuser
+// that created it when the range type's owner changes.
+func typeOwnerOf(alias string) string {
+	return strings.ReplaceAll(`(CASE WHEN {{T}}.typtype = 'm' THEN coalesce((SELECT rt.typowner FROM pg_range g JOIN pg_type rt ON rt.oid = g.rngtypid
+      WHERE g.rngmultitypid = {{T}}.oid), {{T}}.typowner) ELSE {{T}}.typowner END)`, "{{T}}", alias)
+}
+
 // customerOwnedObjects lists the owner of every object kind the quarantine
 // moves, for the schema named by {{NS}}.
-const customerOwnedObjects = `(
+var customerOwnedObjects = `(
     SELECT c.relowner AS owner FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'c')
     UNION ALL SELECT p.proowner FROM pg_proc p WHERE p.pronamespace = {{NS}}
-    UNION ALL SELECT t.typowner FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
+    UNION ALL SELECT ` + typeOwnerOf("t") + ` FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
     UNION ALL SELECT op.oprowner FROM pg_operator op WHERE op.oprnamespace = {{NS}}
   )`
 
 // movableObjects are the objects the quarantine moves: composite types,
 // routines, types and domains, and operators, with their owners, in {{NS}}.
-const movableObjects = `(
+var movableObjects = `(
     SELECT c.relowner AS owner FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind = 'c'
     UNION ALL SELECT p.proowner FROM pg_proc p WHERE p.pronamespace = {{NS}}
-    UNION ALL SELECT t.typowner FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A' AND t.typtype <> 'm'
+    UNION ALL SELECT ` + typeOwnerOf("t") + ` FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
     UNION ALL SELECT op.oprowner FROM pg_operator op WHERE op.oprnamespace = {{NS}}
   )`
 
 // movableWithTargets is movableObjects as the statement that moves each, with
 // whether the name is already taken in the quarantine schema {{QNS}}.
-const movableWithTargets = `(
+var movableWithTargets = `(
     SELECT 'TYPE' AS kind, c.reltype::regtype::text AS ident, c.oid AS object_oid, c.relowner AS owner,
            EXISTS (SELECT 1 FROM pg_type x WHERE x.typnamespace = {{QNS}} AND x.typname = c.relname) AS collides
       FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind = 'c'
     UNION ALL SELECT 'ROUTINE', p.oid::regprocedure::text, p.oid, p.proowner,
            EXISTS (SELECT 1 FROM pg_proc x WHERE x.pronamespace = {{QNS}} AND x.proname = p.proname AND x.proargtypes = p.proargtypes)
       FROM pg_proc p WHERE p.pronamespace = {{NS}}
-    UNION ALL SELECT CASE t.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END, t.oid::regtype::text, t.oid, t.typowner,
+    UNION ALL SELECT CASE t.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END, t.oid::regtype::text, t.oid, ` + typeOwnerOf("t") + `,
            EXISTS (SELECT 1 FROM pg_type x WHERE x.typnamespace = {{QNS}} AND x.typname = t.typname)
-      FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A' AND t.typtype <> 'm'
+      FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
     UNION ALL SELECT 'OPERATOR', format('%I.%s (%s, %s)', (SELECT nspname FROM pg_namespace WHERE oid = {{NS}}), op.oprname,
            coalesce(NULLIF(op.oprleft, 0)::regtype::text, 'NONE'), coalesce(NULLIF(op.oprright, 0)::regtype::text, 'NONE')),
            op.oid, op.oprowner,

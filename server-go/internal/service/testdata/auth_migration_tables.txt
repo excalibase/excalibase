@@ -1,0 +1,23 @@
+# The tables the auth service creates in the auth schema (excalibase-auth, internal/migrate/migrations/postgres,
+# plus golang-migrate's schema_migrations). platformServiceSchemas must list exactly these: a table missing from it
+# is refused, not reclaimed, when a customer role comes to own it. Update this file with the auth migrations.
+api_keys
+audit_log
+auth_codes
+email_change_tokens
+email_otp_lock
+email_otps
+email_verification_tokens
+flow_states
+guest_lock
+guest_sign_ups
+identities
+mfa_challenges
+mfa_factors
+mfa_failures
+mfa_recovery_codes
+password_reset_tokens
+refresh_tokens
+role_changes
+schema_migrations
+users

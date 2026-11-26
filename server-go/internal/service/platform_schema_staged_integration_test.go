@@ -3,6 +3,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -227,5 +228,53 @@ func TestPlatformSchemas_CollisionsInQuarantineGoToASchemaOfTheirOwn(t *testing.
 	}
 	if c.probe(t) {
 		t.Fatal("drift left behind")
+	}
+}
+
+// A range type goes with its multirange, and the project comes out clean.
+func TestPlatformSchemas_ARangeTypeAndItsMultirangeAreQuarantined(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	mustExec(t, c.admin, `CREATE TYPE auth.rg AS RANGE (subtype = int)`)
+	mustExec(t, c.admin, `ALTER TYPE auth.rg OWNER TO excalibase_app`)
+	if !c.probe(t) {
+		t.Fatal("the probe did not see a customer range type")
+	}
+	c.register(t)
+	if n := scanString(t, c.admin, customerOwnedInPlatformSchemas); n != "0" {
+		t.Fatalf("%s customer-owned object(s) are still in the platform schemas", n)
+	}
+	if scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_type WHERE typnamespace = 'auth'::regnamespace AND typname IN ('rg', 'int4multirange', 'rg_multirange'))`) {
+		t.Fatalf("the range type or its multirange stayed in auth: %s", scanString(t, c.admin,
+			`SELECT string_agg(typname || ':' || typowner::regrole::text || ':' || typtype::text, ', ') FROM pg_type WHERE typnamespace = 'auth'::regnamespace`))
+	}
+	if c.probe(t) {
+		t.Fatal("drift left behind, so the alert would fire every pass")
+	}
+}
+
+// An owner who fills every schema name the quarantine would try stops the move,
+// not the service: the repair ends, refuses and reports.
+func TestPlatformSchemas_ExhaustedQuarantineNamesEndInARefusal(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	mustExec(t, c.admin, `CREATE SCHEMA excalibase_quarantine_auth AUTHORIZATION excalibase_app`)
+	mustExec(t, c.admin, `CREATE TYPE excalibase_quarantine_auth.mood AS ENUM ('a')`)
+	mustExec(t, c.admin, `CREATE TYPE auth.mood AS ENUM ('b')`)
+	mustExec(t, c.admin, `ALTER TYPE auth.mood OWNER TO excalibase_app`)
+	oid := scanString(t, c.admin, `SELECT 'auth.mood'::regtype::oid::text`)
+	names := []string{"excalibase_quarantine_auth_" + oid}
+	for i := 1; i < quarantineNameTries; i++ {
+		names = append(names, fmt.Sprintf("excalibase_quarantine_auth_%s_%d", oid, i))
+	}
+	for _, name := range names {
+		mustExec(t, c.admin, `CREATE SCHEMA `+name)
+	}
+	err := c.registerWith(t, "")
+	if err == nil || !strings.Contains(err.Error(), platformSchemaLeftMarker) {
+		t.Fatalf("registration did not refuse when no quarantine name was free: %v", err)
+	}
+	if !scanBool(t, c.admin, `SELECT NOT has_schema_privilege('excalibase_app', 'auth', 'CREATE')`) {
+		t.Fatal("the revokes did not commit before the refusal")
 	}
 }

@@ -1,6 +1,9 @@
 package service
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // The repair of the platform's schemas runs as three scripts, each its own
 // transaction, so a step that refuses or collides cannot undo the ones before
@@ -19,7 +22,7 @@ func platformSchemaScripts() (lockdown, quarantine, refusal string) {
 func schemaScoped(namespace string) *strings.Replacer {
 	scoped := strings.NewReplacer("{{NS}}", namespace, "{{QNS}}", "to_regnamespace(quarantine)")
 	return strings.NewReplacer("{{OWNED}}", scoped.Replace(customerOwnedObjects), "{{TAINTED_TABLES}}", taintedTables,
-		"{{MOVABLE}}", scoped.Replace(movableObjects), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargets))
+		"{{LAST_TRY}}", strconv.Itoa(quarantineNameTries-1), "{{MOVABLE}}", scoped.Replace(movableObjects), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargets))
 }
 
 // The lockdown takes the schema back, reclaims the platform's own tables a
@@ -27,6 +30,7 @@ func schemaScoped(namespace string) *strings.Replacer {
 // platform did not put on its tables, and revokes every grant a customer role
 // holds and PUBLIC's EXECUTE. Nothing in it can refuse or collide.
 const platformSchemaLockdownTemplate = `
+SET LOCAL statement_timeout = '60s';
 DO $excalibase_schema_lockdown$
 DECLARE
   entry record;
@@ -89,6 +93,7 @@ $excalibase_schema_lockdown$;
 // PUBLIC and every customer role); an object whose name is taken there goes to
 // a schema of its own that did not exist.
 const platformSchemaQuarantineTemplate = `
+SET LOCAL statement_timeout = '60s';
 DO $excalibase_schema_quarantine$
 DECLARE
   entry record;
@@ -121,10 +126,16 @@ BEGIN
     LOOP
       target := quarantine;
       IF item.collides THEN
-        target := quarantine || '_' || item.object_oid;
-        WHILE to_regnamespace(target) IS NOT NULL LOOP
-          target := target || 'x';
+        target := NULL;
+        FOR attempt IN 0..{{LAST_TRY}} LOOP
+          target := quarantine || '_' || item.object_oid || CASE WHEN attempt = 0 THEN '' ELSE '_' || attempt END;
+          EXIT WHEN to_regnamespace(target) IS NULL;
+          target := NULL;
         END LOOP;
+        IF target IS NULL THEN
+          RAISE EXCEPTION 'every quarantine schema name for an object in schema % is taken; it is ` + platformSchemaLeftMarker + `', entry.schema_name
+            USING ERRCODE = 'insufficient_privilege';
+        END IF;
         EXECUTE format('CREATE SCHEMA %I', target);
       END IF;
       EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', target, item.owner_name);
@@ -140,6 +151,7 @@ $excalibase_schema_quarantine$;
 // index calling a routine the platform does not own, is left for an operator,
 // and the project is reported rather than passed as clean.
 const platformSchemaRefusalTemplate = `
+SET LOCAL statement_timeout = '60s';
 DO $excalibase_schema_refusal$
 DECLARE
   entry record;
@@ -197,3 +209,7 @@ const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND NOT {{CUSTOMER_R}} AND c.oid IN {{TAINTED_TABLES}})
     )
   ), false)`
+
+// quarantineNameTries bounds the schema names tried for one object whose name
+// is taken in the quarantine schema, before the repair refuses.
+const quarantineNameTries = 8

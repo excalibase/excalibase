@@ -435,10 +435,11 @@ func TestRegistrationScripts_CommitWhatCannotRefuseBeforeWhatCan(t *testing.T) {
 	if !(lockdown < repair && repair < role && role < quarantine && quarantine < refusal) {
 		t.Fatalf("script order = lockdown %d, repair %d, role %d, quarantine %d, refusal %d", lockdown, repair, role, quarantine, refusal)
 	}
-	for _, i := range []int{lockdown, quarantine} {
-		if strings.Contains(scripts[i], "RAISE EXCEPTION") {
-			t.Errorf("script %d can refuse", i)
-		}
+	if strings.Contains(scripts[lockdown], "RAISE EXCEPTION") {
+		t.Error("the lockdown can refuse")
+	}
+	if !strings.Contains(scripts[quarantine], platformSchemaLeftMarker) {
+		t.Error("the quarantine refuses without the marker the alert path reads")
 	}
 	if len(registrationScripts("ROLE SQL;", "")) != len(scripts)-1 {
 		t.Error("an empty password repair still ran as a script")
