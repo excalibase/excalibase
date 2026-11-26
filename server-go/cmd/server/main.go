@@ -258,9 +258,6 @@ func runServer(cfg config.AppConfig) {
 		deps.dbReadAddressHandler.SetAPI(singleHostEndpoints)
 	}
 
-	stopCallout := startNatsAuthCallout(cfg, sqlStore)
-	defer stopCallout()
-
 	policyPub, err := service.NewPolicyChangePublisher(cfg.NatsURL, provisioningNatsOptions(cfg)...)
 	if err != nil {
 		log.Printf("WARN: policy change publisher: %v", err)
@@ -1515,57 +1512,6 @@ func wireNatsCredentialMinter(sqlStore storage.PlatformStore, provSvc *service.P
 		return
 	}
 	provSvc.SetNatsCredentialMinter(service.NewNatsCredentialMinter(credStore))
-}
-
-// startNatsAuthCallout answers the NATS server's auth_callout requests. It is
-// what makes every other principal's credential mean anything: without it a
-// server configured for callout refuses every connection.
-func startNatsAuthCallout(cfg config.AppConfig, sqlStore storage.PlatformStore) func() {
-	noop := func() {
-		// no-op cleanup: the responder was never started.
-	}
-	if cfg.NatsURL == "" || cfg.NatsCalloutIssuerSeed == "" {
-		log.Println("NATS auth callout disabled (no issuer seed)")
-		return noop
-	}
-	credStore, ok := sqlStore.(storage.NatsCredentialStore)
-	if !ok {
-		log.Println("WARN: NATS auth callout needs the Postgres platform store; not started")
-		return noop
-	}
-	// The chart mints the service passwords into a Secret; the callout reads
-	// hashes from the database, so each boot re-derives them from the Secret.
-	if err := natsauth.SeedServicePrincipals(context.Background(), credStore, map[string]string{
-		natsauth.PrincipalProvisioning: cfg.NatsPassword,
-		natsauth.PrincipalGraphQL:      cfg.NatsGraphQLPassword,
-	}); err != nil {
-		log.Printf("WARN: NATS service credentials not seeded: %v", err)
-	}
-
-	responder, err := natsauth.NewResponder(credStore, cfg.NatsCalloutIssuerSeed, cfg.NatsCalloutAccount, cfg.NatsCDCStream)
-	if err != nil {
-		log.Printf("WARN: NATS auth callout: %v", err)
-		return noop
-	}
-	// The callout user is the delegated auth account's own login, not a
-	// permission-matrix principal, so it takes the shared options directly.
-	calloutOpts := append(natsauth.BaseOptions(cfg.NatsCalloutUser),
-		nats.UserInfo(cfg.NatsCalloutUser, cfg.NatsCalloutPassword))
-	conn, err := nats.Connect(cfg.NatsURL, calloutOpts...)
-	if err != nil {
-		log.Printf("WARN: NATS auth callout connect: %v", err)
-		return noop
-	}
-	if err := responder.Start(conn); err != nil {
-		conn.Close()
-		log.Printf("WARN: NATS auth callout subscribe: %v", err)
-		return noop
-	}
-	log.Println("NATS auth callout responder listening on " + natsauth.CalloutSubject)
-	return func() {
-		responder.Close()
-		conn.Close()
-	}
 }
 
 // provisioningNatsOptions are the dial options provisioning's own publishers

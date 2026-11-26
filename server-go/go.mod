@@ -27,9 +27,7 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/moby/moby/api v1.54.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/nats-io/jwt/v2 v2.8.2
 	github.com/nats-io/nats.go v1.50.0
-	github.com/nats-io/nkeys v0.4.16
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.23.2
@@ -162,6 +160,7 @@ require (
 	github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
+	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/pkg/errors v0.9.1 // indirect

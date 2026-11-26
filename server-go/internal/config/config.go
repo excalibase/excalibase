@@ -28,19 +28,12 @@ type AppConfig struct {
 	LogLevel      string
 	PlatformDBURL string
 	NatsURL       string
-	// NATS bus identity (EXC-324). NatsUser/NatsPassword are this service's
-	// own credential; the callout fields let it answer the NATS server's
-	// auth_callout requests for every other principal.
-	NatsUser              string
-	NatsPassword          string
-	NatsGraphQLPassword   string
-	NatsCDCStream         string
-	NatsCalloutAccount    string
-	NatsCalloutUser       string
-	NatsCalloutPassword   string
-	NatsCalloutIssuerSeed string
-	CORSOrigins           []string
-	WatcherChartPath      string
+	// NATS bus identity (EXC-324): this service's own credential.
+	NatsUser         string
+	NatsPassword     string
+	NatsCDCStream    string
+	CORSOrigins      []string
+	WatcherChartPath string
 	// WatcherImage is the pinned reference every tenant watcher runs,
 	// e.g. excalibase/excalibase-watcher-go:1.0.0@sha256:… (EXC-346).
 	WatcherImage string
@@ -520,12 +513,7 @@ func load() AppConfig {
 		NatsURL:                  envOr("NATS_URL", ""),
 		NatsUser:                 envOr("NATS_USER", natsauth.PrincipalProvisioning),
 		NatsPassword:             os.Getenv("NATS_PASSWORD"),
-		NatsGraphQLPassword:      os.Getenv("NATS_GRAPHQL_PASSWORD"),
 		NatsCDCStream:            envOr("NATS_CDC_STREAM", "CDC"),
-		NatsCalloutAccount:       envOr("NATS_AUTH_CALLOUT_ACCOUNT", "APP"),
-		NatsCalloutUser:          envOr("NATS_AUTH_CALLOUT_USER", "auth-callout"),
-		NatsCalloutPassword:      os.Getenv("NATS_AUTH_CALLOUT_PASSWORD"),
-		NatsCalloutIssuerSeed:    os.Getenv("NATS_AUTH_CALLOUT_ISSUER_SEED"),
 		RegistrationMode:         envOr("REGISTRATION_MODE", "open"),
 		PublicPort:               os.Getenv("PUBLIC_PORT"),
 		TrustedProxyCIDRs:        envTrustedProxyCIDRs("TRUSTED_PROXY_CIDRS"),

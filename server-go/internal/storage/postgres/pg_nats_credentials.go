@@ -2,8 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 )
 
 // UpsertNatsCredential stores (or rotates) one principal's bcrypt hash.
@@ -19,20 +17,6 @@ func (s *Store) UpsertNatsCredential(ctx context.Context, principal, projectID, 
 		    updated_at    = now()`,
 		principal, projectID, passwordHash)
 	return err
-}
-
-// LookupNatsCredentialHash satisfies natsauth.CredentialStore.
-func (s *Store) LookupNatsCredentialHash(ctx context.Context, principal string) (string, bool, error) {
-	var hash string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT password_hash FROM nats_credentials WHERE principal = $1`, principal).Scan(&hash)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	return hash, true, nil
 }
 
 // DeleteNatsCredential revokes one principal.

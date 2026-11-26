@@ -14,7 +14,7 @@ import (
 // the watcher's k8s Secret — and only its bcrypt hash is persisted.
 //
 // A nil minter is a no-op that yields an empty credential, which is how a
-// platform with auth_callout disabled (local dev) keeps working.
+// platform without a database-backed store (local dev) keeps working.
 type NatsCredentialMinter struct {
 	store storage.NatsCredentialStore
 }

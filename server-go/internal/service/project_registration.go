@@ -605,7 +605,7 @@ func (s *ProvisioningService) putCredentialRecord(projectID, role string, record
 // exists: a chart on Kubernetes, a container on a single host (EXC-612). The
 // start itself is best-effort — a project without realtime still works — but
 // minting a Kubernetes watcher's NATS bus identity is not: a watcher started
-// without one is unauthenticated against auth_callout (EXC-324), so that
+// without one has no scoped credential (EXC-324), so that
 // failure fails registration instead of deploying a broken watcher.
 func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRoleSpec, pc *provisioner.ProvisionContext, watcherCert tenantcert.Material, watcherPassword string) error {
 	if s.factory == nil {

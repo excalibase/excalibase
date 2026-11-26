@@ -1,6 +1,6 @@
 // Package natsauth models who may publish and subscribe on the platform's
-// NATS bus, and answers the server's auth_callout requests with a signed,
-// per-principal user JWT carrying exactly those subject permissions.
+// NATS bus: the subject allow-list and request/reply inbox each principal's
+// client is configured with.
 //
 // Before EXC-324 every client shared one (or no) credential, so any
 // per-tenant watcher pod — which runs inside the tenant namespace and is
@@ -26,8 +26,8 @@ const (
 // the full principal is tenantWatcherPrefix + projectID.
 const tenantWatcherPrefix = "tenant-watcher:"
 
-// Subjects the platform uses. Kept as constants so the matrix, the tests and
-// the callout all agree on one spelling.
+// Subjects the platform uses. Kept as constants so the matrix and the tests
+// agree on one spelling.
 const (
 	subjectCDCAll      = "cdc.>"
 	subjectPoliciesAll = "policies.>"
@@ -74,8 +74,7 @@ func ProjectIDForPrincipal(principal string) (string, bool) {
 
 // PermissionsFor resolves a principal to its subject allow-list. It fails
 // closed: an unknown service name, a malformed project id or an unsafe
-// stream name yields an error and no permissions, and the callout then
-// refuses the connection.
+// stream name yields an error and no permissions.
 func PermissionsFor(principal, cdcStream string) (Permissions, error) {
 	if !safeToken.MatchString(cdcStream) {
 		return Permissions{}, fmt.Errorf("unsafe CDC stream name")
