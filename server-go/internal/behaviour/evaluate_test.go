@@ -1,6 +1,7 @@
 package behaviour
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -157,7 +158,7 @@ func TestEvaluate_FindingsCarryTheSubjectSnapshot(t *testing.T) {
 func TestEvidenceHoldsOnlyNumbers(t *testing.T) {
 	for _, f := range Evaluate(testConfig(), app("free"), freeRef, Observed{Minutes: series(60, 90, 1.0), Totals: Totals{TxDay: freeRef * 86400, Tx30d: freeRef * 86400 * 30}}) {
 		for key, value := range f.Evidence {
-			if key == "" || value != value { // NaN never serialises
+			if key == "" || math.IsNaN(value) { // NaN never serialises
 				t.Errorf("%s evidence %q = %v", f.Signal, key, value)
 			}
 		}

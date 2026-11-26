@@ -6,7 +6,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/netmeter"
 )
 
-func appMinutes(app string, tx float64, rxOverTx float64) []netmeter.Sample {
+func appMinutes(app string, tx, rxOverTx float64) []netmeter.Sample {
 	out := series(60, 0, 0)
 	for i := range out {
 		out[i].AppID, out[i].TxBps, out[i].RxBps = app, freeRef*tx/100, freeRef*tx/100*rxOverTx
