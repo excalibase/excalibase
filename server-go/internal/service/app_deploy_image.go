@@ -20,7 +20,7 @@ type ImageResolver interface {
 
 // ImageVolumeReader answers the VOLUME paths an image declares, asking with the credential when one is given.
 type ImageVolumeReader interface {
-	Volumes(ctx context.Context, image string, cred *apphost.RegistryCredential) ([]string, error)
+	Volumes(ctx context.Context, image string, cred *apphost.RegistryCredential) (volumes []string, digest string, err error)
 }
 
 func (s *AppDeployService) SetImageVolumes(volumes ImageVolumeReader) {
@@ -29,20 +29,21 @@ func (s *AppDeployService) SetImageVolumes(volumes ImageVolumeReader) {
 
 // imageVolumes reads what the image declares before it runs: a Kubernetes pod mounts each VOLUME
 // as a directory on the node's disk, so each is capped by the render (EXC-732). An image whose
-// volumes cannot be read is not run.
-func (s *AppDeployService) imageVolumes(ctx context.Context, projectID, image string) ([]string, error) {
+// volumes cannot be read is not run. It also answers the digest it read, which a tag deploy then
+// runs, so the tag cannot move between this check and the node's pull.
+func (s *AppDeployService) imageVolumes(ctx context.Context, projectID, image string) ([]string, string, error) {
 	if s.volumes == nil {
-		return nil, nil
+		return nil, "", nil
 	}
 	cred, err := s.registryCredential(projectID, image)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	volumes, err := s.volumes.Volumes(ctx, image, cred)
+	volumes, digest, err := s.volumes.Volumes(ctx, image, cred)
 	if err != nil {
-		return nil, fmt.Errorf("read the volumes %s declares: %w", image, err)
+		return nil, "", fmt.Errorf("read the volumes %s declares: %w", image, err)
 	}
-	return volumes, nil
+	return volumes, digest, nil
 }
 
 var errNoImageResolver = errors.New("deploying a named image needs a registry resolver, and none is configured")

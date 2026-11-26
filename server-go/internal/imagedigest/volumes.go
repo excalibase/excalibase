@@ -15,13 +15,18 @@ import (
 // maxImageDocument bounds a manifest or config read from a registry we do not control.
 const maxImageDocument = 4 << 20
 
-// Volumes are the VOLUME paths an image declares, sorted. A Kubernetes pod mounts them as
-// directories on the node's disk whatever the root is, so a deploy caps each (EXC-732). An index is
-// followed to its first Linux image: its architectures share a Dockerfile.
-func (r *Resolver) Volumes(ctx context.Context, image string, cred *apphost.RegistryCredential) ([]string, error) {
-	repo, reference, err := r.repository(image, cred)
+// maxIndexEntries bounds the Linux images one index may make a deploy read.
+const maxIndexEntries = 16
+
+// Volumes are the VOLUME paths an image declares, sorted, and the digest of the image they were
+// read from, so the deploy can run exactly that. A Kubernetes pod mounts them as directories on
+// the node's disk whatever the root is, so a deploy caps each (EXC-732). An index may declare
+// different volumes per architecture and the node picks its own, so the answer is the union over
+// every Linux image in it; an index with more than maxIndexEntries of them is refused.
+func (r *Resolver) Volumes(ctx context.Context, image string, cred *apphost.RegistryCredential) ([]string, string, error) {
+	repo, reference, err := r.repositoryVia(image, cred, true)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
@@ -35,60 +40,87 @@ func (r *Resolver) Volumes(ctx context.Context, image string, cred *apphost.Regi
 		}
 		return body, nil
 	}
-	desc, err := repo.Resolve(ctx, reference)
+	top, err := repo.Resolve(ctx, reference)
 	if err != nil {
-		return nil, classify(image, err)
+		return nil, "", classify(image, err)
 	}
-	manifest, err := r.manifestOf(desc, fetch, image)
+	manifests, err := linuxManifests(top, fetch, image)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	raw, err := fetch(manifest.Config)
-	if err != nil {
-		return nil, err
+	union := map[string]bool{}
+	for _, manifest := range manifests {
+		raw, err := fetch(manifest.Config)
+		if err != nil {
+			return nil, "", err
+		}
+		var config struct {
+			Config struct {
+				Volumes map[string]json.RawMessage `json:"Volumes"`
+			} `json:"config"`
+		}
+		if err := json.Unmarshal(raw, &config); err != nil {
+			return nil, "", fmt.Errorf("%w: %s has a config that cannot be read", ErrUnavailable, image)
+		}
+		for path := range config.Config.Volumes {
+			union[path] = true
+		}
 	}
-	var config struct {
-		Config struct {
-			Volumes map[string]json.RawMessage `json:"Volumes"`
-		} `json:"config"`
-	}
-	if err := json.Unmarshal(raw, &config); err != nil {
-		return nil, fmt.Errorf("%w: %s has a config that cannot be read", ErrUnavailable, image)
-	}
-	paths := make([]string, 0, len(config.Config.Volumes))
-	for path := range config.Config.Volumes {
+	paths := make([]string, 0, len(union))
+	for path := range union {
 		paths = append(paths, path)
 	}
 	slices.Sort(paths)
-	return paths, nil
+	return paths, top.Digest.String(), nil
 }
 
-// manifestOf reads the image manifest desc names, going through an index to its first Linux entry.
-func (r *Resolver) manifestOf(desc ocispec.Descriptor, fetch func(ocispec.Descriptor) ([]byte, error), image string) (ocispec.Manifest, error) {
-	for depth := 0; depth < 2; depth++ {
-		raw, err := fetch(desc)
-		if err != nil {
-			return ocispec.Manifest{}, err
-		}
-		if desc.MediaType == ocispec.MediaTypeImageIndex || desc.MediaType == "application/vnd.docker.distribution.manifest.list.v2+json" {
-			var index ocispec.Index
-			if err := json.Unmarshal(raw, &index); err != nil {
-				return ocispec.Manifest{}, fmt.Errorf("%w: %s has an index that cannot be read", ErrUnavailable, image)
-			}
-			next := slices.IndexFunc(index.Manifests, func(entry ocispec.Descriptor) bool {
-				return entry.Platform != nil && entry.Platform.OS == "linux" && digest.Digest(entry.Digest).Validate() == nil
-			})
-			if next < 0 {
-				return ocispec.Manifest{}, fmt.Errorf("%w: %s has no Linux image", ErrNotFound, image)
-			}
-			desc = index.Manifests[next]
-			continue
-		}
+func isIndex(mediaType string) bool {
+	return mediaType == ocispec.MediaTypeImageIndex || mediaType == "application/vnd.docker.distribution.manifest.list.v2+json"
+}
+
+// linuxManifests are the manifests top names: itself, or every Linux image of its index.
+func linuxManifests(top ocispec.Descriptor, fetch func(ocispec.Descriptor) ([]byte, error), image string) ([]ocispec.Manifest, error) {
+	raw, err := fetch(top)
+	if err != nil {
+		return nil, err
+	}
+	if !isIndex(top.MediaType) {
 		var manifest ocispec.Manifest
 		if err := json.Unmarshal(raw, &manifest); err != nil {
-			return ocispec.Manifest{}, fmt.Errorf("%w: %s has a manifest that cannot be read", ErrUnavailable, image)
+			return nil, fmt.Errorf("%w: %s has a manifest that cannot be read", ErrUnavailable, image)
 		}
-		return manifest, nil
+		return []ocispec.Manifest{manifest}, nil
 	}
-	return ocispec.Manifest{}, fmt.Errorf("%w: %s nests its index too deep", ErrUnavailable, image)
+	var index ocispec.Index
+	if err := json.Unmarshal(raw, &index); err != nil {
+		return nil, fmt.Errorf("%w: %s has an index that cannot be read", ErrUnavailable, image)
+	}
+	var linux []ocispec.Descriptor
+	for _, entry := range index.Manifests {
+		if entry.Platform != nil && entry.Platform.OS == "linux" && digest.Digest(entry.Digest).Validate() == nil {
+			linux = append(linux, entry)
+		}
+	}
+	if len(linux) == 0 {
+		return nil, fmt.Errorf("%w: %s has no Linux image", ErrNotFound, image)
+	}
+	if len(linux) > maxIndexEntries {
+		return nil, fmt.Errorf("%w: %s lists %d Linux images, more than the %d read", ErrUnavailable, image, len(linux), maxIndexEntries)
+	}
+	manifests := make([]ocispec.Manifest, 0, len(linux))
+	for _, entry := range linux {
+		if isIndex(entry.MediaType) {
+			return nil, fmt.Errorf("%w: %s nests an index inside its index", ErrUnavailable, image)
+		}
+		body, err := fetch(entry)
+		if err != nil {
+			return nil, err
+		}
+		var manifest ocispec.Manifest
+		if err := json.Unmarshal(body, &manifest); err != nil {
+			return nil, fmt.Errorf("%w: %s has a manifest that cannot be read", ErrUnavailable, image)
+		}
+		manifests = append(manifests, manifest)
+	}
+	return manifests, nil
 }

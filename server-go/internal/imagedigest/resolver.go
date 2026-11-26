@@ -38,6 +38,18 @@ const resolveTimeout = 20 * time.Second
 type Resolver struct {
 	client    *http.Client
 	plainHTTP bool
+	// routes are registries the platform may dial on a private address, by the host images name
+	// them with; internal is the client that dials only those (EXC-732).
+	routes   map[string]RegistryRoute
+	internal *http.Client
+}
+
+// RegistryRoute is a registry on a private address the platform is told to reach: the host images
+// name it by, where it is actually dialled (host:port) and whether it speaks plain HTTP.
+type RegistryRoute struct {
+	Name      string
+	Endpoint  string
+	PlainHTTP bool
 }
 
 // NewResolver reaches registries only on public addresses, checked on the
@@ -62,6 +74,44 @@ func newResolver(client *http.Client, plainHTTP bool) *Resolver {
 	return &Resolver{client: client, plainHTTP: plainHTTP}
 }
 
+// NewResolverWithRoutes is NewResolver plus a second client that may dial exactly the routes'
+// endpoints and names, and nothing else, for reading an image's volumes. Resolve never uses it.
+func NewResolverWithRoutes(deny []netip.Prefix, routes []RegistryRoute) *Resolver {
+	resolver := NewResolver(deny)
+	resolver.routes = map[string]RegistryRoute{}
+	allowed := map[string]bool{}
+	for _, route := range routes {
+		resolver.routes[route.Name] = route
+		allowed[route.Endpoint] = true
+		allowed[withDefaultPort(route.Name, route.PlainHTTP)] = true
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	resolver.internal = &http.Client{Timeout: resolveTimeout, Transport: &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			if !allowed[address] {
+				return nil, publicaddr.ErrInternalAddress
+			}
+			return dialer.DialContext(ctx, network, address)
+		},
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		MaxIdleConns:          4,
+		IdleConnTimeout:       60 * time.Second,
+	}}
+	return resolver
+}
+
+func withDefaultPort(host string, plain bool) string {
+	if strings.Contains(host, ":") {
+		return host
+	}
+	if plain {
+		return host + ":80"
+	}
+	return host + ":443"
+}
+
 // Resolve answers the digest image names right now. cred, when set, is sent
 // only to the image's own registry.
 func (r *Resolver) Resolve(ctx context.Context, image string, cred *apphost.RegistryCredential) (string, error) {
@@ -81,16 +131,27 @@ func (r *Resolver) Resolve(ctx context.Context, image string, cred *apphost.Regi
 // repository is the image's repository on its registry, signed in with cred when one is given,
 // and the tag or digest to ask it for.
 func (r *Resolver) repository(image string, cred *apphost.RegistryCredential) (*remote.Repository, string, error) {
+	return r.repositoryVia(image, cred, false)
+}
+
+// repositoryVia is repository, or with internal set the same on a configured private registry:
+// dialled at its endpoint by the client that may reach only those.
+func (r *Resolver) repositoryVia(image string, cred *apphost.RegistryCredential, internal bool) (*remote.Repository, string, error) {
 	if err := apphost.ValidateImageReference(image); err != nil {
 		return nil, "", err
 	}
 	location, reference := repositoryLocation(image)
+	httpClient, plainHTTP := r.client, r.plainHTTP
+	if route, found := r.routes[apphost.ImageRegistry(image)]; internal && found {
+		_, path, _ := strings.Cut(location, "/")
+		location, httpClient, plainHTTP = route.Endpoint+"/"+path, r.internal, route.PlainHTTP
+	}
 	repo, err := remote.NewRepository(location)
 	if err != nil {
 		return nil, "", fmt.Errorf("%w: %v", apphost.ErrInvalidImage, err)
 	}
-	repo.PlainHTTP = r.plainHTTP
-	client := &auth.Client{Client: r.client, Cache: auth.NewCache()}
+	repo.PlainHTTP = plainHTTP
+	client := &auth.Client{Client: httpClient, Cache: auth.NewCache()}
 	if cred != nil {
 		client.Credential = auth.StaticCredential(repo.Reference.Registry,
 			auth.Credential{Username: cred.Username, Password: cred.Password})

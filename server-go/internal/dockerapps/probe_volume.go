@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -42,8 +43,13 @@ func (r *Runtime) probeVolume(ctx context.Context, edgeCA []byte) (string, error
 	} else if !errdefs.IsNotFound(err) {
 		return "", fmt.Errorf("look for the probe volume %s: %w", ready, err)
 	}
-	// Whatever is there was never finished.
-	if err := r.engine.VolumeRemove(ctx, name, false); err != nil && !errdefs.IsNotFound(err) {
+	// Whatever is there was never finished, unless an app mounts it: an app is only created on a
+	// filled volume, so one in use is filled and only lost its marker.
+	switch err := r.engine.VolumeRemove(ctx, name, false); {
+	case err == nil || errdefs.IsNotFound(err):
+	case errdefs.IsConflict(err):
+		return name, r.makeSharedVolume(ctx, ready)
+	default:
 		return "", fmt.Errorf("remove the half-filled probe volume %s: %w", name, err)
 	}
 	if err := r.makeSharedVolume(ctx, name); err != nil {
@@ -108,16 +114,32 @@ func (r *Runtime) copyProbeFiles(ctx context.Context, id string, files probeFile
 	return nil
 }
 
-// removeStaleProbeVolumes drops probe volumes of an earlier probe or CA; one an app still mounts stays.
+// removeStaleProbeVolumes drops probe volumes of an earlier probe or CA, each with its marker. One an
+// app still mounts cannot be removed and keeps its marker: if that digest returns it is still known to
+// be filled, and the in-use volume is not recreated. A marker whose volume is gone goes too.
 func (r *Runtime) removeStaleProbeVolumes(ctx context.Context, keep ...string) {
 	list, err := r.engine.VolumeList(ctx, volume.ListOptions{Filters: labelFilter(engineproxy.SharedReadOnlyLabel, "true")})
 	if err != nil {
 		return
 	}
-	for _, stale := range list.Volumes {
-		if !slices.Contains(keep, stale.Name) {
-			_ = r.engine.VolumeRemove(ctx, stale.Name, false)
+	names := map[string]bool{}
+	for _, shared := range list.Volumes {
+		names[shared.Name] = true
+	}
+	for name := range names {
+		if slices.Contains(keep, name) || strings.HasSuffix(name, probeReadySuffix) {
+			continue
 		}
+		if err := r.engine.VolumeRemove(ctx, name, false); err == nil || errdefs.IsNotFound(err) {
+			delete(names, name)
+		}
+	}
+	for name := range names {
+		marker := strings.TrimSuffix(name, probeReadySuffix)
+		if slices.Contains(keep, name) || marker == name || names[marker] {
+			continue
+		}
+		_ = r.engine.VolumeRemove(ctx, name, false)
 	}
 }
 

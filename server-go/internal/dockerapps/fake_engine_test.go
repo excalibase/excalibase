@@ -611,6 +611,14 @@ func (f *fakeEngine) VolumeRemove(_ context.Context, name string, _ bool) error 
 	if _, ok := f.volumes[name]; !ok {
 		return errdefs.ErrNotFound
 	}
+	// The engine refuses to remove a volume a container still mounts.
+	for _, c := range f.containers {
+		for _, m := range c.host.Mounts {
+			if m.Source == name {
+				return errdefs.ErrConflict.WithMessage("volume is in use")
+			}
+		}
+	}
 	delete(f.volumes, name)
 	f.record("volume remove %s", name)
 	return nil

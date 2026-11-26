@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -49,6 +50,7 @@ func (b *blobRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", b.mediaType[reference])
 	w.Header().Set("Docker-Content-Digest", reference)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	_, _ = w.Write(body)
 }
 
@@ -78,12 +80,78 @@ func imageWithVolumes(t *testing.T, registry *blobRegistry, index bool, volumes 
 	registry.tags["acme/web:v1"] = indexDigest
 }
 
+// indexOf makes an index of Linux images, one per entry of volumesByArch in order, each declaring
+// its own volumes, and points the tag at it.
+func indexOf(t *testing.T, registry *blobRegistry, entries ...archVolumes) (indexDigest string) {
+	t.Helper()
+	var manifests []any
+	for _, entry := range entries {
+		declared := map[string]struct{}{}
+		for _, path := range entry.volumes {
+			declared[path] = struct{}{}
+		}
+		config, _ := json.Marshal(map[string]any{"architecture": entry.arch, "os": "linux", "config": map[string]any{"Volumes": declared}})
+		configDigest, configSize := registry.add("application/vnd.oci.image.config.v1+json", config)
+		manifest, _ := json.Marshal(map[string]any{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+			"config": map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": configDigest, "size": configSize}, "layers": []any{}})
+		manifestDigest, manifestSize := registry.add("application/vnd.oci.image.manifest.v1+json", manifest)
+		manifests = append(manifests, map[string]any{"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": manifestDigest,
+			"size": manifestSize, "platform": map[string]string{"os": "linux", "architecture": entry.arch}})
+	}
+	list, _ := json.Marshal(map[string]any{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": manifests})
+	indexDigest, _ = registry.add("application/vnd.oci.image.index.v1+json", list)
+	registry.tags["acme/web:v1"] = indexDigest
+	return indexDigest
+}
+
+type archVolumes struct {
+	arch    string
+	volumes []string
+}
+
 func volumesOf(t *testing.T, registry *blobRegistry) ([]string, error) {
+	t.Helper()
+	got, _, err := volumesAndDigestOf(t, registry)
+	return got, err
+}
+
+func volumesAndDigestOf(t *testing.T, registry *blobRegistry) ([]string, string, error) {
 	t.Helper()
 	server := httptest.NewServer(registry)
 	t.Cleanup(server.Close)
 	resolver := newResolver(server.Client(), true)
 	return resolver.Volumes(context.Background(), strings.TrimPrefix(server.URL, "http://")+"/acme/web:v1", nil)
+}
+
+// EXC-732: the node picks its own architecture, so a VOLUME declared by any Linux image counts.
+func TestVolumesAreTheUnionOverEveryLinuxImageOfAnIndex(t *testing.T) {
+	registry := newBlobRegistry()
+	indexDigest := indexOf(t, registry,
+		archVolumes{"s390x", nil}, archVolumes{"amd64", []string{"/x"}}, archVolumes{"arm64", []string{"/y", "/x"}})
+	got, digest, err := volumesAndDigestOf(t, registry)
+	if err != nil || !slices.Equal(got, []string{"/x", "/y"}) {
+		t.Fatalf("volumes %v (%v), want the union /x and /y", got, err)
+	}
+	if digest != indexDigest {
+		t.Fatalf("digest %q, want the index's %q: the deploy runs what was read", digest, indexDigest)
+	}
+}
+
+func TestAnIndexWithTooManyLinuxImagesIsRefused(t *testing.T) {
+	registry := newBlobRegistry()
+	var entries []archVolumes
+	for i := 0; i <= maxIndexEntries; i++ {
+		entries = append(entries, archVolumes{"arch" + strconv.Itoa(i), nil})
+	}
+	indexOf(t, registry, entries...)
+	if _, err := volumesOf(t, registry); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("%d Linux images: %v, want ErrUnavailable", len(entries), err)
+	}
+	registry = newBlobRegistry()
+	indexOf(t, registry, entries[:maxIndexEntries]...)
+	if _, err := volumesOf(t, registry); err != nil {
+		t.Fatalf("exactly %d Linux images were refused: %v", maxIndexEntries, err)
+	}
 }
 
 func TestVolumesReadsWhatTheImageDeclares(t *testing.T) {

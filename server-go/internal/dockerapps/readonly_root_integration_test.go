@@ -96,7 +96,9 @@ func TestRealEngineAnImageVolumeIsCappedAndNeverReachesTheDisk(t *testing.T) {
 	ctx := context.Background()
 	// The project network exists once an app has been deployed.
 	rig.deploy(itApp("one"), "dep-1")
-	tag := "excalibase-it-volume:" + shortHash(t.Name()+time.Now().String(), 6)
+	// Built here and never pulled, so it is no third-party image for the CI image list.
+	repository := "excalibase-it-volume"
+	tag := repository + ":" + shortHash(t.Name()+time.Now().String(), 6)
 	build := exec.Command("docker", "build", "-q", "-t", tag, "-")
 	build.Stdin = strings.NewReader("FROM " + itBusybox + "\nVOLUME /vol\n")
 	if output, err := build.CombinedOutput(); err != nil {

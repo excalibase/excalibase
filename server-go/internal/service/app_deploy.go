@@ -7,6 +7,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -417,9 +418,14 @@ func (s *AppDeployService) apply(ctx context.Context, app *apphost.App, planned 
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}
-	if render.ImageVolumes, err = s.imageVolumes(ctx, app.ProjectID, cfg.Image); err != nil {
+	volumes, readDigest, err := s.imageVolumes(ctx, app.ProjectID, cfg.Image)
+	if err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
+	}
+	render.ImageVolumes = volumes
+	if readDigest != "" && !strings.Contains(cfg.Image, "@") {
+		target.Image = apphost.PinImage(cfg.Image, readDigest)
 	}
 	fitted, err := s.fitDiskToPlan(ctx, namespace, app)
 	if errors.Is(err, ErrAppDiskUsageAbovePlan) {

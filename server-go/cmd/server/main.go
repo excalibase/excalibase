@@ -1948,7 +1948,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	if origins, ok := sqlStore.(storage.ProjectCorsEditor); ok {
 		appDeploySvc.SetCorsOriginReleaser(origins)
 	}
-	imageRegistry := imagedigest.NewResolver(cfg.ExtraDenyPrefixes())
+	imageRegistry := imagedigest.NewResolverWithRoutes(cfg.ExtraDenyPrefixes(), imageRegistryRoutes(cfg))
 	appDeploySvc.SetImageResolver(imageRegistry)
 	if cfg.ProvisionerMode != "docker" {
 		// A single host asks its engine for the image's VOLUMEs instead (dockerapps.Runtime).

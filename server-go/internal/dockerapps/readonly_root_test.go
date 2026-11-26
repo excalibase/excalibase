@@ -86,6 +86,10 @@ func TestProbeVolumeIsMadeOncePerContentAndStaleOnesGo(t *testing.T) {
 	if len(made) != 1 {
 		t.Fatalf("probe volumes made: %v, want one", made)
 	}
+	// The apps are gone, so nothing mounts the old volumes any more.
+	if err := h.rt.DeleteAppWorkload(context.Background(), testDB, "app-01", 0); err != nil {
+		t.Fatal(err)
+	}
 	h.rt.opts.ProbeBinary = []byte("probe v2")
 	h.deploy(freeApp(), "dep-3")
 	var probes []string
@@ -144,6 +148,9 @@ func TestHalfFilledProbeVolumeIsFilledAgain(t *testing.T) {
 		if strings.HasPrefix(volumeName, "excalibase-vol-probe-") && !strings.HasSuffix(volumeName, "-ready") {
 			name = volumeName
 		}
+	}
+	if err := h.rt.DeleteAppWorkload(context.Background(), testDB, "app-01", 0); err != nil {
+		t.Fatal(err)
 	}
 	delete(h.engine.volumes, name+"-ready")
 	delete(h.engine.volumeFiles, name)
@@ -359,4 +366,62 @@ func (h *harness) tryDeploy(app *apphost.App, deployID string) (*k8s.AppWorkload
 		h.t.Fatal(err)
 	}
 	return workload, h.rt.ApplyAppWorkload(context.Background(), testDB, workload)
+}
+
+// An old probe volume that apps still mount cannot be removed, and its ready marker stays with it:
+// if that digest returns (a platform rollback, the CA flipping back) it is still known to be filled.
+func TestInUseProbeVolumeKeepsItsMarkerAndSurvivesARollback(t *testing.T) {
+	h := newHarness(t, nil)
+	first := freeApp()
+	h.deploy(first, "dep-1")
+	probes := func() (volumes []string) {
+		for name := range h.engine.volumes {
+			if strings.HasPrefix(name, "excalibase-vol-probe-") && !strings.HasSuffix(name, "-ready") {
+				volumes = append(volumes, name)
+			}
+		}
+		return volumes
+	}
+	old := probes()[0]
+
+	h.rt.opts.ProbeBinary = []byte("probe v2")
+	second := freeApp()
+	second.ID, second.Name = "app-02", "api"
+	h.deploy(second, "dep-2")
+	if h.engine.volumes[old] == nil || h.engine.volumes[old+"-ready"] == nil {
+		t.Fatalf("the probe volume app-01 still mounts lost its marker: %v", h.engine.volumes)
+	}
+
+	h.rt.opts.ProbeBinary = []byte("probe")
+	h.deploy(freeApp(), "dep-3")
+	if len(h.engine.appContainers("app-01")) == 0 {
+		t.Fatal("the deploy after the rollback made no container")
+	}
+}
+
+// A marker whose probe volume is gone is cleaned up with the next change.
+func TestOrphanProbeMarkersAreRemoved(t *testing.T) {
+	h := newHarness(t, nil)
+	h.engine.volumes["excalibase-vol-probe-dead-ready"] = map[string]string{labelManaged: "true", engineproxy.SharedReadOnlyLabel: "true"}
+	h.deploy(freeApp(), "dep-1")
+	if h.engine.volumes["excalibase-vol-probe-dead-ready"] != nil {
+		t.Fatal("a marker with no probe volume was kept")
+	}
+}
+
+// An app only ever mounts a filled volume, so one in use that lost its marker is filled, not removed.
+func TestInUseProbeVolumeWithoutAMarkerIsTreatedAsFilled(t *testing.T) {
+	h := newHarness(t, nil)
+	h.deploy(freeApp(), "dep-1")
+	var name string
+	for volumeName := range h.engine.volumes {
+		if strings.HasPrefix(volumeName, "excalibase-vol-probe-") && !strings.HasSuffix(volumeName, "-ready") {
+			name = volumeName
+		}
+	}
+	delete(h.engine.volumes, name+"-ready")
+	h.deploy(freeApp(), "dep-2")
+	if h.engine.volumes[name] == nil || h.engine.volumes[name+"-ready"] == nil {
+		t.Fatalf("volumes %v: the in-use volume was not kept and re-marked", h.engine.volumes)
+	}
 }

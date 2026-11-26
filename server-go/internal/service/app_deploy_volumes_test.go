@@ -13,13 +13,14 @@ import (
 
 type fakeVolumeReader struct {
 	volumes []string
+	digest  string
 	err     error
 	asked   []string
 }
 
-func (f *fakeVolumeReader) Volumes(_ context.Context, image string, _ *apphost.RegistryCredential) ([]string, error) {
+func (f *fakeVolumeReader) Volumes(_ context.Context, image string, _ *apphost.RegistryCredential) ([]string, string, error) {
 	f.asked = append(f.asked, image)
-	return f.volumes, f.err
+	return f.volumes, f.digest, f.err
 }
 
 // EXC-732: the image's VOLUME paths are read when it deploys and each becomes a capped emptyDir.
@@ -56,5 +57,21 @@ func TestDeployApp_FailsWhenTheImagesVolumesCannotBeRead(t *testing.T) {
 	}
 	if _, applied := kube.AppWorkloads[rolloutKey(app, testDeployNamespace)]; applied {
 		t.Fatal("a workload was applied for an image whose volumes are unknown")
+	}
+}
+
+// A tag may move between the check and the node's pull, so the deploy runs the digest that was read.
+func TestDeployApp_RunsTheDigestItReadTheVolumesFrom(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	svc.SetImageVolumes(&fakeVolumeReader{digest: digest})
+
+	if _, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1"); err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	image := kube.AppWorkloads[rolloutKey(app, testDeployNamespace)].Deployment.Spec.Template.Spec.Containers[0].Image
+	if want := apphost.PinImage(app.Image, digest); image != want {
+		t.Fatalf("the pod runs %q, want %q", image, want)
 	}
 }
