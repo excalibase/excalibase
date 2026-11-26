@@ -43,7 +43,7 @@ const (
 	// AuthOAuth is end-user Google and GitHub sign-in for customers' apps:
 	// provider settings, redirect URLs and the new-user switch (EXC-662).
 	AuthOAuth Feature = "authoauth"
-	// AuthOTP is end-user sign-in by emailed link or six-digit code: the
+	// AuthOTP is end-user sign-in by emailed link or eight-digit code: the
 	// project's switch for it and the sign-in policy it shares with AuthOAuth.
 	AuthOTP Feature = "authotp"
 	// AuthUser is end-user account self-service: metadata, profile and email
