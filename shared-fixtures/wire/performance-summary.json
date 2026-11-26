@@ -1,0 +1,10 @@
+{
+  "activeConnections": 3,
+  "totalConnections": 12,
+  "cacheHitRatio": 99.4,
+  "databaseSize": "48 MB",
+  "slowQueryCount": 2,
+  "avgQueryTimeMs": 12.5,
+  "available": false,
+  "unavailableReason": "pg_stat_statements extension is not enabled"
+}

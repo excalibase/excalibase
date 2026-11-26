@@ -67,9 +67,6 @@ function RestoreResultPanel({ result }: { readonly result: RestoreResult }) {
       {newProject && (
         <p className="mt-1 text-xs text-text-secondary">New project: <span className="font-mono text-text-primary">{newProject}</span></p>
       )}
-      {result.recoveryType && (
-        <p className="text-xs text-text-secondary">Recovery type: <span className="font-mono text-text-primary">{result.recoveryType}</span></p>
-      )}
     </output>
   );
 }

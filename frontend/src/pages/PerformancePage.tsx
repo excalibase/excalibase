@@ -2,16 +2,13 @@ import { useState } from 'react';
 import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { usePerformanceSummary, useTopQueries, useWaitEvents, useEnablePerformanceInsights } from '../hooks/usePerformance';
 import { Zap, Clock, Database, AlertCircle, Settings, CheckCircle, type LucideIcon } from 'lucide-react';
-import { formatBytes } from '../utils/formatBytes';
-import { formatInstant } from '../utils/instant';
-// formatBytes is used to render summary.databaseSizeBytes below.
 
 type Tab = 'summary' | 'queries' | 'waits';
 
-function pct(n: number | undefined) {
+function pct(n: number | null | undefined) {
   return n == null ? '—' : `${n.toFixed(1)}%`;
 }
-function ms(n: number | undefined) {
+function ms(n: number | null | undefined) {
   if (n == null) return '—';
   return n >= 1000 ? `${(n / 1000).toFixed(2)}s` : `${n.toFixed(1)}ms`;
 }
@@ -48,7 +45,8 @@ export function PerformancePage() {
     setTimeout(() => setToast(null), 5000);
   }
 
-  const pgStatMissing = isStatStatementsMissing(summaryErr) || isStatStatementsMissing(queriesErr) || isStatStatementsMissing(waitsErr);
+  const extensionOff = summary?.available === false;
+  const pgStatMissing = extensionOff || isStatStatementsMissing(summaryErr) || isStatStatementsMissing(queriesErr) || isStatStatementsMissing(waitsErr);
   const anyLoading = summaryLoading || queriesLoading || waitsLoading;
 
   return (
@@ -149,8 +147,9 @@ export function PerformancePage() {
                 {[
                   { label: 'Cache Hit Ratio', value: pct(summary.cacheHitRatio) },
                   { label: 'Active Connections', value: `${summary.activeConnections ?? '—'} / ${summary.totalConnections ?? '—'}` },
-                  { label: 'Database Size', value: summary.databaseSizeBytes == null ? '—' : formatBytes(summary.databaseSizeBytes) },
-                  { label: 'Slow Queries', value: summary.slowQueryCount },
+                  { label: 'Database Size', value: summary.databaseSize || '—' },
+                  { label: 'Slow Queries', value: summary.slowQueryCount ?? '—' },
+                  { label: 'Avg Query Time', value: ms(summary.avgQueryTimeMs) },
                 ].map(({ label, value }) => (
                   <div key={label} className="bg-bg-secondary border border-border-primary rounded-xl p-4">
                     <p className="text-xs text-text-tertiary mb-1">{label}</p>
@@ -158,7 +157,6 @@ export function PerformancePage() {
                   </div>
                 ))}
               </div>
-              <p className="text-xs text-text-tertiary">Last collected: {summary.collectedAt ? formatInstant(summary.collectedAt) : '—'}</p>
             </div>
           )}
 
@@ -187,8 +185,7 @@ export function PerformancePage() {
                     <th className="py-2 pr-4 font-medium text-right">Calls</th>
                     <th className="py-2 pr-4 font-medium text-right">Total Time</th>
                     <th className="py-2 pr-4 font-medium text-right">Avg Time</th>
-                    <th className="py-2 pr-4 font-medium text-right">Rows</th>
-                    <th className="py-2 font-medium text-right">Cache Hit</th>
+                    <th className="py-2 font-medium text-right">Rows</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -196,10 +193,9 @@ export function PerformancePage() {
                     <tr key={`query-${i}-${q.query?.slice(0, 20)}`} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
                       <td className="py-3 pr-4 font-mono text-xs text-text-primary max-w-xs truncate" title={q.query}>{q.query}</td>
                       <td className="py-3 pr-4 text-right text-text-secondary">{q.calls?.toLocaleString()}</td>
-                      <td className="py-3 pr-4 text-right text-text-secondary">{ms(q.totalTimeMs)}</td>
-                      <td className="py-3 pr-4 text-right text-yellow-400">{ms(q.meanTimeMs)}</td>
-                      <td className="py-3 pr-4 text-right text-text-secondary">{q.rows?.toLocaleString()}</td>
-                      <td className="py-3 text-right text-green-400">{pct(q.hitPercent)}</td>
+                      <td className="py-3 pr-4 text-right text-text-secondary">{ms(q.totalExecTimeMs)}</td>
+                      <td className="py-3 pr-4 text-right text-yellow-400">{ms(q.avgExecTimeMs)}</td>
+                      <td className="py-3 text-right text-text-secondary">{q.rows?.toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -227,23 +223,17 @@ export function PerformancePage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-text-tertiary border-b border-border-primary text-left">
-                  <th className="py-2 pr-4 font-medium">PID</th>
                   <th className="py-2 pr-4 font-medium">Wait Type</th>
                   <th className="py-2 pr-4 font-medium">Event</th>
-                  <th className="py-2 pr-4 font-medium">State</th>
-                  <th className="py-2 pr-4 font-medium">Duration</th>
-                  <th className="py-2 font-medium">Query</th>
+                  <th className="py-2 font-medium text-right">Sessions</th>
                 </tr>
               </thead>
               <tbody>
-                {waits.map((w, i) => (
-                  <tr key={w.pid || i} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
-                    <td className="py-3 pr-4 font-mono text-xs text-text-primary">{w.pid}</td>
+                {waits.map((w) => (
+                  <tr key={`${w.waitEventType}-${w.waitEvent}`} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
                     <td className="py-3 pr-4 text-text-secondary">{w.waitEventType}</td>
                     <td className="py-3 pr-4 text-accent-primary">{w.waitEvent ?? '—'}</td>
-                    <td className="py-3 pr-4 text-text-tertiary">{w.state}</td>
-                    <td className="py-3 pr-4 text-yellow-400">{w.duration}</td>
-                    <td className="py-3 font-mono text-xs text-text-secondary max-w-xs truncate" title={w.query}>{w.query}</td>
+                    <td className="py-3 text-right text-yellow-400">{w.count}</td>
                   </tr>
                 ))}
               </tbody>

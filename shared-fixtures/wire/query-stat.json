@@ -1,0 +1,9 @@
+{
+  "query": "SELECT * FROM orders WHERE id = $1",
+  "calls": 120,
+  "totalExecTimeMs": 840.5,
+  "avgExecTimeMs": 7,
+  "minExecTimeMs": 1.5,
+  "maxExecTimeMs": 40,
+  "rows": 120
+}

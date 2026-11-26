@@ -292,7 +292,6 @@ export interface RestoreResult {
   currentStep?: string;
   failureReason?: string;
   message?: string;
-  recoveryType?: string;
 }
 
 export const RESTORE_RUNNING = 'RUNNING';

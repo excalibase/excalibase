@@ -30,7 +30,12 @@ func (s *PerformanceService) GetSummary(ctx context.Context, projectID string) (
 
 	// Check if pg_stat_statements is available
 	output, err := s.execSQL(ctx, inst, "SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements'")
-	if err != nil || !strings.Contains(output, "1") {
+	if err != nil {
+		// Not asking the database is not the extension being off: Studio offers
+		// to enable it, which restarts the database.
+		return nil, fmt.Errorf("read the extensions of the database: %w", err)
+	}
+	if !strings.Contains(output, "1") {
 		summary.Available = false
 		summary.UnavailableReason = "pg_stat_statements extension is not enabled"
 		return summary, nil
