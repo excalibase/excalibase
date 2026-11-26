@@ -82,7 +82,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 		t.Fatalf("SetDatabaseProbe: %v", err)
 	}
 	perfSvc := service.NewPerformanceService(store, mock)
-	auditSvc := service.NewAuditService(store, mock)
+	auditSvc := service.NewAuditService(store, mock, provSvc)
 	snapshotSvc := service.NewSnapshotService(store, mock, dir)
 	migVault := newFakeVault()
 	// Migrations connect as excalibase_app via vault (SEC-C2). Seed creds for
@@ -131,7 +131,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 			r.Route("/metrics", func(r chi.Router) { metricsH.Routes(r) })
 			r.Route("/backup", func(r chi.Router) { backupH.Routes(r) })
 			r.Route("/performance", func(r chi.Router) { perfH.Routes(r) })
-			r.Route("/audit", func(r chi.Router) { auditH.Routes(r) })
+			r.Route("/audit", func(r chi.Router) { auditH.Routes(r, func(next http.Handler) http.Handler { return next }) })
 			r.Route("/snapshot", func(r chi.Router) { snapshotH.Routes(r) })
 			r.Route("/migrations", func(r chi.Router) { migrationH.Routes(r) })
 		})
@@ -277,9 +277,11 @@ func TestPerformanceWaitEventsHandler(t *testing.T) {
 func TestAuditEnableHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	seedAuditCluster(t, mock)
+	mock.ExecAnswer = func([]string) (string, error) { return "pgaudit", nil }
 
 	w := doRequest(r, "POST", "/api/provision/test-db/audit/enable", `{"enabled":true}`)
-	if w.Code != 200 {
+	if w.Code != http.StatusAccepted {
 		t.Errorf(testStatusBodyFmt, w.Code, w.Body.String())
 	}
 }
@@ -454,6 +456,7 @@ func TestSetDeletionProtectionHandler(t *testing.T) {
 func TestAuditGetLogsHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	seedAuditCluster(t, mock)
 	mock.PodLogs[testDBPodName] = "AUDIT: line1"
 
 	w := doRequest(r, "GET", "/api/provision/test-db/audit/logs?lines=50", "")
@@ -610,7 +613,7 @@ func TestBackupTriggerNotFound(t *testing.T) {
 
 func TestAuditEnableNotFound(t *testing.T) {
 	r, _, _ := fullRouter(t)
-	w := doRequest(r, "POST", "/api/provision/nonexistent/audit/enable", `{}`)
+	w := doRequest(r, "POST", "/api/provision/nonexistent/audit/enable", `{"enabled":true}`)
 	if w.Code != 500 {
 		t.Errorf("audit enable not found: got %d", w.Code)
 	}
@@ -708,6 +711,7 @@ func TestAuditConfigNotFound(t *testing.T) {
 func TestAuditGetLogsDefaultLines(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	seedAuditCluster(t, mock)
 	mock.PodLogs[testDBPodName] = "AUDIT: line1"
 
 	// no "lines" query param — uses default 100
@@ -929,3 +933,32 @@ type noRestoredSettings struct{}
 
 func (noRestoredSettings) CopyRestoredSettings(context.Context, string, string) error { return nil }
 func (noRestoredSettings) DisableMFA(context.Context, string) error                   { return nil }
+
+func TestAuditEnableHandlerRefusesBadRequestsWith400(t *testing.T) {
+	r, store, mock := fullRouter(t)
+	seedInstance(store, mock)
+	for name, body := range map[string]string{
+		"not json":       `{"enabled":`,
+		"unknown field":  `{"enabled":true,"x":1}`,
+		"bad class":      `{"enabled":true,"settings":{"pgaudit.log":"write; DROP"}}`,
+		"disable":        `{"enabled":false}`,
+		"empty document": ``,
+	} {
+		w := doRequest(r, "POST", "/api/provision/test-db/audit/enable", body)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400: %s", name, w.Code, w.Body.String())
+		}
+	}
+}
+
+// seedAuditCluster is the CNPG cluster audit reads its primary from.
+func seedAuditCluster(t *testing.T, mock *k8s.MockClient) {
+	t.Helper()
+	cluster := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster",
+		"metadata": map[string]interface{}{"name": "test-db-postgres", "namespace": "org1-test-db"},
+	}}
+	if err := mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-test-db", cluster); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+}

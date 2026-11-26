@@ -618,6 +618,10 @@ seconds). Statistics are read as the superuser in the database server's own
 roles' statements. MySQL projects read their statement digests with no
 restart. DocumentDB projects have no slow-queries page on a single host.
 
+Database audit (pgaudit) is Kubernetes-only: `POST .../audit/enable` answers 409 on a
+single host. On Kubernetes it restarts the database to preload the library (OPERATOR.md,
+"Database audit").
+
 | `.env` | Default | Meaning |
 |---|---|---|
 | `FEATURE_REQUESTMETRICS` | unset (off) | request counting in graphql and auth, and the Requests page |

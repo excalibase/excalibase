@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"regexp"
 	"strconv"
 	"strings"
@@ -450,7 +451,16 @@ func (s *ProvisioningService) TuneParameters(ctx context.Context, projectID stri
 	if err := s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithTenantParameters(cluster, params)); err != nil {
 		return fmt.Errorf("apply the settings to the cluster: %w", err)
 	}
-	if err := recorder.UpdateParametersIfStatus(projectID, params, inst.Status); err != nil {
+	recorded := params
+	// pgaudit is not the tenant's to tune, but the record is what a restore reads.
+	if audit, ok := inst.Parameters[k8s.AuditLogParameter]; ok {
+		recorded = maps.Clone(params)
+		if recorded == nil {
+			recorded = map[string]string{}
+		}
+		recorded[k8s.AuditLogParameter] = audit
+	}
+	if err := recorder.UpdateParametersIfStatus(projectID, recorded, inst.Status); err != nil {
 		return errors.Join(fmt.Errorf("record the settings: %w", err), s.restoreTenantParameters(ctx, inst, previous))
 	}
 	return nil

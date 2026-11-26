@@ -64,6 +64,24 @@ func WithArchiveTimeout(cluster *unstructured.Unstructured, want string) (*unstr
 	return changed, true
 }
 
+// WithPostgresParameter is a copy of the cluster with one Postgres setting,
+// and whether that differs from what the cluster has.
+func WithPostgresParameter(cluster *unstructured.Unstructured, name, value string) (*unstructured.Unstructured, bool) {
+	changed := cluster.DeepCopy()
+	spec, _, _ := unstructured.NestedMap(changed.Object, "spec")
+	if spec == nil {
+		spec = map[string]interface{}{}
+	}
+	params := postgresParameters(spec)
+	if current, ok := params[name].(string); ok && current == value {
+		return cluster, false
+	}
+	params[name] = value
+	setPostgresParameters(spec, params)
+	_ = unstructured.SetNestedMap(changed.Object, spec, "spec")
+	return changed, true
+}
+
 // ClusterStorageSize is the volume size a CNPG Cluster asks for.
 func ClusterStorageSize(cluster *unstructured.Unstructured) (resource.Quantity, error) {
 	size, found, err := unstructured.NestedString(cluster.Object, "spec", "storage", "size")
@@ -218,7 +236,8 @@ func ValidateTierSizing(tier config.TierConfig) error { return validateTierSizin
 var sizingFields = []string{"instances", "resources", "affinity", "primaryUpdateStrategy", "primaryUpdateMethod"}
 
 // WithSizingOf is a copy of cluster with previous's instances, resources,
-// spread, update policy, replication guarantee and Postgres settings. The disk is left as it is: a
+// spread, update policy, replication guarantee and Postgres settings, except that the
+// cluster's own pgaudit settings stay. The disk is left as it is: a
 // volume that grew cannot be asked to shrink.
 func WithSizingOf(cluster, previous *unstructured.Unstructured) *unstructured.Unstructured {
 	changed := cluster.DeepCopy()
@@ -231,6 +250,16 @@ func WithSizingOf(cluster, previous *unstructured.Unstructured) *unstructured.Un
 		}
 	}
 	params, _, _ := unstructured.NestedMap(previous.Object, "spec", "postgresql", "parameters")
+	if params == nil {
+		params = map[string]interface{}{}
+	}
+	// Audit outlives a rollback: the extension is in the database, and without the
+	// preload every DDL statement would fail on its event trigger.
+	current, _, _ := unstructured.NestedMap(cluster.Object, "spec", "postgresql", "parameters")
+	for name := range auditParameters(params) {
+		delete(params, name)
+	}
+	maps.Copy(params, auditParameters(current))
 	_ = unstructured.SetNestedMap(changed.Object, params, "spec", "postgresql", "parameters")
 	if sync, found, _ := unstructured.NestedMap(previous.Object, "spec", "postgresql", "synchronous"); found {
 		_ = unstructured.SetNestedMap(changed.Object, sync, "spec", "postgresql", "synchronous")
