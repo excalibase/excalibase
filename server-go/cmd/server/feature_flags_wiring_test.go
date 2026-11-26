@@ -45,6 +45,7 @@ var darkRoutes = map[features.Feature][]darkProbe{
 	features.MySQL: {
 		{http.MethodGet, "/api/mysql/catalog"},
 	},
+
 	features.SlowQueries: {
 		{http.MethodGet, "/api/provision/" + matrixProjectA + "/slow-queries/"},
 		{http.MethodPost, "/api/provision/" + matrixProjectA + "/slow-queries/reset"},
@@ -202,6 +203,8 @@ var darkWork = map[features.Feature]string{
 	features.LimitedTrial: "TestFlagOffEveryoneIsFullAndNothingIsRead",
 	// Off, nothing is evaluated or stored (cmd/server).
 	features.BehaviourReview: "TestBehaviourSampler_OffWhileTheFlagIsOff",
+	// Admin-only routes: probed with an admin session, which this harness does not carry (cmd/server).
+	features.AdminAnalytics: "TestAdminAnalytics_RoutesFollowTheirFlagOnTheRealRouter",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }

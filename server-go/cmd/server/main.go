@@ -1161,6 +1161,8 @@ type handlerDeps struct {
 	adminHandler     *handler.AdminHandler
 	// adminConsoleHandler is the platform admin's view of every account, org and project (EXC-757).
 	adminConsoleHandler *handler.AdminConsoleHandler
+	// adminAnalyticsHandler is the read-only numbers behind the console's analytics tabs (EXC-898).
+	adminAnalyticsHandler *handler.AdminAnalyticsHandler
 	// adminAssertions checks Cloudflare Access assertions on the admin host; nil builds the real one from config.
 	adminAssertions adminaccess.Checker
 	// adminGateOverride replaces the gate built from config; tests that probe other layers use it.
@@ -2003,6 +2005,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		documentsHandler:      buildDocumentBrowser(k8sClient, a.dockerClient, vc, store),
 		adminHandler:          adminHandler,
 		adminConsoleHandler:   adminConsole,
+		adminAnalyticsHandler: handler.NewAdminAnalyticsHandler(pgstore.NewAdminConsole(sqlStore.DB()), cfg.Features()),
 		authHandler:           authHandler,
 		oauthHandler:          buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
 		ssoHandler:            buildSSOProvidersHandler(cfg, vc, sqlStore),
@@ -2459,6 +2462,7 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 			r.Use(auth.RequireUnrestrictedCredentialForWrites)
 			r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.adminConsoleHandler.Routes(r) })
+			r.Route("/analytics", func(r chi.Router) { d.adminAnalyticsHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.orgHandler.ConsoleRoutes(r) })
 			r.Route("/tiers", func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermViewAny))
