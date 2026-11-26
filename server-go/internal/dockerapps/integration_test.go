@@ -186,8 +186,8 @@ func buildProbe(t *testing.T) []byte {
 func itApp(body string) *apphost.App {
 	return &apphost.App{
 		ID: "app-it", ProjectID: "proj-it", Name: "web", Image: itBusybox, Port: 8080, Replicas: 1, Tier: domain.Free,
-		Args: []string{"sh", "-c", "mkdir -p /www && echo " + body + " > /www/index.html && echo serving " + body +
-			" && exec httpd -f -p 8080 -h /www"},
+		Args: []string{"sh", "-c", "mkdir -p /tmp/www && echo " + body + " > /tmp/www/index.html && echo serving " + body +
+			" && exec httpd -f -p 8080 -h /tmp/www"},
 		HealthCheckPath: "/", Disk: &apphost.AppDisk{MountPath: "/data", Size: "1Gi"}, Status: apphost.StatusCreated,
 	}
 }
@@ -278,7 +278,7 @@ func TestRealEngineAppsReachEachOtherByName(t *testing.T) {
 	ctx := context.Background()
 	web := itApp("unused")
 	web.Disk = nil
-	web.Args = []string{"sh", "-c", "mkdir -p /www && echo $(BODY) > /www/index.html && exec httpd -f -p 8080 -h /www"}
+	web.Args = []string{"sh", "-c", "mkdir -p /tmp/www && echo $(BODY) > /tmp/www/index.html && exec httpd -f -p 8080 -h /tmp/www"}
 	web.Env = []apphost.EnvVar{{Name: "BODY", Kind: apphost.KindLiteral, Value: literal("expanded")}}
 	rig.deploy(web, "dep-web")
 

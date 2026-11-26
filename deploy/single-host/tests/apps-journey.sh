@@ -57,6 +57,17 @@ case "$cert" in *"DNS:$HOST"*) ok "the edge serves a certificate for the app hos
 logs=$(api "$API/projects/$PID/apps/$AID/logs?tail=50")
 case "$logs" in *"serving one"*) ok "logs read through the API" ;; *) ko "logs: ${logs:0:300}" ;; esac
 
+echo "== apps: the root filesystem is read-only; /tmp and the disk are what an app may write (EXC-732)"
+AC=$(app_container web)
+if [ -n "$AC" ]; then
+  $DOCKER exec "$AC" sh -c 'touch /rootfs-probe' >/dev/null 2>&1 && ko "the app wrote to its root filesystem" || ok "the app cannot write outside /tmp and its disk"
+  $DOCKER exec "$AC" sh -c 'touch /tmp/probe && touch /data/probe' >/dev/null 2>&1 && ok "the app writes /tmp and its disk" || ko "the app cannot write /tmp or /data"
+  [ "$($DOCKER inspect "$AC" --format '{{.HostConfig.ReadonlyRootfs}}')" = true ] && ok "the engine holds the root read-only" || ko "root is not read-only in the engine"
+  case "$($DOCKER inspect "$AC" --format '{{json .HostConfig.Tmpfs}}')" in *'"/tmp":"'*size=*) ok "/tmp is a size-capped tmpfs" ;; *) ko "/tmp is not capped: $($DOCKER inspect "$AC" --format '{{json .HostConfig.Tmpfs}}')" ;; esac
+else
+  ko "no app container to check the root filesystem on"
+fi
+
 echo "== apps: create_app through MCP answers the https URL the edge serves and allows that origin (EXC-606)"
 PAT=$(api -X POST "$API/auth/tokens/" -d "{\"name\":\"smoke-mcp\",\"projectId\":\"$PID\",\"scopes\":[\"read\",\"write\"]}" | json 'd["token"]')
 [ -n "$PAT" ] || ko "no personal access token for MCP"

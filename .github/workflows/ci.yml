@@ -450,6 +450,10 @@ jobs:
       - name: Install gVisor (runsc) into Docker
         if: matrix.gvisor == '1'
         run: sh deploy/single-host/tests/install-gvisor.sh
+      # Where gVisor keeps a container's root, and that a read-only root with a capped /tmp holds under it (EXC-732).
+      - name: gVisor root filesystem
+        if: matrix.gvisor == '1'
+        run: sh deploy/single-host/tests/gvisor-rootfs.sh
       - name: Fresh install (${{ matrix.name }})
         if: matrix.script == 'smoke'
         # Ends the step itself, 10 minutes before the job's 90, so a hang is a red step with a log.

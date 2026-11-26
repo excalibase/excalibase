@@ -492,6 +492,8 @@ services:
       APP_SANDBOX_RUNTIME: ${APP_SANDBOX_RUNTIME:-runsc}
       # Apps run without a sandbox on rootless Podman: auto, per-app or shared user ranges (EXC-682).
       APP_USERNS: ${APP_USERNS:-auto}
+      # The share of an app's memory limit its /tmp may fill; its root filesystem is read-only (EXC-732).
+      APP_TMP_PERCENT: ${APP_TMP_PERCENT:-25}
       # "internet" lets apps call out; by default they reach only their project.
       APP_EGRESS: ${APP_EGRESS:-none}
       # Rootless Podman's egress reaches the LAN and metadata, unguardable: accept takes that knowingly.

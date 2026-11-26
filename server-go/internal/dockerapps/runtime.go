@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -55,6 +56,10 @@ type Options struct {
 	RoutesDir string
 	// SandboxRuntime is the OCI runtime apps run under; empty is the operator's opt-out.
 	SandboxRuntime string
+	// TmpPercent is the size of an app's /tmp as a percentage of its memory limit (APP_TMP_PERCENT;
+	// zero takes DefaultTmpPercent). Apps run with a read-only root, so /tmp and their disk are
+	// what they may write (EXC-732).
+	TmpPercent int
 	// Egress gives project networks a gateway; Isolate (Podman) keeps such a bridge off the others.
 	Egress, Isolate bool
 	// HostFirewall: the bundle's firewall guards bridges named under its wildcard (EXC-687).
@@ -91,7 +96,12 @@ type Runtime struct {
 	// usernsMu serialises deciding apps' user ranges, and guards what startup decided (userns).
 	usernsMu sync.Mutex
 	userns   usernsPlan
+	// warn reports what an operator should know but a deploy survives; log.Printf unless a test says otherwise.
+	warn func(format string, args ...any)
 }
+
+// DefaultTmpPercent is the share of an app's memory limit its /tmp may take.
+const DefaultTmpPercent = 25
 
 func New(engine Engine, opts Options) (*Runtime, error) {
 	if engine == nil {
@@ -106,7 +116,10 @@ func New(engine Engine, opts Options) (*Runtime, error) {
 	if opts.CrashRestarts <= 0 {
 		opts.CrashRestarts = defaultCrashRestarts
 	}
-	return &Runtime{engine: engine, opts: opts}, nil
+	if opts.TmpPercent == 0 {
+		opts.TmpPercent = DefaultTmpPercent
+	}
+	return &Runtime{engine: engine, opts: opts, warn: log.Printf}, nil
 }
 
 // DefaultMinReady is what the wiring passes for MinReady.
@@ -118,6 +131,9 @@ func (o Options) validate() error {
 			strings.HasPrefix(prefix, managedPrefix+"platform") {
 			return fmt.Errorf("the %s %q must extend %q with a segment ending in '-'", setting, prefix, managedPrefix)
 		}
+	}
+	if o.TmpPercent < 0 || o.TmpPercent > 100 {
+		return fmt.Errorf("the /tmp percentage of the memory limit must be from 1 to 100, not %d", o.TmpPercent)
 	}
 	required := map[string]string{
 		"edge container": o.EdgeContainer, "edge TLS address": o.EdgeTLSAddress, "routes directory": o.RoutesDir,

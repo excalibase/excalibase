@@ -43,6 +43,21 @@ type fakeContainer struct {
 	logs       string
 }
 
+// hasVolumeAt reports whether path is inside a volume the container mounts.
+func (c *fakeContainer) hasVolumeAt(path string) bool {
+	for target := range c.config.Volumes {
+		if path == target || strings.HasPrefix(path, strings.TrimSuffix(target, "/")+"/") {
+			return true
+		}
+	}
+	for _, m := range c.host.Mounts {
+		if m.Type == mount.TypeVolume && (path == m.Target || strings.HasPrefix(path, strings.TrimSuffix(m.Target, "/")+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
 type fakeNetwork struct {
 	options network.CreateOptions
 	members []string // container ids
@@ -51,16 +66,19 @@ type fakeNetwork struct {
 // fakeEngine is an in-memory engine: containers, networks, volumes and images
 // with just enough behaviour for the runtime's decisions.
 type fakeEngine struct {
-	mu         sync.Mutex
-	seq        int
-	containers map[string]*fakeContainer
-	networks   map[string]*fakeNetwork
-	volumes    map[string]map[string]string
-	pulled     []string
-	pullAuth   map[string]string
-	pullErr    map[string]string
-	runtimes   []string
-	podman     bool
+	removeOptions []container.RemoveOptions
+	// imageVolumes are VOLUMEs the test image declares.
+	imageVolumes []string
+	mu           sync.Mutex
+	seq          int
+	containers   map[string]*fakeContainer
+	networks     map[string]*fakeNetwork
+	volumes      map[string]map[string]string
+	pulled       []string
+	pullAuth     map[string]string
+	pullErr      map[string]string
+	runtimes     []string
+	podman       bool
 	// rootful is a Podman run as root, whose bridges have an address on the host.
 	rootful bool
 	// gatewayMode is how the engine takes an isolated gateway: "" honours it (Docker 28+),
@@ -220,13 +238,14 @@ func (f *fakeEngine) ContainerStop(_ context.Context, id string, _ container.Sto
 	return nil
 }
 
-func (f *fakeEngine) ContainerRemove(_ context.Context, id string, _ container.RemoveOptions) error {
+func (f *fakeEngine) ContainerRemove(_ context.Context, id string, options container.RemoveOptions) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c, err := f.find(id)
 	if err != nil {
 		return err
 	}
+	f.removeOptions = append(f.removeOptions, options)
 	for _, net := range f.networks {
 		net.members = slices.DeleteFunc(net.members, func(m string) bool { return m == c.id })
 	}
@@ -247,11 +266,22 @@ func (f *fakeEngine) ContainerInspect(_ context.Context, id string) (container.I
 	for _, net := range c.networks {
 		networks[net] = &network.EndpointSettings{Aliases: slices.Clone(c.aliases[net])}
 	}
+	// The engine lists every volume the container will mount: the ones asked for and the image's own.
+	var mounts []container.MountPoint
+	for target := range config.Volumes {
+		mounts = append(mounts, container.MountPoint{Type: mount.TypeVolume, Name: "anon-" + shortHash(target, 8), Destination: target})
+	}
+	for _, target := range f.imageVolumes {
+		mounts = append(mounts, container.MountPoint{Type: mount.TypeVolume, Name: "anon-" + shortHash(target, 8), Destination: target})
+	}
+	for _, m := range host.Mounts {
+		mounts = append(mounts, container.MountPoint{Type: m.Type, Name: m.Source, Destination: m.Target})
+	}
 	return container.InspectResponse{
 		ContainerJSONBase: &container.ContainerJSONBase{ID: c.id, Name: "/" + c.name, RestartCount: c.restarts, HostConfig: &host,
 			State: &container.State{Status: c.state, Running: c.state == "running", Restarting: c.state == "restarting",
 				OOMKilled: c.oomKilled, ExitCode: c.exitCode, FinishedAt: c.finishedAt}},
-		Config: &config, NetworkSettings: &container.NetworkSettings{Networks: networks},
+		Mounts: mounts, Config: &config, NetworkSettings: &container.NetworkSettings{Networks: networks},
 	}, nil
 }
 
@@ -304,7 +334,12 @@ func (f *fakeEngine) CopyToContainer(_ context.Context, id, dst string, content 
 			return err
 		}
 		body, _ := io.ReadAll(reader)
-		c.files[strings.TrimSuffix(dst, "/")+"/"+header.Name] = body
+		path := strings.TrimSuffix(dst, "/") + "/" + header.Name
+		// The engine refuses a copy into a read-only root, except into a volume mounted in it.
+		if c.host.ReadonlyRootfs && !c.hasVolumeAt(dst) {
+			return errdefs.ErrPermissionDenied.WithMessage("container rootfs is marked read-only")
+		}
+		c.files[path] = body
 	}
 }
 

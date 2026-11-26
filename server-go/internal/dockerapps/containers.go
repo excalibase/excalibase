@@ -117,6 +117,10 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 		Resources: container.Resources{
 			Memory: spec.MemoryBytes, MemorySwap: spec.MemoryBytes, NanoCPUs: spec.NanoCPUs, PidsLimit: &pids,
 		},
+		// Nothing an app writes to its root can fill the host's disk, whatever storage engine or
+		// sandbox sits under it: it writes /tmp (capped, below) and its disk (EXC-732).
+		ReadonlyRootfs: true,
+		Tmpfs:          map[string]string{"/tmp": r.tmpOptions(spec)},
 	}
 	// Inside the sandbox an app keeps what Kubernetes gives it; without one it keeps
 	// only what an image needs to step down from root and to bind a low port.
@@ -132,6 +136,15 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 		host.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: r.volumeName(spec.DiskClaim), Target: spec.DiskMountPath}}
 	}
 	return host
+}
+
+// tmpOptions is /tmp: memory, so no disk and no storage engine is involved, and the kernel
+// refuses writes past its size. A tmpfs is charged to the container's memory limit, so its size
+// is a share of that limit, never more than the container could hold anyway. Programs may run
+// from it, so it is not noexec.
+func (r *Runtime) tmpOptions(spec containerSpec) string {
+	size := spec.MemoryBytes * int64(r.opts.TmpPercent) / 100
+	return "rw,nosuid,nodev,mode=1777,size=" + strconv.FormatInt(size, 10)
 }
 
 // serviceAlias is the name the app's siblings reach it by; one of the
@@ -150,7 +163,10 @@ func (r *Runtime) createAppContainer(ctx context.Context, spec containerSpec, re
 	if err != nil {
 		return "", err
 	}
-	config := &container.Config{Image: spec.Image, Env: withEdgeCA(spec.Env, edgeCA), Labels: r.appLabels(spec, replica)}
+	config := &container.Config{Image: spec.Image, Env: withEdgeCA(spec.Env, edgeCA), Labels: r.appLabels(spec, replica),
+		// The root is read-only, so the engine refuses a copy into it: the probe goes into a volume
+		// of its own, which dies with the container (remove asks for its volumes).
+		Volumes: map[string]struct{}{"/" + probeDir: {}}}
 	if len(spec.Args) > 0 {
 		config.Cmd = spec.Args
 	}
@@ -169,7 +185,24 @@ func (r *Runtime) createAppContainer(ctx context.Context, spec containerSpec, re
 	if err := r.injectProbe(ctx, created.ID, edgeCA); err != nil {
 		return "", errors.Join(err, r.remove(ctx, created.ID))
 	}
+	r.warnImageVolumes(ctx, created.ID, name, spec)
 	return created.ID, nil
+}
+
+// warnImageVolumes says when the image declares a VOLUME of its own. The engine makes that an
+// anonymous, writable volume whatever the root is, so writes there are neither read-only nor
+// capped (EXC-732). The deploy goes on; the operator is told.
+func (r *Runtime) warnImageVolumes(ctx context.Context, id, name string, spec containerSpec) {
+	inspect, err := r.engine.ContainerInspect(ctx, id)
+	if err != nil {
+		return
+	}
+	for _, mounted := range inspect.Mounts {
+		if mounted.Type != mount.TypeVolume || mounted.Destination == "/"+probeDir || mounted.Destination == spec.DiskMountPath {
+			continue
+		}
+		r.warn("WARN: the image of %s declares a VOLUME at %s: writes there are on an anonymous host volume, not read-only and not capped", name, mounted.Destination)
+	}
 }
 
 // edgeCA is the edge's own CA root when it issues locally, else nil: then a public CA signs its certificates.
@@ -199,14 +232,13 @@ func (r *Runtime) injectProbe(ctx context.Context, id string, edgeCA []byte) err
 		header tar.Header
 		body   []byte
 	}{
-		{tar.Header{Name: probeDir + "/", Mode: 0o755, Typeflag: tar.TypeDir}, nil},
-		{tar.Header{Name: probeDir + "/probe", Mode: 0o755, Typeflag: tar.TypeReg, Size: int64(len(r.opts.ProbeBinary))}, r.opts.ProbeBinary},
+		{tar.Header{Name: "probe", Mode: 0o755, Typeflag: tar.TypeReg, Size: int64(len(r.opts.ProbeBinary))}, r.opts.ProbeBinary},
 	}
 	if edgeCA != nil {
 		entries = append(entries, struct {
 			header tar.Header
 			body   []byte
-		}{tar.Header{Name: probeDir + "/edge-ca.crt", Mode: 0o644, Typeflag: tar.TypeReg, Size: int64(len(edgeCA))}, edgeCA})
+		}{tar.Header{Name: "edge-ca.crt", Mode: 0o644, Typeflag: tar.TypeReg, Size: int64(len(edgeCA))}, edgeCA})
 	}
 	for _, entry := range entries {
 		if err := writer.WriteHeader(&entry.header); err != nil {
@@ -219,7 +251,8 @@ func (r *Runtime) injectProbe(ctx context.Context, id string, edgeCA []byte) err
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("pack the readiness probe: %w", err)
 	}
-	if err := r.engine.CopyToContainer(ctx, id, "/", &archive, container.CopyToContainerOptions{}); err != nil {
+	// The engine decides by the destination: a path inside a volume is writable under a read-only root.
+	if err := r.engine.CopyToContainer(ctx, id, "/"+probeDir, &archive, container.CopyToContainerOptions{}); err != nil {
 		return fmt.Errorf("copy the readiness probe into %s: %w", id, err)
 	}
 	return nil
@@ -279,7 +312,8 @@ func (r *Runtime) stop(ctx context.Context, id string) error {
 }
 
 func (r *Runtime) remove(ctx context.Context, id string) error {
-	if err := r.engine.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+	// RemoveVolumes takes the container's anonymous volumes (the probe's) and never a named one: the app's disk stays.
+	if err := r.engine.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
 		return fmt.Errorf("remove %s: %w", id, err)
 	}
 	return nil

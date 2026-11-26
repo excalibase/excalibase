@@ -1493,3 +1493,14 @@ The purge retry's attempt count lives in the process, so a restart or a new lead
 `POST /api/provision/{id}/audit/enable` (Admin) turns on pgaudit for a Postgres project on Kubernetes. It **restarts the database**: CloudNativePG preloads the library only once a `pgaudit.log` setting is on the cluster, and changing it rolls the instances (a few seconds on one instance, a switchover on an HA tier). The call answers `202` as soon as the cluster is changed; a background task then waits for the library and creates the extension. Poll `GET /api/provision/{id}/audit/config`: `status` is `pending` while pgaudit is preloaded but the extension is not created yet, and `enabled` (with `enabled: true`) only when both are done. Enabling again while the setting is there writes nothing and finishes a task that was lost, for example by a platform restart.
 
 Body: `{"enabled": true, "settings": {"pgaudit.log": "ddl,write"}}`. The default is `ddl,role,write`; classes are `read, write, function, role, ddl, misc, misc_set, all`. Anything else is a `400`, as is `"enabled": false`: turning audit off is not supported, because the extension's event triggers need the library. Restores and plan rollbacks keep the setting. On a single host the route answers `409`: audit is Kubernetes-only.
+
+## App containers on a single host: read-only root (EXC-732)
+
+App containers on Docker or Podman run with a read-only root filesystem. They write `/tmp`, a tmpfs sized at `APP_TMP_PERCENT` (default 25) percent of the app's memory limit, and their disk volume. This replaces a disk quota on the engine's writable layer, which only some storage engines can enforce (`--storage-opt size` needs overlay2 on xfs with project quotas; the containerd snapshotter has none). An app that writes elsewhere fails with `Read-only file system`: tell its owner to point caches at `/tmp` or give the app a disk; the framework list is in docs/deployment/docker-local.md.
+
+- `/tmp` is memory, so a larger `APP_TMP_PERCENT` takes memory from the app, never disk. It counts against the app's own limit.
+- An app's disk volume is still on the host's filesystem with its size recorded, not enforced. Watch the host's disk (the host monitor's disk alert) until the engine can cap it.
+- An image's own `VOLUME` is writable and uncapped; provisioning logs `WARN: the image of ... declares a VOLUME at ...`.
+- The readiness probe now lives on a small anonymous volume (`/.excalibase`) that goes with the container.
+- Kubernetes apps are not covered by this change.
+

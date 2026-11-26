@@ -72,7 +72,7 @@ func perAppRig(t *testing.T) *realRig {
 func secretApp(id, secret string) *apphost.App {
 	app := itApp(secret)
 	app.ID, app.Name = id, id
-	app.Args = []string{"sh", "-c", "echo " + secret + " > /data/secret && mkdir -p /www && echo ok > /www/index.html && exec httpd -f -p 8080 -h /www"}
+	app.Args = []string{"sh", "-c", "echo " + secret + " > /data/secret && mkdir -p /tmp/www && echo ok > /tmp/www/index.html && exec httpd -f -p 8080 -h /tmp/www"}
 	return app
 }
 

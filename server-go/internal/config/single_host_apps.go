@@ -1,10 +1,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -16,6 +18,8 @@ const (
 	appSandboxOptOut      = "none"
 	defaultAppProbeBinary = "/usr/local/bin/excalibase-app-probe"
 	defaultAppUserns      = "auto"
+	// defaultAppTmpPercent is the share of an app's memory limit its /tmp may fill (EXC-732).
+	defaultAppTmpPercent = 25
 )
 
 // SingleHostAppsConfig is how apps run on a single Docker or Podman host (EXC-575).
@@ -30,7 +34,11 @@ type SingleHostAppsConfig struct {
 	EgressInvalid string
 	// Userns is APP_USERNS (auto, per-app or shared): whether unsandboxed apps on rootless
 	// Podman each get their own user range (EXC-682). Validate refuses any other value.
-	Userns                      string
+	Userns string
+	// TmpPercent is APP_TMP_PERCENT: the size of an app's /tmp tmpfs as a percentage of its
+	// memory limit. The root filesystem is read-only, so /tmp and the app's disk are what it
+	// may write. -1 keeps a value that is not a whole number, for Validate to refuse.
+	TmpPercent                  int
 	NetworkPrefix, VolumePrefix string
 	EdgeContainer               string
 	EdgeRoutesDir               string
@@ -65,6 +73,14 @@ func loadSingleHostApps() SingleHostAppsConfig {
 	if cfg.SandboxRuntime == appSandboxOptOut {
 		cfg.SandboxRuntime = ""
 	}
+	cfg.TmpPercent = defaultAppTmpPercent
+	if raw := strings.TrimSpace(os.Getenv("APP_TMP_PERCENT")); raw != "" {
+		percent, err := strconv.Atoi(raw)
+		if err != nil {
+			percent = -1
+		}
+		cfg.TmpPercent = percent
+	}
 	cfg.AcceptUnguardedEgress = os.Getenv("APP_EGRESS_UNGUARDED") == "accept"
 	switch egress := envOr("APP_EGRESS", "none"); egress {
 	case "none":
@@ -87,6 +103,9 @@ func (c AppConfig) validateSingleHostApps() error {
 	case "", "auto", "per-app", "shared":
 	default:
 		return fmt.Errorf("APP_USERNS %q must be auto, per-app or shared", apps.Userns)
+	}
+	if apps.TmpPercent < 1 || apps.TmpPercent > 100 {
+		return errors.New("APP_TMP_PERCENT must be a whole number from 1 to 100")
 	}
 	required := []struct{ env, value string }{
 		{"APP_DOMAIN", c.AppDomain}, {"APP_NETWORK_PREFIX", apps.NetworkPrefix}, {"APP_VOLUME_PREFIX", apps.VolumePrefix},

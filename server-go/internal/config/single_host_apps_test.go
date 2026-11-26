@@ -14,7 +14,7 @@ func singleHostHosting() AppConfig {
 			SandboxRuntime: "runsc", NetworkPrefix: "excalibase-net-", VolumePrefix: "excalibase-vol-",
 			EdgeContainer: "excalibase-edge", EdgeRoutesDir: "/var/lib/excalibase/app-routes",
 			EdgeTLSAddress: "edge:443", ProbeBinary: "/usr/local/bin/excalibase-app-probe", EdgeTLS: "internal",
-			EdgeCAURL: "http://edge:8081/root.crt", EdgeAliases: []string{"studio.example.com", "api.example.com"},
+			TmpPercent: 25, EdgeCAURL: "http://edge:8081/root.crt", EdgeAliases: []string{"studio.example.com", "api.example.com"},
 		},
 	}
 }
@@ -107,5 +107,24 @@ func TestAnACMEEdgeNeedsNoCAURL(t *testing.T) {
 func TestEdgeIssuesLocallyOnlyWithItsOwnCA(t *testing.T) {
 	if (SingleHostAppsConfig{EdgeTLS: "admin@example.com"}).EdgeIssuesLocally() {
 		t.Fatal("an ACME edge counted as its own CA")
+	}
+}
+
+// EXC-732: how much of an app's memory limit its /tmp may take, as a percentage.
+func TestAppTmpPercentDefaultsToAQuarterAndIsValidated(t *testing.T) {
+	if got := Load().SingleHostApps.TmpPercent; got != 25 {
+		t.Fatalf("default APP_TMP_PERCENT = %d, want 25", got)
+	}
+	t.Setenv("APP_TMP_PERCENT", "40")
+	if got := Load().SingleHostApps.TmpPercent; got != 40 {
+		t.Fatalf("APP_TMP_PERCENT read as %d", got)
+	}
+	for _, bad := range []string{"0", "101", "-5", "ten", "12.5"} {
+		t.Setenv("APP_TMP_PERCENT", bad)
+		cfg := singleHostHosting()
+		cfg.SingleHostApps.TmpPercent = Load().SingleHostApps.TmpPercent
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "APP_TMP_PERCENT") {
+			t.Errorf("APP_TMP_PERCENT=%q passed validation: %v", bad, err)
+		}
 	}
 }
