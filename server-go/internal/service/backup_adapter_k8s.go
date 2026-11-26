@@ -23,6 +23,9 @@ import (
 // Barman Cloud plugin.
 type K8sBackupAdapter struct {
 	k8sClient k8s.KubeClient
+	// now is the clock a manual backup is named by; nil is time.Now.
+	now    func() time.Time
+	stamps backupStamps
 	// archives names each major's archive after a major upgrade (EXC-668);
 	// nil keeps every project on its original one.
 	archives *MajorUpgradeArchives
@@ -194,8 +197,16 @@ func (a *K8sBackupAdapter) Configure(_ context.Context, _ *domain.DatabaseInstan
 	return nil
 }
 
+// SetClock replaces the clock manual backups are named by (tests).
+func (a *K8sBackupAdapter) SetClock(now func() time.Time) { a.now = now }
+
 func (a *K8sBackupAdapter) TriggerManual(ctx context.Context, inst *domain.DatabaseInstance) (BackupRef, error) {
-	backupName := fmt.Sprintf("%s-backup-%s", inst.ProjectID, time.Now().Format("20060102-150405"))
+	clock := a.now
+	if clock == nil {
+		clock = time.Now
+	}
+	started := a.stamps.next(inst.ProjectID, clock())
+	backupName := fmt.Sprintf("%s-backup-%s", inst.ProjectID, started.Format("20060102-150405"))
 	backup := k8s.BuildManualBackup(inst.ProjectID, inst.Namespace, backupName)
 	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGBackupGVR, inst.Namespace, backup); err != nil {
 		return BackupRef{}, fmt.Errorf("trigger backup: %w", err)
@@ -205,7 +216,7 @@ func (a *K8sBackupAdapter) TriggerManual(ctx context.Context, inst *domain.Datab
 		ProjectID: inst.ProjectID,
 		Type:      backupTypeManual,
 		Status:    backupStatusInProgress,
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		StartedAt: started.Format(time.RFC3339),
 	}, nil
 }
 

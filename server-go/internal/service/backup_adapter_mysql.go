@@ -32,6 +32,7 @@ type MySQLBackupAdapter struct {
 	poller    provisioner.Poller
 	streamer  PodStreamer
 	now       func() time.Time
+	stamps    backupStamps
 }
 
 // MySQLBackupAdapterConfig wires the adapter; every field is required.
@@ -105,7 +106,7 @@ func (a *MySQLBackupAdapter) TriggerManual(ctx context.Context, inst *domain.Dat
 	if err != nil {
 		return BackupRef{}, fmt.Errorf("the project's backup schedule is not running: %w", err)
 	}
-	started := a.now().UTC()
+	started := a.stamps.next(inst.ProjectID, a.now())
 	job, err := k8s.BuildManualMySQLBackupJob(cron, started)
 	if err != nil {
 		return BackupRef{}, err
