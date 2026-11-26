@@ -56,10 +56,12 @@ export interface ProjectBrief {
   egressBytesPerSec?: number;
 }
 
+export type DomainCount = { domain: string; count: number };
+
 export interface Overview {
   newlySuspended: { userId: string; email: string; reason: string; suspendedAt: string }[];
   signups24h: number;
-  signupDomains: { domain: string; count: number }[];
+  signupDomains: DomainCount[];
   failedProjects: ProjectBrief[];
   topCpu: ProjectBrief[];
   topMemory: ProjectBrief[];
@@ -139,6 +141,23 @@ const params = (query: ListQuery) => ({
   tier: query.tier || undefined,
   ownerStatus: query.ownerStatus || undefined,
 });
+
+// One page of a list read by keyset: the total it belongs to and where the next page starts.
+export interface CursorPage<T> {
+  items: T[];
+  total: number;
+  nextCursor?: string;
+}
+
+export type SuspendedBrief = Overview['newlySuspended'][number];
+
+export const ATTENTION_PAGE_SIZE = 20;
+
+const attentionPage = async <T>(path: string, cursor: string | undefined) =>
+  (await api.get<CursorPage<T>>(`/admin/attention/${path}`, { params: { limit: ATTENTION_PAGE_SIZE, ...(cursor ? { cursor } : {}) } })).data;
+
+export const getSuspensions = (cursor?: string) => attentionPage<SuspendedBrief>('suspensions', cursor);
+export const getFailedProjects = (cursor?: string) => attentionPage<ProjectBrief>('failed-projects', cursor);
 
 export const getOverview = async () => (await api.get<Overview>('/admin/console/overview')).data;
 
