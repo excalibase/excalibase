@@ -58,7 +58,7 @@ logs=$(api "$API/projects/$PID/apps/$AID/logs?tail=50")
 case "$logs" in *"serving one"*) ok "logs read through the API" ;; *) ko "logs: ${logs:0:300}" ;; esac
 
 echo "== apps: the root filesystem is read-only; /tmp and the disk are what an app may write (EXC-732)"
-AC=$(app_container web)
+AC=$(app_container "$AID")
 if [ -n "$AC" ]; then
   $DOCKER exec "$AC" sh -c 'touch /rootfs-probe' >/dev/null 2>&1 && ko "the app wrote to its root filesystem" || ok "the app cannot write outside /tmp and its disk"
   $DOCKER exec "$AC" sh -c 'touch /tmp/probe && touch /data/probe' >/dev/null 2>&1 && ok "the app writes /tmp and its disk" || ko "the app cannot write /tmp or /data"

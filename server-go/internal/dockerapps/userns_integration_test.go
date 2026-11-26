@@ -161,59 +161,9 @@ func TestRealPodmanPerAppUserRanges(t *testing.T) {
 	if rangeA == rangeB || rangeA.overlaps(rangeB) {
 		t.Fatalf("apps share ids: %+v and %+v", rangeA, rangeB)
 	}
-	// From the host: each app's file belongs to its own range, root of the app being its Base.
-	if got := ownerInPlatformIDs(t, rig.mountpoint(a)+"/secret"); got != rangeA.Base {
-		t.Fatalf("A's file belongs to id %d, want its range's root %d", got, rangeA.Base)
-	}
-	if got := ownerInPlatformIDs(t, rig.mountpoint(b)+"/secret"); got != rangeB.Base {
-		t.Fatalf("B's file belongs to id %d, want %d", got, rangeB.Base)
-	}
-
-	// An escape from A, standing in A's range, cannot change B's file; B's own range can (so the
-	// check can fail). Reading is not claimed: a file the app made with the default umask is world-readable
-	// once the path is reachable, and on the host the volume sits under the platform user's 0700 storage.
-	if err := rig.writesAs(rangeB, rig.rt.diskVolume(b.ID, 0)); err != nil {
-		t.Fatalf("B cannot write its own disk: %v", err)
-	}
-	if err := rig.writesAs(rangeA, rig.rt.diskVolume(b.ID, 0)); err == nil {
-		t.Fatal("A's range wrote to B's file")
-	}
-	if err := rig.readsAs(rangeA, rig.rt.diskVolume(a.ID, 0)); err != nil {
-		t.Fatalf("A cannot read its own disk: %v", err)
-	}
-
-	// A redeploy (new containers) stays in the range and keeps the files.
-	rig.deploy(a, "dep-2")
-	if again := rig.assigned(a.ID); again != rangeA {
-		t.Fatalf("a redeploy moved A from %+v to %+v", rangeA, again)
-	}
-	if got := ownerInPlatformIDs(t, rig.mountpoint(a)+"/secret"); got != rangeA.Base {
-		t.Fatalf("after the redeploy A's file belongs to %d, want %d", got, rangeA.Base)
-	}
-	if err := rig.readsAs(rangeA, rig.rt.diskVolume(a.ID, 0)); err != nil {
-		t.Fatalf("A lost its file after the redeploy: %v", err)
-	}
-	list, err := rig.direct.ContainerList(ctx, container.ListOptions{Filters: labelFilter(labelApp, a.ID)})
-	if err != nil || len(list) != 1 {
-		t.Fatalf("A's containers: %d (%v)", len(list), err)
-	}
-	if output, err := exec.Command("docker", "exec", list[0].ID, "cat", "/data/secret").CombinedOutput(); err != nil || strings.TrimSpace(string(output)) != "alpha" {
-		t.Fatalf("the redeployed app reads %q (%v)", output, err)
-	}
-	if _, err := rig.rt.AppDiskUsage(ctx, rig.db, a.ID, *a.Disk, k8s.DiskJobOptions{Timeout: time.Minute}); err != nil {
-		t.Fatalf("disk usage in A's range: %v", err)
-	}
-
-	// Pause and resume, as a restart of the app: same range, same files.
-	if err := rig.rt.PauseAppWorkload(ctx, rig.db, a.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := rig.rt.ResumeAppWorkload(ctx, rig.db, a.ID, a.Name, domain.Free, 2*time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	if err := rig.readsAs(rangeA, rig.rt.diskVolume(a.ID, 0)); err != nil {
-		t.Fatalf("A lost its file across a pause: %v", err)
-	}
+	rig.assertFilesBelongToTheirOwnRanges(t, a, b, rangeA, rangeB)
+	rig.assertARedeployKeepsTheRange(t, a, rangeA)
+	rig.assertAPauseKeepsTheRange(t, a, rangeA)
 
 	// Deleting A frees its range, and its disk with it: the next app takes it.
 	if err := rig.rt.DeleteAppWorkload(ctx, rig.db, a.ID, time.Minute); err != nil {
@@ -231,5 +181,70 @@ func TestRealPodmanPerAppUserRanges(t *testing.T) {
 		if err := rig.rt.DeleteAppWorkload(ctx, rig.db, id, time.Minute); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// assertFilesBelongToTheirOwnRanges: from the host each app's file belongs to its own range, root of the
+// app being its Base, and an escape from A standing in A's range cannot change B's file. B's own
+// range can, so the check can fail. Reading is not claimed: a file the app made with the default
+// umask is world-readable once the path is reachable, and on the host the volume sits under the
+// platform user's 0700 storage.
+func (r *realRig) assertFilesBelongToTheirOwnRanges(t *testing.T, a, b *apphost.App, rangeA, rangeB usernsRange) {
+	t.Helper()
+	if got := ownerInPlatformIDs(t, r.mountpoint(a)+"/secret"); got != rangeA.Base {
+		t.Fatalf("A's file belongs to id %d, want its range's root %d", got, rangeA.Base)
+	}
+	if got := ownerInPlatformIDs(t, r.mountpoint(b)+"/secret"); got != rangeB.Base {
+		t.Fatalf("B's file belongs to id %d, want %d", got, rangeB.Base)
+	}
+	if err := r.writesAs(rangeB, r.rt.diskVolume(b.ID, 0)); err != nil {
+		t.Fatalf("B cannot write its own disk: %v", err)
+	}
+	if err := r.writesAs(rangeA, r.rt.diskVolume(b.ID, 0)); err == nil {
+		t.Fatal("A's range wrote to B's file")
+	}
+	if err := r.readsAs(rangeA, r.rt.diskVolume(a.ID, 0)); err != nil {
+		t.Fatalf("A cannot read its own disk: %v", err)
+	}
+}
+
+// assertARedeployKeepsTheRange: a redeploy (new containers) stays in the range and keeps the files.
+func (r *realRig) assertARedeployKeepsTheRange(t *testing.T, a *apphost.App, rangeA usernsRange) {
+	t.Helper()
+	r.deploy(a, "dep-2")
+	if again := r.assigned(a.ID); again != rangeA {
+		t.Fatalf("a redeploy moved A from %+v to %+v", rangeA, again)
+	}
+	if got := ownerInPlatformIDs(t, r.mountpoint(a)+"/secret"); got != rangeA.Base {
+		t.Fatalf("after the redeploy A's file belongs to %d, want %d", got, rangeA.Base)
+	}
+	if err := r.readsAs(rangeA, r.rt.diskVolume(a.ID, 0)); err != nil {
+		t.Fatalf("A lost its file after the redeploy: %v", err)
+	}
+	ctx := context.Background()
+	list, err := r.direct.ContainerList(ctx, container.ListOptions{Filters: labelFilter(labelApp, a.ID)})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("A's containers: %d (%v)", len(list), err)
+	}
+	if output, err := exec.Command("docker", "exec", list[0].ID, "cat", "/data/secret").CombinedOutput(); err != nil || strings.TrimSpace(string(output)) != "alpha" {
+		t.Fatalf("the redeployed app reads %q (%v)", output, err)
+	}
+	if _, err := r.rt.AppDiskUsage(ctx, r.db, a.ID, *a.Disk, k8s.DiskJobOptions{Timeout: time.Minute}); err != nil {
+		t.Fatalf("disk usage in A's range: %v", err)
+	}
+}
+
+// assertAPauseKeepsTheRange: pause and resume, as a restart of the app: same range, same files.
+func (r *realRig) assertAPauseKeepsTheRange(t *testing.T, a *apphost.App, rangeA usernsRange) {
+	t.Helper()
+	ctx := context.Background()
+	if err := r.rt.PauseAppWorkload(ctx, r.db, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.rt.ResumeAppWorkload(ctx, r.db, a.ID, a.Name, domain.Free, 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.readsAs(rangeA, r.rt.diskVolume(a.ID, 0)); err != nil {
+		t.Fatalf("A lost its file across a pause: %v", err)
 	}
 }

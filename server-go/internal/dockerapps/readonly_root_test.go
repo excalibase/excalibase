@@ -425,3 +425,36 @@ func TestInUseProbeVolumeWithoutAMarkerIsTreatedAsFilled(t *testing.T) {
 		t.Fatalf("volumes %v: the in-use volume was not kept and re-marked", h.engine.volumes)
 	}
 }
+
+// A filler left behind by a crash mid-copy keeps the volume in use without having filled it: it is
+// removed and the volume filled again, never marked ready while possibly empty.
+func TestALeftoverFillerNeverMakesAHalfFilledProbeVolumeLookReady(t *testing.T) {
+	h := newHarness(t, nil)
+	h.deploy(freeApp(), "dep-1")
+	var name string
+	for volumeName := range h.engine.volumes {
+		if strings.HasPrefix(volumeName, "excalibase-vol-probe-") && !strings.HasSuffix(volumeName, "-ready") {
+			name = volumeName
+		}
+	}
+	if err := h.rt.DeleteAppWorkload(context.Background(), testDB, "app-01", 0); err != nil {
+		t.Fatal(err)
+	}
+	// The crash: an unstarted filler still holds the volume, which has no marker and no files.
+	if _, err := h.engine.ContainerCreate(context.Background(),
+		&container.Config{Image: "tools:1", Labels: map[string]string{labelManaged: "true", engineproxy.SharedFillLabel: "true"}},
+		&container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: name, Target: "/" + probeDir}}},
+		&network.NetworkingConfig{}, nil, name+"-fill"); err != nil {
+		t.Fatal(err)
+	}
+	delete(h.engine.volumes, name+"-ready")
+	delete(h.engine.volumeFiles, name)
+
+	h.deploy(freeApp(), "dep-2")
+	if string(h.engine.volumeFiles[name]["/"+probeDir+"/probe"]) != "probe" {
+		t.Fatalf("the volume was marked ready without being filled: %v", h.engine.volumeFiles[name])
+	}
+	if h.engine.byName(name+"-fill") != nil {
+		t.Fatal("the leftover filler was kept")
+	}
+}

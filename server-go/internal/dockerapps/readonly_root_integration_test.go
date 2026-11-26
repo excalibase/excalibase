@@ -39,41 +39,11 @@ func TestRealEngineAppRootIsReadOnlyWithCappedTmp(t *testing.T) {
 	if got := inspect.HostConfig.Tmpfs["/tmp"]; !strings.Contains(got, "size=") {
 		t.Fatalf("/tmp options %q", got)
 	}
-	var probeVolume string
-	for _, m := range inspect.Mounts {
-		if m.Destination == "/"+probeDir {
-			probeVolume = m.Name
-			if m.RW {
-				t.Fatalf("the probe volume is mounted writable: %+v", m)
-			}
-		}
-	}
-	if !strings.Contains(probeVolume, "-vol-probe-") {
-		t.Fatalf("no platform probe volume among %+v", inspect.Mounts)
-	}
+	probeVolume := probeVolumeOf(t, inspect)
 	if logs := inspect.HostConfig.LogConfig; logs.Type != "json-file" || logs.Config["max-size"] != "5m" || logs.Config["max-file"] != "3" {
 		t.Fatalf("log config %+v", logs)
 	}
-	// Opus wrote 50 MB into the old writable probe path: it must be refused now, and the probe still readable.
-	if out := rig.exec(id, "dd if=/dev/zero of=/.excalibase/filler bs=1M count=50"); !strings.Contains(out, "Read-only") {
-		t.Fatalf("a write to the probe volume answered %q, want a read-only error", out)
-	}
-	if out := rig.exec(id, "test -x /.excalibase/probe && echo probe-ok"); !strings.Contains(out, "probe-ok") {
-		t.Fatalf("the probe is not executable in the app: %q", out)
-	}
-	// Docker adds noexec to a tmpfs unless exec is passed; runtimes run native helpers from /tmp.
-	if out := rig.exec(id, "grep ' /tmp ' /proc/mounts"); !strings.Contains(out, "tmpfs") || strings.Contains(out, "noexec") {
-		t.Fatalf("/tmp is mounted %q, want tmpfs without noexec", out)
-	}
-	if out := rig.exec(id, "cp /bin/busybox /tmp/echo && /tmp/echo ran"); !strings.Contains(out, "ran") {
-		t.Fatalf("a binary copied into /tmp did not run: %q", out)
-	}
-	if out := rig.exec(id, "touch /rootfs-probe"); !strings.Contains(out, "Read-only") {
-		t.Fatalf("a write to the root answered %q, want a read-only error", out)
-	}
-	if out := rig.exec(id, "touch /tmp/ok && touch /data/ok && echo wrote"); !strings.Contains(out, "wrote") {
-		t.Fatalf("writes to /tmp and the disk answered %q", out)
-	}
+	assertWritesInsideTheApp(t, rig, id)
 
 	if err := rig.rt.DeleteAppWorkload(ctx, rig.db, "app-it", time.Minute); err != nil {
 		t.Fatal(err)
@@ -87,6 +57,47 @@ func TestRealEngineAppRootIsReadOnlyWithCappedTmp(t *testing.T) {
 		t.Fatalf("probe fillers left behind: %d (%v)", len(leftovers), err)
 	}
 	_ = rig.direct.VolumeRemove(ctx, probeVolume, false)
+}
+
+// probeVolumeOf is the platform's probe volume the app mounts, which must not be writable.
+func probeVolumeOf(t *testing.T, inspect container.InspectResponse) string {
+	t.Helper()
+	for _, m := range inspect.Mounts {
+		if m.Destination != "/"+probeDir {
+			continue
+		}
+		if m.RW {
+			t.Fatalf("the probe volume is mounted writable: %+v", m)
+		}
+		if strings.Contains(m.Name, "-vol-probe-") {
+			return m.Name
+		}
+	}
+	t.Fatalf("no platform probe volume among %+v", inspect.Mounts)
+	return ""
+}
+
+// assertWritesInsideTheApp runs what an app does to its filesystem and checks the engine's answer.
+func assertWritesInsideTheApp(t *testing.T, rig *realRig, id string) {
+	t.Helper()
+	checks := []struct{ what, command, want string }{
+		// Opus wrote 50 MB into the old writable probe path: it is refused now, and the probe is still readable.
+		{"a write to the probe volume", "dd if=/dev/zero of=/.excalibase/filler bs=1M count=50", "Read-only"},
+		{"the probe", "test -x /.excalibase/probe && echo probe-ok", "probe-ok"},
+		// Docker adds noexec to a tmpfs unless exec is passed; runtimes run native helpers from /tmp.
+		{"the /tmp mount", "grep ' /tmp ' /proc/mounts", "tmpfs"},
+		{"a binary copied into /tmp", "cp /bin/busybox /tmp/echo && /tmp/echo ran", "ran"},
+		{"a write to the root", "touch /rootfs-probe", "Read-only"},
+		{"writes to /tmp and the disk", "touch /tmp/ok && touch /data/ok && echo wrote", "wrote"},
+	}
+	for _, check := range checks {
+		if out := rig.exec(id, check.command); !strings.Contains(out, check.want) {
+			t.Errorf("%s answered %q, want %q", check.what, out, check.want)
+		}
+	}
+	if out := rig.exec(id, "grep ' /tmp ' /proc/mounts"); strings.Contains(out, "noexec") {
+		t.Errorf("/tmp is mounted noexec: %q", out)
+	}
 }
 
 // An image's own VOLUME is a capped tmpfs under a read-only root: the engine makes no anonymous

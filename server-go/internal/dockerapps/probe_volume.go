@@ -23,6 +23,7 @@ import (
 const (
 	probeVolumeStem  = "probe-"
 	probeReadySuffix = "-ready"
+	probeFillSuffix  = "-fill"
 )
 
 // probeVolume is the platform's own volume holding the readiness probe and, when the edge signs
@@ -43,8 +44,13 @@ func (r *Runtime) probeVolume(ctx context.Context, edgeCA []byte) (string, error
 	} else if !errdefs.IsNotFound(err) {
 		return "", fmt.Errorf("look for the probe volume %s: %w", ready, err)
 	}
-	// Whatever is there was never finished, unless an app mounts it: an app is only created on a
-	// filled volume, so one in use is filled and only lost its marker.
+	// A filler left by a crash mid-copy keeps the volume "in use" without filling it: it goes first.
+	if err := r.engine.ContainerRemove(ctx, name+probeFillSuffix, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+		return "", fmt.Errorf("remove the probe volume's leftover filler: %w", err)
+	}
+	// Whatever is there was never finished, unless an app mounts it: only apps and the filler ever
+	// mount it, and an app is only created on a filled volume, so one still in use is filled and
+	// only lost its marker.
 	switch err := r.engine.VolumeRemove(ctx, name, false); {
 	case err == nil || errdefs.IsNotFound(err):
 	case errdefs.IsConflict(err):
@@ -77,7 +83,7 @@ func (r *Runtime) makeSharedVolume(ctx context.Context, name string) error {
 // fillProbeVolume copies the files in through a container of the platform's tools image, created and never
 // started (the proxy refuses to start it): it runs nothing, and only it may mount the volume writable. RemoveVolumes never takes a named volume.
 func (r *Runtime) fillProbeVolume(ctx context.Context, name string, files probeFiles) error {
-	filler := name + "-fill"
+	filler := name + probeFillSuffix
 	host := &container.HostConfig{
 		NetworkMode: "none", Runtime: r.opts.SandboxRuntime, ReadonlyRootfs: true,
 		Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: name, Target: "/" + probeDir, VolumeOptions: &mount.VolumeOptions{NoCopy: true}}},

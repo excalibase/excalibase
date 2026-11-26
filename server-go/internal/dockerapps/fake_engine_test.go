@@ -204,24 +204,8 @@ func (f *fakeEngine) ContainerCreate(_ context.Context, config *container.Config
 	if !slices.Contains(f.pulled, config.Image) && !strings.HasPrefix(config.Image, "tools") {
 		return container.CreateResponse{}, errdefs.ErrNotFound.WithMessage("no such image " + config.Image)
 	}
-	// The engine proxy mounts only a volume the container owns (EXC-682).
-	for _, m := range host.Mounts {
-		if m.Type != mount.TypeVolume || m.Source == "" {
-			continue
-		}
-		labels, ok := f.volumes[m.Source]
-		if !ok {
-			return container.CreateResponse{}, errdefs.ErrNotFound.WithMessage("no such volume " + m.Source)
-		}
-		if labels[engineproxy.SharedReadOnlyLabel] == "true" {
-			if err := engineproxy.CheckSharedMount(m.Source, m.ReadOnly, config.Labels); err != nil {
-				return container.CreateResponse{}, errdefs.ErrPermissionDenied.WithMessage(err.Error())
-			}
-			continue
-		}
-		if err := engineproxy.CheckVolumeOwner(m.Source, labels, config.Labels); err != nil {
-			return container.CreateResponse{}, errdefs.ErrPermissionDenied.WithMessage(err.Error())
-		}
+	if err := f.checkVolumeMounts(config, host); err != nil {
+		return container.CreateResponse{}, err
 	}
 	if strings.HasSuffix(name, "-fill") {
 		f.filler = &struct {
@@ -234,19 +218,47 @@ func (f *fakeEngine) ContainerCreate(_ context.Context, config *container.Config
 	id := fmt.Sprintf("c%04d", f.seq)
 	c := &fakeContainer{id: id, name: name, config: *config, host: *host, state: "created",
 		created: time.Now().Add(time.Duration(f.seq) * time.Millisecond), files: map[string][]byte{}}
+	if err := f.joinNetworks(c, netCfg); err != nil {
+		return container.CreateResponse{}, err
+	}
+	f.containers[id] = c
+	f.record("create %s", name)
+	return container.CreateResponse{ID: id}, nil
+}
+
+// checkVolumeMounts is the engine proxy's rule that a container mounts only a volume it owns (EXC-682).
+func (f *fakeEngine) checkVolumeMounts(config *container.Config, host *container.HostConfig) error {
+	for _, m := range host.Mounts {
+		if m.Type != mount.TypeVolume || m.Source == "" {
+			continue
+		}
+		labels, ok := f.volumes[m.Source]
+		if !ok {
+			return errdefs.ErrNotFound.WithMessage("no such volume " + m.Source)
+		}
+		check := func() error { return engineproxy.CheckVolumeOwner(m.Source, labels, config.Labels) }
+		if labels[engineproxy.SharedReadOnlyLabel] == "true" {
+			check = func() error { return engineproxy.CheckSharedMount(m.Source, m.ReadOnly, config.Labels) }
+		}
+		if err := check(); err != nil {
+			return errdefs.ErrPermissionDenied.WithMessage(err.Error())
+		}
+	}
+	return nil
+}
+
+func (f *fakeEngine) joinNetworks(c *fakeContainer, netCfg *network.NetworkingConfig) error {
 	for net, endpoint := range netCfg.EndpointsConfig {
 		if _, ok := f.networks[net]; !ok {
-			return container.CreateResponse{}, errdefs.ErrNotFound.WithMessage("no such network " + net)
+			return errdefs.ErrNotFound.WithMessage("no such network " + net)
 		}
 		c.networks = append(c.networks, net)
 		if endpoint != nil && len(endpoint.Aliases) > 0 {
 			c.aliases = map[string][]string{net: slices.Clone(endpoint.Aliases)}
 		}
-		f.networks[net].members = append(f.networks[net].members, id)
+		f.networks[net].members = append(f.networks[net].members, c.id)
 	}
-	f.containers[id] = c
-	f.record("create %s", name)
-	return container.CreateResponse{ID: id}, nil
+	return nil
 }
 
 func (f *fakeEngine) ContainerStart(_ context.Context, id string, _ container.StartOptions) error {
@@ -375,26 +387,33 @@ func (f *fakeEngine) CopyToContainer(_ context.Context, id, dst string, content 
 			return err
 		}
 		body, _ := io.ReadAll(reader)
-		path := strings.TrimSuffix(dst, "/") + "/" + header.Name
-		// The engine refuses a copy into a read-only root, except into a writable volume mounted in it.
-		if m, ok := c.volumeMountAt(dst); ok {
-			if m.ReadOnly {
-				return errdefs.ErrPermissionDenied.WithMessage("mounted volume is marked read-only")
-			}
-			if f.volumeFiles == nil {
-				f.volumeFiles = map[string]map[string][]byte{}
-			}
-			if f.volumeFiles[m.Source] == nil {
-				f.volumeFiles[m.Source] = map[string][]byte{}
-			}
-			f.volumeFiles[m.Source][path] = body
-			continue
+		if err := f.storeCopied(c, dst, strings.TrimSuffix(dst, "/")+"/"+header.Name, body); err != nil {
+			return err
 		}
-		if c.host.ReadonlyRootfs {
-			return errdefs.ErrPermissionDenied.WithMessage("container rootfs is marked read-only")
-		}
-		c.files[path] = body
 	}
+}
+
+// storeCopied is where the engine puts a copied file: into a writable volume mounted at dst, else the
+// container's own layer, which a read-only root refuses.
+func (f *fakeEngine) storeCopied(c *fakeContainer, dst, path string, body []byte) error {
+	if m, ok := c.volumeMountAt(dst); ok {
+		if m.ReadOnly {
+			return errdefs.ErrPermissionDenied.WithMessage("mounted volume is marked read-only")
+		}
+		if f.volumeFiles == nil {
+			f.volumeFiles = map[string]map[string][]byte{}
+		}
+		if f.volumeFiles[m.Source] == nil {
+			f.volumeFiles[m.Source] = map[string][]byte{}
+		}
+		f.volumeFiles[m.Source][path] = body
+		return nil
+	}
+	if c.host.ReadonlyRootfs {
+		return errdefs.ErrPermissionDenied.WithMessage("container rootfs is marked read-only")
+	}
+	c.files[path] = body
+	return nil
 }
 
 func (f *fakeEngine) ContainerExecCreate(_ context.Context, id string, options container.ExecOptions) (container.ExecCreateResponse, error) {
