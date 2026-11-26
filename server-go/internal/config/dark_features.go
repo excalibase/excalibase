@@ -59,6 +59,7 @@ var featureEnv = map[features.Feature]string{
 	features.NetMeter:           "FEATURE_NETMETER",
 	features.LimitedTrial:       "FEATURE_LIMITEDTRIAL",
 	features.BehaviourReview:    "FEATURE_BEHAVIOURREVIEW",
+	features.AdminAnalytics:     "FEATURE_ADMINANALYTICS",
 }
 
 // defaultOn are the features that are on until their variable says "false":

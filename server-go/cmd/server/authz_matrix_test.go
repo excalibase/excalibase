@@ -136,6 +136,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 	return &handlerDeps{
 		provHandler:           handler.NewProvisioningHandler(provSvc, nil),
 		adminConsoleHandler:   handler.NewAdminConsoleHandler(matrixConsole{}, matrixConsole{}),
+		adminAnalyticsHandler: handler.NewAdminAnalyticsHandler(matrixAnalytics{}, features.NewStatic(features.All()...)),
 		metricsHandler:        handler.NewMetricsHandler(service.NewMetricsService(instances, mock, dir)),
 		backupHandler:         handler.NewBackupHandler(service.NewBackupService(instances, mock, dir, nil)),
 		perfHandler:           handler.NewPerformanceHandler(service.NewPerformanceService(instances, mock)),
@@ -401,6 +402,9 @@ var permissionRoutes = []permissionRoute{
 	{group: "tier config update", method: http.MethodPut, path: "/api/admin/tiers/STANDARD", unrestrictedOnly: true},
 	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a", unrestrictedOnly: true},
 	{group: "admin console users", method: http.MethodGet, path: "/api/admin/console/users", unrestrictedOnly: true},
+	{group: "admin analytics users", method: http.MethodGet, path: "/api/admin/analytics/users", unrestrictedOnly: true},
+	{group: "admin analytics abuse", method: http.MethodGet, path: "/api/admin/analytics/abuse", unrestrictedOnly: true},
+	{group: "admin analytics traffic", method: http.MethodGet, path: "/api/admin/analytics/traffic", unrestrictedOnly: true},
 	{group: "admin console suspend", method: http.MethodPost, path: "/api/admin/console/users/u-1/suspend", unrestrictedOnly: true},
 }
 
@@ -497,6 +501,19 @@ func (matrixConsole) Suspend(context.Context, adminconsole.Actor, string, adminc
 }
 func (matrixConsole) Unsuspend(context.Context, adminconsole.Actor, string, string) (*adminconsole.Result, error) {
 	return &adminconsole.Result{}, nil
+}
+
+// matrixAnalytics answers the analytics routes from nothing, like matrixConsole.
+type matrixAnalytics struct{}
+
+func (matrixAnalytics) UserAnalytics(context.Context, int) (*adminconsole.UserAnalytics, error) {
+	return &adminconsole.UserAnalytics{}, nil
+}
+func (matrixAnalytics) AbuseAnalytics(context.Context, int) (*adminconsole.AbuseAnalytics, error) {
+	return &adminconsole.AbuseAnalytics{}, nil
+}
+func (matrixAnalytics) TrafficAnalytics(context.Context, int) (*adminconsole.TrafficAnalytics, error) {
+	return &adminconsole.TrafficAnalytics{}, nil
 }
 
 // EXC-757: outside /admin a human platform admin is a customer. Every
