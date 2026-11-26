@@ -7,8 +7,11 @@
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# EXC-881: CI pulls Docker Hub images from its mirror (IMAGE_MIRROR); unset, the names are unchanged.
+# shellcheck disable=SC1091
+. "$DIR/../../ci/mirror-images.sh"
 ENGINE=${1:-docker}
 exec "$ENGINE" run --rm \
   -v "$DIR/../bootstrap.sh:/bootstrap.sh:ro" \
   -v "$DIR/bootstrap:/suite:ro" \
-  docker.io/library/alpine:3.20 sh /suite/suite.sh
+  "$(mirror_ref docker.io/library/alpine:3.20)" sh /suite/suite.sh

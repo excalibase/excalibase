@@ -12,10 +12,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
 )
 
-// schedulerInvokeTimeout bounds one scheduled dispatch. The runtime stops a
-// worker at 30s and the runtime client gives up at 35s, so anything beyond
-// this is a runtime that stopped answering rather than a slow function.
-const schedulerInvokeTimeout = 40 * time.Second
+// schedulerInvokeTimeout bounds one scheduled dispatch; the scheduler owns
+// the number because the claim lease must outlast it.
+const schedulerInvokeTimeout = scheduler.InvokeTimeout
 
 // RuntimeInvoker dispatches a scheduled task to the project's Deno runtime.
 // It is the production implementation of scheduler.Invoker and deliberately

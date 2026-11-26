@@ -24,7 +24,9 @@
 # import map references. We tag the stage `lib-build` so a downstream
 # `COPY --from=lib-build` can grab just the dist without dragging
 # node_modules into the final image.
-FROM node:20-alpine AS lib-build
+# EXC-881: CI builds from the mirror of Docker Hub (--build-arg HUB_MIRROR=ghcr.io/excalibase/mirror/); empty pulls Docker Hub.
+ARG HUB_MIRROR=
+FROM ${HUB_MIRROR}node:20-alpine AS lib-build
 
 WORKDIR /lib
 
@@ -35,7 +37,7 @@ RUN --mount=type=cache,target=/root/.npm \
     rm -rf node_modules src test
 
 # ─── Stage 2 — Final Deno runtime image ─────────────────────────────────
-FROM denoland/deno:alpine-2.9.8
+FROM ${HUB_MIRROR}denoland/deno:alpine-2.9.8
 
 WORKDIR /app
 

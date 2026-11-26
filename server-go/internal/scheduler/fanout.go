@@ -113,6 +113,12 @@ type Fanout struct {
 	// tick forever, at the cost of a connection timeout each time.
 	quietMu sync.Mutex
 	quiet   map[string]backoffState
+
+	// slots holds each project's concurrency limiter. It lives here rather
+	// than on the per-tick Worker because a function can outlive the tick
+	// that started it, and the next tick must still see its slot taken.
+	slotsMu sync.Mutex
+	slots   map[string]*Semaphore
 }
 
 // readyState is the remembered answer to "does this database carry the
@@ -156,6 +162,9 @@ func NewFanout(c FanoutConfig) *Fanout {
 	if limits.GlobalConcurrency <= 0 {
 		limits.GlobalConcurrency = DefaultGlobalConcurrency
 	}
+	if limits.ProjectConcurrency <= 0 {
+		limits.ProjectConcurrency = DefaultProjectConcurrency
+	}
 	if limits.ProjectTimeout <= 0 {
 		limits.ProjectTimeout = DefaultProjectTimeout
 	}
@@ -174,6 +183,7 @@ func NewFanout(c FanoutConfig) *Fanout {
 		now:            nowOr(c.Now),
 		ready:          make(map[string]readyState),
 		quiet:          make(map[string]backoffState),
+		slots:          make(map[string]*Semaphore),
 	}
 }
 
@@ -197,6 +207,42 @@ func (f *Fanout) backOff(projectID string) {
 	}
 	state.until = f.now().Add(wait)
 	f.quiet[projectID] = state
+}
+
+// projectSlots returns the project's concurrency limiter, creating it on
+// first use.
+func (f *Fanout) projectSlots(projectID string) *Semaphore {
+	f.slotsMu.Lock()
+	defer f.slotsMu.Unlock()
+	sem, ok := f.slots[projectID]
+	if !ok {
+		sem = NewSemaphore(f.limits.ProjectConcurrency)
+		f.slots[projectID] = sem
+	}
+	return sem
+}
+
+// projectSlotCount is how many projects currently own a limiter.
+func (f *Fanout) projectSlotCount() int {
+	f.slotsMu.Lock()
+	defer f.slotsMu.Unlock()
+	return len(f.slots)
+}
+
+// pruneSlots drops the limiter of every project that is no longer listed and
+// has no function still running, so deleted projects do not accumulate.
+func (f *Fanout) pruneSlots(listed []string) {
+	keep := make(map[string]struct{}, len(listed))
+	for _, id := range listed {
+		keep[id] = struct{}{}
+	}
+	f.slotsMu.Lock()
+	defer f.slotsMu.Unlock()
+	for id, sem := range f.slots {
+		if _, ok := keep[id]; !ok && sem.InUse() == 0 {
+			delete(f.slots, id)
+		}
+	}
 }
 
 // clearBackoff forgets a project's failures once it answers again.
@@ -254,6 +300,7 @@ func (f *Fanout) TaskTick(ctx context.Context) error {
 			MaxConcurrent: f.limits.ProjectConcurrency,
 			ClaimLease:    f.limits.ClaimLease,
 			Global:        f.global,
+			Local:         f.projectSlots(projectID),
 			Logger:        f.logger,
 		})
 		return worker.Tick(ctx)
@@ -291,6 +338,7 @@ func (f *Fanout) forEachProject(ctx context.Context, kind string, sweep sweepFn)
 	if err != nil {
 		return fmt.Errorf("list projects: %w", err)
 	}
+	f.pruneSlots(projects)
 	for _, projectID := range projects {
 		if f.backedOff(projectID) {
 			continue
