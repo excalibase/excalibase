@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -23,32 +22,12 @@ func NewOperatorSetupService(k8sClient k8s.KubeClient) *OperatorSetupService {
 	return &OperatorSetupService{k8sClient: k8sClient}
 }
 
-var operatorURLs = map[domain.DatabaseType]string{
-	domain.PostgreSQL: "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml",
-	// MOCO (ADR 0041); its manifest needs cert-manager installed first.
-	domain.MySQL: "https://github.com/cybozu-go/moco/releases/download/v0.37.0/moco.yaml",
-}
-
 var operatorDeployments = map[domain.DatabaseType]struct {
 	name      string
 	namespace string
 }{
 	domain.PostgreSQL: {name: "cnpg-controller-manager", namespace: "cnpg-system"},
 	domain.MySQL:      {name: "moco-controller", namespace: "moco-system"},
-}
-
-func (s *OperatorSetupService) InstallOperator(ctx context.Context, dbType domain.DatabaseType) error {
-	url, ok := operatorURLs[dbType]
-	if !ok {
-		return fmt.Errorf("unsupported database type: %s", dbType)
-	}
-
-	if err := s.k8sClient.ApplyManifestURL(ctx, url); err != nil {
-		return fmt.Errorf("install operator: %w", err)
-	}
-	s.forgetSetupComplete()
-
-	return s.waitForOperator(ctx, dbType, 2*time.Minute)
 }
 
 func (s *OperatorSetupService) IsOperatorInstalled(ctx context.Context, dbType domain.DatabaseType) bool {
@@ -72,8 +51,8 @@ func (s *OperatorSetupService) GetStatus(ctx context.Context) domain.OperatorSta
 }
 
 // setupCompleteTTL bounds how stale the cached answer may be. The state it
-// reports changes once per cluster lifetime, and an install refreshes it
-// immediately, so a minute of staleness costs nothing.
+// reports changes once per cluster lifetime, so a minute of staleness costs
+// nothing.
 const setupCompleteTTL = time.Minute
 
 // SetupComplete reports whether the platform can provision. Postgres is the
@@ -96,27 +75,4 @@ func (s *OperatorSetupService) SetupComplete(ctx context.Context) bool {
 	s.complete, s.completeUntil = complete, time.Now().Add(setupCompleteTTL)
 	s.completeMu.Unlock()
 	return complete
-}
-
-// forgetSetupComplete drops the cached answer, so the next read asks the
-// cluster. Installing an operator is the one event that changes it.
-func (s *OperatorSetupService) forgetSetupComplete() {
-	s.completeMu.Lock()
-	s.completeUntil = time.Time{}
-	s.completeMu.Unlock()
-}
-
-func (s *OperatorSetupService) waitForOperator(ctx context.Context, dbType domain.DatabaseType, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if s.IsOperatorInstalled(ctx, dbType) {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(5 * time.Second):
-		}
-	}
-	return fmt.Errorf("operator %s did not become ready in %v", dbType, timeout)
 }

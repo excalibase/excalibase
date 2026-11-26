@@ -1,14 +1,11 @@
 package k8s
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	yamlutil "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -712,82 +708,6 @@ func (c *Client) ListCRDs(ctx context.Context, gvr schema.GroupVersionResource, 
 		result = append(result, &list.Items[i])
 	}
 	return result, nil
-}
-
-// ApplyManifestURL downloads a YAML manifest from url and applies each document
-// using server-side apply via the dynamic client.
-func (c *Client) ApplyManifestURL(ctx context.Context, url string) error {
-	resp, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("download manifest: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download manifest: HTTP %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read manifest body: %w", err)
-	}
-
-	reader := yamlutil.NewYAMLReader(bufio.NewReader(bytes.NewReader(body)))
-	for {
-		doc, err := reader.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read YAML document: %w", err)
-		}
-		if len(bytes.TrimSpace(doc)) == 0 {
-			continue
-		}
-		if err := c.applyYAMLDoc(ctx, doc); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// applyYAMLDoc converts a single YAML document to JSON, unmarshals it, and applies
-// it to the cluster using server-side apply.
-func (c *Client) applyYAMLDoc(ctx context.Context, doc []byte) error {
-	jsonData, err := yamlutil.ToJSON(doc)
-	if err != nil {
-		return fmt.Errorf("convert YAML to JSON: %w", err)
-	}
-
-	var obj unstructured.Unstructured
-	if err := json.Unmarshal(jsonData, &obj.Object); err != nil {
-		return fmt.Errorf("unmarshal object: %w", err)
-	}
-
-	gvk := obj.GroupVersionKind()
-	gvr := schema.GroupVersionResource{
-		Group:    gvk.Group,
-		Version:  gvk.Version,
-		Resource: strings.ToLower(gvk.Kind) + "s",
-	}
-
-	ns := obj.GetNamespace()
-	var resource dynamic.ResourceInterface
-	if ns != "" {
-		resource = c.dynamicClient.Resource(gvr).Namespace(ns)
-	} else {
-		resource = c.dynamicClient.Resource(gvr)
-	}
-
-	obj.SetManagedFields(nil)
-	_, err = resource.Apply(ctx, obj.GetName(), &obj, metav1.ApplyOptions{
-		FieldManager: "excalibase-server",
-		Force:        true,
-	})
-	if err != nil {
-		return fmt.Errorf("apply %s/%s: %w", gvr.Resource, obj.GetName(), err)
-	}
-	return nil
 }
 
 // GetDeployment checks whether a deployment exists in the given namespace.

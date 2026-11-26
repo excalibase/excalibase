@@ -552,16 +552,6 @@ func TestSetupStatusHandler(t *testing.T) {
 	}
 }
 
-func TestSetupInstallHandler(t *testing.T) {
-	r, _, _ := fullRouter(t)
-
-	// Install unsupported type should fail
-	w := doRequest(r, "POST", "/api/setup/install/REDIS", "")
-	if w.Code != 500 {
-		t.Errorf("install unsupported: got %d, want 500", w.Code)
-	}
-}
-
 // --- Error path handlers ---
 
 func TestProvisionInvalidJSON(t *testing.T) {

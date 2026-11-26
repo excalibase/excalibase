@@ -9,21 +9,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
-// ADR 0041: MySQL projects run on MOCO, pinned to a release, not Vitess.
-func TestInstallOperator_MySQLAppliesPinnedMOCORelease(t *testing.T) {
-	mock := k8s.NewMockClient()
-	svc := NewOperatorSetupService(mock)
-
-	if err := svc.InstallOperator(context.Background(), domain.MySQL); err != nil {
-		t.Fatalf("InstallOperator: %v", err)
-	}
-
-	want := "ApplyManifestURL:https://github.com/cybozu-go/moco/releases/download/v0.37.0/moco.yaml"
-	if !slices.Contains(mock.Calls, want) {
-		t.Errorf("expected %q in calls, got %v", want, mock.Calls)
-	}
-}
-
 func TestIsOperatorInstalled_MySQLChecksMOCOController(t *testing.T) {
 	mock := k8s.NewMockClient()
 	svc := NewOperatorSetupService(mock)
