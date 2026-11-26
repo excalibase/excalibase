@@ -146,18 +146,18 @@ func TestTrafficAnalyticsSumsEachProjectsDailyPeak(t *testing.T) {
 		project string
 		ago     time.Duration
 		active  int
-	}{{"p1", day, 10}, {"p1", day + time.Hour, 14}, {"p2", day, 6}, {"p2", 50 * day, 99}} {
+	}{{"p1", day, 10}, {"p1", day + time.Hour, 14}, {"p2", day, 6}, {"p2", 10 * day, 99}} {
 		if _, err := store.db.ExecContext(ctx, `INSERT INTO database_metrics (project_id, timestamp, active_connections) VALUES ($1, $2, $3)`,
 			sample.project, time.Now().Add(-sample.ago), sample.active); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got, err := console.TrafficAnalytics(ctx, 30)
+	got, err := console.TrafficAnalytics(ctx, adminconsole.TrafficWindowDays)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PeakConnections != 20 || len(got.PeakConnectionsDay) != 30 {
-		t.Fatalf("traffic = %+v, want a peak of 20 (14 + 6) over 30 days; the 50-day-old sample is outside", got)
+	if got.PeakConnections != 20 || len(got.PeakConnectionsDay) != adminconsole.TrafficWindowDays {
+		t.Fatalf("traffic = %+v, want a peak of 20 (14 + 6) over 7 days; the 10-day-old sample is outside", got)
 	}
 }
 

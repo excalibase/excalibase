@@ -29,16 +29,16 @@ func (h *AdminAnalyticsHandler) Routes(r chi.Router) {
 	r.Use(auth.RequirePermission(auth.PermManageOrgs))
 	r.Use(requireSession)
 	r.Use(features.Require(h.flags, features.AdminAnalytics))
-	r.Get("/users", analyticsRead(h.reads.UserAnalytics, "analytics users"))
-	r.Get("/abuse", analyticsRead(h.reads.AbuseAnalytics, "analytics abuse"))
-	r.Get("/traffic", analyticsRead(h.reads.TrafficAnalytics, "analytics traffic"))
+	r.Get("/users", analyticsRead(h.reads.UserAnalytics, adminconsole.AnalyticsWindowDays, "analytics users"))
+	r.Get("/abuse", analyticsRead(h.reads.AbuseAnalytics, adminconsole.AnalyticsWindowDays, "analytics abuse"))
+	r.Get("/traffic", analyticsRead(h.reads.TrafficAnalytics, adminconsole.TrafficWindowDays, "analytics traffic"))
 }
 
-// analyticsRead serves one read over the fixed window. The window is not a
+// analyticsRead serves one read over a fixed window. The window is not a
 // query parameter: a caller cannot ask the platform database for more.
-func analyticsRead[T any](read func(ctx context.Context, days int) (*T, error), what string) http.HandlerFunc {
+func analyticsRead[T any](read func(ctx context.Context, days int) (*T, error), days int, what string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		result, err := read(r.Context(), adminconsole.AnalyticsWindowDays)
+		result, err := read(r.Context(), days)
 		if err != nil {
 			consoleFailure(w, what, err)
 			return

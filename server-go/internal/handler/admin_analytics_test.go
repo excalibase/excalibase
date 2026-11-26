@@ -101,6 +101,26 @@ func TestAdminAnalytics_ReadsAreBoundedByTheWindow(t *testing.T) {
 	}
 }
 
+func TestAdminAnalytics_TrafficLooksBackAsFarAsMetricsAreKept(t *testing.T) {
+	reads := &fakeAnalytics{}
+	router := analyticsRouter("platform_admin", auth.ScopeSession, features.NewStatic(features.AdminAnalytics), reads)
+	analyticsGet(router, "/api/admin/analytics/traffic")
+	if reads.days != adminconsole.TrafficWindowDays || adminconsole.TrafficWindowDays != 7 {
+		t.Fatalf("traffic days = %d, want the 7 days the sampler keeps", reads.days)
+	}
+}
+
+func TestAdminAnalytics_PermissionIsCheckedBeforeTheFlag(t *testing.T) {
+	for _, role := range []string{"platform_operator", "platform_viewer", "user"} {
+		router := analyticsRouter(role, auth.ScopeSession, features.NewStatic(), &fakeAnalytics{})
+		for _, path := range analyticsPaths {
+			if w := analyticsGet(router, path); w.Code != http.StatusForbidden {
+				t.Errorf("%s as %s with the flag off = %d, want 403 so the flag's existence is not told to non-admins", path, role, w.Code)
+			}
+		}
+	}
+}
+
 func TestAdminAnalytics_AFailedReadIsABare500(t *testing.T) {
 	router := analyticsRouter("platform_admin", auth.ScopeSession, features.NewStatic(features.AdminAnalytics), &fakeAnalytics{err: errors.New("pq: relation secret_table")})
 	w := analyticsGet(router, "/api/admin/analytics/abuse")
