@@ -75,6 +75,8 @@ jobs:
               - 'tests/release-*.sh'
               - 'scripts/check-platform-owned.sh'
               - 'tests/platform-owned-check-test.sh'
+              - 'scripts/k3d-import-image.sh'
+              - 'tests/k3d-import-*.sh'
               - 'security/**'
             singlehost:
               - 'deploy/single-host/**'
@@ -192,6 +194,7 @@ jobs:
           bash tests/cd-plan-test.sh
           bash tests/cd-guard-test.sh
           bash tests/platform-owned-check-test.sh
+          bash tests/k3d-import-image-test.sh
 
       - name: Release gate
         run: |
