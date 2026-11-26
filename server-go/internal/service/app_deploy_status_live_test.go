@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"net"
@@ -124,7 +125,7 @@ func startAppLiveLabWith(t *testing.T, runtimeClass, handler string, extra ...te
 	if err := imagepull.EnsureLocal(lab.ctx, appLiveK3s); err != nil {
 		t.Fatal(err)
 	}
-	container, err := k3s.Run(lab.ctx, appLiveK3s, options...)
+	container, err := k3s.Run(lab.ctx, appLiveK3s, append(options, k3smirror.Option())...)
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)

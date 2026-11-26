@@ -27,6 +27,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/engineproxy"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
@@ -34,10 +35,11 @@ import (
 // The runtime drives the real engine through the real engine proxy, so every
 // call it makes is one the proxy admits.
 
-const itBusybox = "docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+// Mirrored: CI pulls Docker Hub images from its mirror (EXC-881); elsewhere the name is unchanged.
+var itBusybox = imagepull.Mirrored("docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e")
 
 // itValkey is the catalog template's image: it starts as root and steps down.
-const itValkey = "docker.io/valkey/valkey@sha256:2d04268dfa26ab31cfa3fdc538866e76438b2d00e41db41b8cb86d780ac5a416"
+var itValkey = imagepull.Mirrored("docker.io/valkey/valkey@sha256:2d04268dfa26ab31cfa3fdc538866e76438b2d00e41db41b8cb86d780ac5a416")
 
 type realRig struct {
 	t                *testing.T

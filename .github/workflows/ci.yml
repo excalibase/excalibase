@@ -20,6 +20,15 @@ permissions:
   contents: read
   pull-requests: read
 
+# EXC-881: Docker Hub rate-limits CI, so every third-party image comes from the mirror the
+# Mirror images workflow keeps in GHCR (deploy/ci/mirror-images.txt lists them). A fork PR has no
+# token for GHCR, so it gets empty values here and pulls from Docker Hub as before.
+# IMAGE_MIRROR: scripts and Dockerfiles (deploy/ci/mirror-images.sh).
+# TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: testcontainers and imagepull in the Go tests.
+env:
+  IMAGE_MIRROR: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'ghcr.io/excalibase/mirror' || '' }}
+  TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'ghcr.io/excalibase/mirror/' || '' }}
+
 jobs:
   changes:
     name: Detect Changes
@@ -145,8 +154,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.singlehost == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - name: Hardening, init, preflight and bootstrap
         run: |
           for t in single-host edge-listener init-env subids preflight bootstrap host-firewall; do
@@ -187,8 +200,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.gatewayguard == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - name: Guard logic
         run: bash charts/documentdb-gateway/tests/gateway_guard_test.sh
       - name: Build the image
@@ -271,8 +288,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build provisioning and Studio from this checkout
         run: |
-          docker build -q -t docker.io/excalibase/provisioning:ci server-go
-          docker build -q -t docker.io/excalibase/studio:ci frontend
+          docker build -q --build-arg "HUB_MIRROR=${IMAGE_MIRROR:+$IMAGE_MIRROR/}" -t docker.io/excalibase/provisioning:ci server-go
+          docker build -q --build-arg "HUB_MIRROR=${IMAGE_MIRROR:+$IMAGE_MIRROR/}" -t docker.io/excalibase/studio:ci frontend
           docker save docker.io/excalibase/provisioning:ci docker.io/excalibase/studio:ci | gzip -1 > single-host-images.tar.gz
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -424,7 +441,7 @@ jobs:
         if: matrix.script == 'fence'
         run: |
           for version in 27 28 29; do
-            DIND_IMAGE=docker.io/library/docker:$version-dind sh deploy/single-host/tests/project-bridge-fence.sh
+            DIND_IMAGE=$(sh deploy/ci/mirror-images.sh ref "docker.io/library/docker:$version-dind") sh deploy/single-host/tests/project-bridge-fence.sh
           done
       # Containers on a single host (EXC-575) run under gVisor; the runner gets it from gVisor's apt repository.
       - name: Install gVisor (runsc) into Docker
@@ -498,6 +515,13 @@ jobs:
       - name: Integration test images are in the pre-pull list
         working-directory: .
         run: sh deploy/ci/third-party-images.sh check
+      # EXC-881: every Docker Hub image CI names is on the mirror's list, and the mirror's scripts work.
+      - name: Docker Hub images are mirrored
+        working-directory: .
+        run: |
+          sh deploy/ci/tests/mirror-images-test.sh
+          sh deploy/ci/tests/third-party-images-test.sh
+          sh deploy/ci/mirror-images.sh guard
       - run: go build ./...
       # The standalone HTTP vault is a sibling module that depends on
       # server-go via a replace directive; build it here so a pkg/vault
@@ -608,10 +632,14 @@ jobs:
   deno-test:
     name: Deno Unit (deno-server + vendored lib)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     needs: [changes]
     if: needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '20'
@@ -768,6 +796,8 @@ jobs:
         shard: [1, 2, 3, 4]
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      MIRROR_REGISTRY_USER: ${{ github.actor }}
+      MIRROR_REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: server-go
@@ -859,14 +889,22 @@ jobs:
   live-cluster:
     name: Live cluster tests (hosting)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     needs: [changes, go-lint]
     # Real k3s clusters (gVisor, deploy rollouts, Cilium egress); only when hosting code changes.
     if: needs.changes.outputs.hosting == 'true'
+    env:
+      # The k3s clusters in these tests pull through the mirror with this login (k3smirror).
+      MIRROR_REGISTRY_USER: ${{ github.actor }}
+      MIRROR_REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: server-go
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.10'
@@ -877,14 +915,22 @@ jobs:
   live-start-fence:
     name: Live cluster tests (start fence)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     needs: [changes, go-lint]
     # EXC-622: workloads start the real way with a probe at t=0; nothing fenced may answer.
     if: needs.changes.outputs.hosting == 'true'
+    env:
+      # The k3s clusters in these tests pull through the mirror with this login (k3smirror).
+      MIRROR_REGISTRY_USER: ${{ github.actor }}
+      MIRROR_REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: server-go
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.10'
@@ -895,14 +941,22 @@ jobs:
   live-mysql-backup:
     name: Live cluster tests (MySQL backup)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     needs: [changes, go-lint]
     # EXC-586: MOCO's real backup Job under the project policies, on kube-router and on production Cilium.
     if: needs.changes.outputs.mysqlbackup == 'true'
+    env:
+      # The k3s clusters in these tests pull through the mirror with this login (k3smirror).
+      MIRROR_REGISTRY_USER: ${{ github.actor }}
+      MIRROR_REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: server-go
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.10'
@@ -913,14 +967,22 @@ jobs:
   live-failed-provisioning:
     name: Live failed provisioning
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     needs: [changes, go-lint]
     # EXC-534: seals, dropped requests and failed rollbacks on real k3s, CloudNativePG and vault; about 15 minutes.
     if: needs.changes.outputs.failedprovisioning == 'true'
+    env:
+      # The k3s clusters in these tests pull through the mirror with this login (k3smirror).
+      MIRROR_REGISTRY_USER: ${{ github.actor }}
+      MIRROR_REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: server-go
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.10'
@@ -931,14 +993,22 @@ jobs:
   live-site-builds:
     name: Live site builds (gVisor)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     needs: [changes, go-lint]
     # A real Vite build through the site build Job under gVisor (EXC-354); its own job so the hosting suite keeps its time.
     if: needs.changes.outputs.sitebuilds == 'true'
+    env:
+      # The k3s clusters in these tests pull through the mirror with this login (k3smirror).
+      MIRROR_REGISTRY_USER: ${{ github.actor }}
+      MIRROR_REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: server-go
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.10'
@@ -949,14 +1019,22 @@ jobs:
   live-app-builds:
     name: Live app builds (gVisor)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     needs: [changes, go-lint]
     # Dockerfile (rootless BuildKit) and Buildpacks image builds through the app build Job under gVisor (EXC-547).
     if: needs.changes.outputs.appbuilds == 'true'
+    env:
+      # The k3s clusters in these tests pull through the mirror with this login (k3smirror).
+      MIRROR_REGISTRY_USER: ${{ github.actor }}
+      MIRROR_REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: server-go
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/mirror-login
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.10'
