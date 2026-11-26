@@ -42,7 +42,7 @@ func (s *Store) SaveUserTrust(ctx context.Context, record trust.Record, actor st
 	if err := lockUserTrust(ctx, tx, record.UserID); err != nil {
 		return err
 	}
-	var previous string
+	var previous sql.NullString
 	err = tx.QueryRowContext(ctx, `SELECT state FROM user_trust WHERE user_id = $1`, record.UserID).Scan(&previous)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("save trust: read previous: %w", err)

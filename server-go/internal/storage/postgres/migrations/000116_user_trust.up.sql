@@ -1,8 +1,15 @@
 -- Limited trial (EXC-899): the derived trust decision per account and its
 -- audit trail. No GitHub data is stored here, only the result and a reason code.
+-- The two states, written once.
+DO $$
+BEGIN
+    CREATE DOMAIN trust_state AS TEXT CHECK (VALUE IN ('limited', 'full'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS user_trust (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    state TEXT NOT NULL CHECK (state IN ('limited', 'full')),
+    state trust_state NOT NULL,
     method TEXT NOT NULL CHECK (method IN ('github', 'grandfathered', 'admin')),
     reason TEXT NOT NULL,
     decided_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -14,8 +21,9 @@ CREATE TABLE IF NOT EXISTS trust_audit (
     -- No foreign key: the trail outlives the account, as evidence of who was
     -- limited or verified and who changed it.
     user_id TEXT NOT NULL,
-    from_state TEXT NOT NULL CHECK (from_state IN ('', 'limited', 'full')),
-    to_state TEXT NOT NULL CHECK (to_state IN ('limited', 'full')),
+    -- NULL for an account's first decision: there was no state before it.
+    from_state trust_state,
+    to_state trust_state NOT NULL,
     method TEXT NOT NULL CHECK (method IN ('github', 'grandfathered', 'admin')),
     reason TEXT NOT NULL,
     actor TEXT NOT NULL CHECK (actor <> ''),

@@ -19,7 +19,7 @@ func trustRecord(userID string, state trust.State, method trust.Method, reason t
 
 func auditRows(t *testing.T, store *Store, userID string) [][3]string {
 	t.Helper()
-	rows, err := store.db.Query(`SELECT from_state, to_state, actor FROM trust_audit WHERE user_id = $1 ORDER BY id`, userID)
+	rows, err := store.db.Query(`SELECT COALESCE(from_state, ''), to_state, actor FROM trust_audit WHERE user_id = $1 ORDER BY id`, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestUserTrustGoesWithTheUserButTheAuditStays(t *testing.T) {
 
 func TestTrustAuditRefusesRowsThatAreNotDecisions(t *testing.T) {
 	store := testStore(t)
-	insert := `INSERT INTO trust_audit (user_id, from_state, to_state, method, reason, actor) VALUES ($1, $2, $3, $4, 'ok', $5)`
+	insert := `INSERT INTO trust_audit (user_id, from_state, to_state, method, reason, actor) VALUES ($1, NULLIF($2, ''), $3, $4, 'ok', $5)`
 	cases := map[string][]any{
 		"bad to_state":   {"x", "", "maybe", "github", "system"},
 		"bad from_state": {"x", "maybe", "full", "github", "system"},
