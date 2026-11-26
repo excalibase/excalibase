@@ -3,7 +3,7 @@
 # as excalibase/studio and referenced by the platform-aio Helm chart.
 # EXC-881: CI builds from the mirror of Docker Hub (--build-arg HUB_MIRROR=ghcr.io/excalibase/mirror/); empty pulls Docker Hub.
 ARG HUB_MIRROR=
-FROM ${HUB_MIRROR}node:20-alpine AS build
+FROM ${HUB_MIRROR}node:24-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci

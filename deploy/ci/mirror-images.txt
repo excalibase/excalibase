@@ -14,6 +14,7 @@ mysql:8.4
 nats:2.10-alpine
 nginx:1.27
 node:22-bookworm
+node:24-alpine
 pgvector/pgvector:pg16
 postgres:14
 postgres:14-alpine
