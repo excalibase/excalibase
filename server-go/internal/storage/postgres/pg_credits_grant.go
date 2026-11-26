@@ -36,6 +36,7 @@ func (s *Store) CreditTermsVersion(ctx context.Context, userID string) (string, 
 
 type grantCandidate struct {
 	verified, active bool
+	email            string
 	acceptedVersion  string
 	acceptedAt       time.Time
 }
@@ -47,14 +48,22 @@ func loadGrantCandidate(ctx context.Context, tx *sql.Tx, userID string) (grantCa
 	err := tx.QueryRowContext(ctx,
 		`SELECT u.email_verified_at IS NOT NULL,
 		        u.active AND COALESCE(NULLIF(u.kind, ''), 'human') = 'human' AND NOT EXISTS (SELECT 1 FROM abuse_suspensions a WHERE a.user_id = u.id),
-		        t.terms_version, t.accepted_at
+		        lower(u.email), t.terms_version, t.accepted_at
 		 FROM users u LEFT JOIN credit_terms_acceptances t ON t.user_id = u.id WHERE u.id = $1`, userID).
-		Scan(&candidate.verified, &candidate.active, &version, &accepted)
+		Scan(&candidate.verified, &candidate.active, &candidate.email, &version, &accepted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return candidate, credits.ErrUserNotFound
 	}
 	candidate.acceptedVersion, candidate.acceptedAt = version.String, accepted.Time
 	return candidate, err
+}
+
+// grantPlan is what the checks before a grant found.
+type grantPlan struct {
+	// refusal is the outcome when the person cannot be granted now; empty when they can.
+	refusal    credits.GrantOutcome
+	orgID      string
+	identities []claimKey
 }
 
 func (s *Store) GrantCreditTrial(ctx context.Context, userID string, rules credits.Rules, now time.Time) (credits.GrantResult, error) {
@@ -68,47 +77,72 @@ func (s *Store) GrantCreditTrial(ctx context.Context, userID string, rules credi
 		return result, err
 	}
 	candidate, err := loadGrantCandidate(ctx, tx, userID)
+	if errors.Is(err, credits.ErrUserNotFound) {
+		return result, errors.Join(err, leaveCreditQueue(ctx, tx, userID), tx.Commit())
+	}
 	if err != nil {
 		return result, err
 	}
-	if early, done := candidate.verdict(rules); done {
-		return credits.GrantResult{Outcome: early}, nil
-	}
-	if claimed, err := userClaimOutcome(ctx, tx, userID); err != nil || claimed != "" {
-		return credits.GrantResult{Outcome: claimed}, err
-	}
-	orgID, err := freeOrgOf(ctx, tx, userID)
+	plan, err := planGrant(ctx, tx, userID, rules, candidate)
 	if err != nil {
 		return result, err
 	}
-	if orgID == "" {
-		return credits.GrantResult{Outcome: credits.OutcomeNoFreeOrg}, nil
-	}
-	result.OrgID = orgID
-	identities, err := linkedClaimableIdentities(ctx, tx, userID)
-	if err != nil {
-		return result, err
-	}
-	if taken, err := identityAlreadyClaimed(ctx, tx, userID, identities); err != nil || taken {
-		if err == nil {
-			err = recordRefusedGrant(ctx, tx, userID, orgID, now)
+	if plan.refusal != "" {
+		// Whoever cannot be granted leaves the queue, so they never hold a place a newcomer is owed.
+		if plan.refusal == credits.OutcomeIdentityClaimed {
+			err = recordRefusedGrant(ctx, tx, userID, plan.orgID, now)
 		}
-		result.Outcome = credits.OutcomeIdentityClaimed
-		return result, commitUnless(tx, err)
+		if err == nil {
+			err = leaveCreditQueue(ctx, tx, userID)
+		}
+		return credits.GrantResult{Outcome: plan.refusal, OrgID: plan.orgID}, commitUnless(tx, err)
 	}
+	result.OrgID = plan.orgID
 	if queued, err := mustWait(ctx, tx, userID, rules, now); err != nil || queued {
 		result.Outcome = credits.OutcomeWaitlisted
 		return result, commitUnless(tx, err)
 	}
-	entryID, err := writeTrialGrant(ctx, tx, userID, orgID, rules, candidate, identities, now)
+	entryID, err := writeTrialGrant(ctx, tx, userID, plan.orgID, rules, candidate, plan.identities, now)
 	if err != nil {
 		return result, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM credit_waitlist WHERE user_id = $1`, userID); err != nil {
+	if err := leaveCreditQueue(ctx, tx, userID); err != nil {
 		return result, err
 	}
 	result.Outcome, result.EntryID = credits.OutcomeGranted, entryID
 	return result, tx.Commit()
+}
+
+func planGrant(ctx context.Context, tx *sql.Tx, userID string, rules credits.Rules, candidate grantCandidate) (grantPlan, error) {
+	if early, done := candidate.verdict(rules); done {
+		return grantPlan{refusal: early}, nil
+	}
+	if claimed, err := userClaimOutcome(ctx, tx, userID); err != nil || claimed != "" {
+		return grantPlan{refusal: claimed}, err
+	}
+	orgID, err := freeOrgOf(ctx, tx, userID)
+	if err != nil {
+		return grantPlan{}, err
+	}
+	if orgID == "" {
+		return grantPlan{refusal: credits.OutcomeNoFreeOrg}, nil
+	}
+	identities, err := linkedClaimableIdentities(ctx, tx, userID)
+	if err != nil {
+		return grantPlan{}, err
+	}
+	// The exact address, lower-cased and nothing else, so a deleted account's address cannot earn again.
+	identities = append(identities, claimKey{"email", candidate.email})
+	taken, err := identityAlreadyClaimed(ctx, tx, userID, identities)
+	if err != nil || taken {
+		return grantPlan{refusal: credits.OutcomeIdentityClaimed, orgID: orgID}, err
+	}
+	return grantPlan{orgID: orgID, identities: identities}, nil
+}
+
+func leaveCreditQueue(ctx context.Context, tx *sql.Tx, userID string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM credit_waitlist WHERE user_id = $1`, userID)
+	return err
 }
 
 // commitUnless commits when nothing failed, so a refusal or a place in the
@@ -194,6 +228,18 @@ func recordRefusedGrant(ctx context.Context, tx *sql.Tx, userID, orgID string, n
 	return err
 }
 
+// eligibleAheadSQL counts the queued people ahead of one person who could take a place today. Someone who
+// upgraded, was suspended or deactivated, lost their free org or never accepted the current terms is not
+// counted, so they cannot hold up the people behind them.
+const eligibleAheadSQL = `SELECT count(*) FROM credit_waitlist w
+	JOIN users u ON u.id = w.user_id
+	JOIN credit_terms_acceptances t ON t.user_id = u.id AND t.terms_version = $2
+	WHERE w.seq < (SELECT seq FROM credit_waitlist WHERE user_id = $1)
+	  AND u.email_verified_at IS NOT NULL AND u.active AND COALESCE(NULLIF(u.kind, ''), 'human') = 'human'
+	  AND NOT EXISTS (SELECT 1 FROM abuse_suspensions a WHERE a.user_id = u.id)
+	  AND EXISTS (SELECT 1 FROM orgs o WHERE o.owner_id = u.id AND UPPER(o.tier) = 'FREE')
+	  AND NOT EXISTS (SELECT 1 FROM credit_grant_claims c WHERE c.claim_kind = 'user' AND c.claim_value = u.id)`
+
 // mustWait puts the person in the queue when the cap is full or others who
 // asked first still wait for the places that are free.
 func mustWait(ctx context.Context, tx *sql.Tx, userID string, rules credits.Rules, now time.Time) (bool, error) {
@@ -206,8 +252,7 @@ func mustWait(ctx context.Context, tx *sql.Tx, userID string, rules credits.Rule
 	if _, err := tx.ExecContext(ctx, `INSERT INTO credit_waitlist (user_id, queued_at) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING`, userID, now.UTC()); err != nil {
 		return false, err
 	}
-	if err := tx.QueryRowContext(ctx,
-		`SELECT count(*) FROM credit_waitlist WHERE seq < (SELECT seq FROM credit_waitlist WHERE user_id = $1)`, userID).Scan(&ahead); err != nil {
+	if err := tx.QueryRowContext(ctx, eligibleAheadSQL, userID, rules.TermsVersion).Scan(&ahead); err != nil {
 		return false, err
 	}
 	return holders >= rules.TrialCap || ahead >= rules.TrialCap-holders, nil

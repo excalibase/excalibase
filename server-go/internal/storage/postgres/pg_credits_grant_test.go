@@ -4,11 +4,14 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/credits"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 func grant(t *testing.T, store *Store, userID string, cap int) credits.GrantResult {
@@ -126,8 +129,8 @@ func TestAnIdentityLinkedAfterAGrantBlocksASecondAccount(t *testing.T) {
 	}
 	var claims int
 	_ = store.db.QueryRow(`SELECT count(*) FROM credit_grant_claims WHERE user_id = 'eve'`).Scan(&claims)
-	if claims != 3 {
-		t.Fatalf("eve holds %d claims, want user + github + google", claims)
+	if claims != 4 {
+		t.Fatalf("eve holds %d claims, want user + email + github + google", claims)
 	}
 }
 
@@ -185,7 +188,7 @@ func TestTrialCapWaitlistsAndGrantsFirstComeWhenATrialEnds(t *testing.T) {
 		t.Fatal("still full")
 	}
 
-	if n, err := store.ExpireCreditLots(ctx, creditsNow.Add(91*24*time.Hour)); err != nil || n != 2 {
+	if n, err := store.ExpireCreditLots(ctx, creditsNow.Add(91*24*time.Hour), false); err != nil || n != 2 {
 		t.Fatalf("both trials end: %d %v", n, err)
 	}
 	if got := grant(t, store, "k3", 2); got.Outcome != credits.OutcomeGranted {
@@ -237,7 +240,7 @@ func TestANewcomerCannotJumpTheQueueWhenAPlaceOpens(t *testing.T) {
 	at("q3", creditsNow.Add(49*time.Hour))
 	// q1's credit ends before q2's: one place is free now.
 	later := creditsNow.Add(90*24*time.Hour + time.Hour)
-	if n, err := store.ExpireCreditLots(ctx, later); err != nil || n != 1 {
+	if n, err := store.ExpireCreditLots(ctx, later, false); err != nil || n != 1 {
 		t.Fatalf("one trial ends: %d %v", n, err)
 	}
 	if got := at("q5", later); got != credits.OutcomeWaitlisted {
@@ -246,4 +249,157 @@ func TestANewcomerCannotJumpTheQueueWhenAPlaceOpens(t *testing.T) {
 	if got := at("q3", later); got != credits.OutcomeGranted {
 		t.Fatalf("q3 takes the free place: %s", got)
 	}
+}
+
+// Two queued people who became ineligible must not hold the places of a trial that ended.
+func TestIneligibleQueuedPeopleDoNotFreezeTheQueue(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"f1", "f2", "f3", "f4", "f5"} {
+		creditPerson(t, store, id)
+	}
+	rules := trialRules(2)
+	at := func(person string, when time.Time) credits.GrantOutcome {
+		result, err := store.GrantCreditTrial(ctx, person, rules, when)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Outcome
+	}
+	at("f1", creditsNow)
+	at("f2", creditsNow)
+	if at("f3", creditsNow) != credits.OutcomeWaitlisted || at("f4", creditsNow) != credits.OutcomeWaitlisted {
+		t.Fatal("f3 and f4 queue behind the full cap")
+	}
+	if _, err := store.db.Exec(`UPDATE users SET active = false WHERE id = 'f3'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM orgs WHERE id = 'org-f4'`); err != nil {
+		t.Fatal(err)
+	}
+	later := creditsNow.Add(91 * 24 * time.Hour)
+	if n, err := store.ExpireCreditLots(ctx, later, false); err != nil || n != 2 {
+		t.Fatalf("both trials end: %d %v", n, err)
+	}
+	if got := at("f5", later); got != credits.OutcomeGranted {
+		t.Fatalf("a newcomer behind two ineligible people must get the free place: %s", got)
+	}
+}
+
+func TestAPersonFoundIneligibleLeavesTheQueue(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"g1", "g2"} {
+		creditPerson(t, store, id)
+	}
+	if grant(t, store, "g1", 1).Outcome != credits.OutcomeGranted || grant(t, store, "g2", 1).Outcome != credits.OutcomeWaitlisted {
+		t.Fatal("setup")
+	}
+	if _, err := store.db.Exec(`UPDATE orgs SET tier = 'STANDARD' WHERE id = 'org-g2'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := grant(t, store, "g2", 1).Outcome; got != credits.OutcomeNoFreeOrg {
+		t.Fatalf("%s", got)
+	}
+	if queue, _ := store.CreditWaitlist(ctx, 10); len(queue) != 0 {
+		t.Fatalf("an ineligible person stays queued: %v", queue)
+	}
+}
+
+func TestADeletedAccountsAddressCannotEarnASecondGrant(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	creditPerson(t, store, "h1")
+	grant(t, store, "h1", 40)
+	for _, statement := range []string{`DELETE FROM org_members WHERE user_id = 'h1'`, `DELETE FROM orgs WHERE id = 'org-h1'`, `DELETE FROM users WHERE id = 'h1'`} {
+		if _, err := store.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The same address signs up again as a new account.
+	if err := store.CreateUser(ctx, &domain.User{ID: "h2", Username: "h2", Email: "H1@x.example.com", PasswordHash: "x", Role: "user", Active: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.MarkEmailVerified(ctx, "h2", creditsNow)
+	if err := store.CreateOrgWithOwner(ctx, ownedOrg("org-h2", "org-h2", "h2", domain.Free), 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.AcceptCreditTerms(ctx, "h2", creditsTerms, creditsNow)
+	if got := grant(t, store, "h2", 40).Outcome; got != credits.OutcomeIdentityClaimed {
+		t.Fatalf("the same address twice: %s", got)
+	}
+}
+
+// A link that starts while a grant is deciding waits for it, so its claim is never missed.
+func TestLinkingAnIdentityWaitsForARunningGrant(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	creditPerson(t, store, "i1")
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, creditGrantLockSpace); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- store.LinkStudioIdentity(ctx, "github", "gh-race", "i1", "i1@x.example.com") }()
+	select {
+	case err := <-done:
+		t.Fatalf("the link did not wait for the grant lock: %v", err)
+	case <-time.After(400 * time.Millisecond):
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Each way of becoming ineligible, alone, must keep a queued person from holding the only free place.
+func TestEveryKindOfIneligibleQueuedPersonIsPassedOver(t *testing.T) {
+	cases := map[string]string{
+		"deactivated":  `UPDATE users SET active = false WHERE id = 'w2'`,
+		"suspended":    `INSERT INTO abuse_suspensions (user_id) VALUES ('w2')`,
+		"upgraded":     `UPDATE orgs SET tier = 'STANDARD' WHERE id = 'org-w2'`,
+		"unverified":   `UPDATE users SET email_verified_at = NULL WHERE id = 'w2'`,
+		"old terms":    `UPDATE credit_terms_acceptances SET terms_version = 'older' WHERE user_id = 'w2'`,
+		"already held": `INSERT INTO credit_grant_claims (claim_kind, claim_value, user_id, org_id) VALUES ('user', 'w2', 'w2', 'org-w2')`,
+	}
+	store := testStore(t)
+	ctx := context.Background()
+	n := 0
+	for name, statement := range cases {
+		n++
+		_ = name
+		first, second, newcomer := fmt.Sprintf("v%da", n), fmt.Sprintf("v%db", n), fmt.Sprintf("v%dc", n)
+		for _, id := range []string{first, second, newcomer} {
+			creditPerson(t, store, id)
+		}
+		// each case runs on its own cap-1 world: earlier grants expire first
+		_, _ = store.db.Exec(`TRUNCATE credit_waitlist`)
+		rules := trialRules(1)
+		now := creditsNow.Add(time.Duration(n) * 200 * 24 * time.Hour)
+		if r, _ := store.GrantCreditTrial(ctx, first, rules, now); r.Outcome != credits.OutcomeGranted {
+			t.Fatalf("%s: first %s", name, r.Outcome)
+		}
+		if r, _ := store.GrantCreditTrial(ctx, second, rules, now); r.Outcome != credits.OutcomeWaitlisted {
+			t.Fatalf("%s: second %s", name, r.Outcome)
+		}
+		if _, err := store.db.Exec(replaceID(statement, second)); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		later := now.Add(91 * 24 * time.Hour)
+		if _, err := store.ExpireCreditLots(ctx, later, false); err != nil {
+			t.Fatal(err)
+		}
+		if r, _ := store.GrantCreditTrial(ctx, newcomer, rules, later); r.Outcome != credits.OutcomeGranted {
+			t.Fatalf("%s: a newcomer behind an ineligible person got %s", name, r.Outcome)
+		}
+	}
+}
+
+func replaceID(statement, id string) string {
+	return strings.NewReplacer("w2", id, "org-w2", "org-"+id).Replace(statement)
 }

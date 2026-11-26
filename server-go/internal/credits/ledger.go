@@ -13,6 +13,8 @@ type Rules struct {
 	TrialCap     int
 	AdminCap     Micros
 	TermsVersion string
+	// Metered is true once a usage meter runs: lots then wait for each org's meter watermark.
+	Metered bool
 }
 
 // GrantOutcome says what a grant attempt did.
@@ -98,7 +100,9 @@ type Ledger interface {
 	CreditStatement(ctx context.Context, orgID string, month time.Time) (Statement, error)
 	DebitCredit(ctx context.Context, request DebitRequest) (DebitResult, error)
 	AdjustCredit(ctx context.Context, adjustment Adjustment, now time.Time) (Entry, error)
-	ExpireCreditLots(ctx context.Context, now time.Time) (int, error)
+	// ExpireCreditLots ends lots whose date the meter has passed. With requireWatermark an org the meter
+	// has not started on keeps its lots; without it such an org expires by the clock.
+	ExpireCreditLots(ctx context.Context, now time.Time, requireWatermark bool) (int, error)
 	CreditMeterWatermark(ctx context.Context, orgID string) (time.Time, bool, error)
 	AdvanceCreditMeterWatermark(ctx context.Context, orgID string, to time.Time) error
 

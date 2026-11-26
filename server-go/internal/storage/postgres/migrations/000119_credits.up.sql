@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS credit_lot_debits (
 );
 
 CREATE TABLE IF NOT EXISTS credit_grant_claims (
-    claim_kind        TEXT NOT NULL CHECK (claim_kind IN ('user', 'github', 'google')),
+    claim_kind        TEXT NOT NULL CHECK (claim_kind IN ('user', 'github', 'google', 'email')),
     claim_value       TEXT NOT NULL,
     user_id           TEXT NOT NULL,
     org_id            TEXT NOT NULL,

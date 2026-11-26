@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -72,4 +73,16 @@ func mountCredits(d *handlerDeps) func(http.Handler) http.Handler {
 		d.orgHandler.SetCredits(d.creditsHandler, gate)
 	}
 	return gate
+}
+
+// creditsBootCheck refuses to start with credits on while the limited trial's
+// container gate (EXC-899) is off: credit must not fund containers for accounts
+// nobody has verified. With credits off it asks nothing.
+func creditsBootCheck(cfg config.AppConfig) error {
+	flags := cfg.Features()
+	ctx := context.Background()
+	if features.Enabled(ctx, flags, features.Credits) && !features.Enabled(ctx, flags, features.LimitedTrial) {
+		return errors.New("FEATURE_CREDITS is on but FEATURE_LIMITEDTRIAL is off: credit would fund containers for accounts nobody has verified; turn on the limited trial first")
+	}
+	return nil
 }

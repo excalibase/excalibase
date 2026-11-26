@@ -120,3 +120,32 @@ func TestStatementCoversOneUTCMonth(t *testing.T) {
 		t.Fatalf("november: %+v", statement)
 	}
 }
+
+func TestAdminReplayWithAnotherReasonOrExpiryIsAConflict(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	base := credits.Adjustment{OrgID: "org-c", Amount: 900, Actor: "admin-1", Reason: "the first reason given", IdempotencyKey: "same-key", ExpiresAt: inHours(48),
+		Audit: credits.AuditRecord{UserID: "admin-1", Action: "admin.credit_adjust", Resource: "org"}}
+	if _, err := store.AdjustCredit(ctx, base, creditsNow); err != nil {
+		t.Fatal(err)
+	}
+	same := base
+	if _, err := store.AdjustCredit(ctx, same, creditsNow); err != nil {
+		t.Fatalf("an identical replay is fine: %v", err)
+	}
+	otherReason := base
+	otherReason.Reason = "a different reason entirely"
+	if _, err := store.AdjustCredit(ctx, otherReason, creditsNow); !errors.Is(err, credits.ErrIdempotencyConflict) {
+		t.Fatalf("another reason: %v", err)
+	}
+	otherExpiry := base
+	otherExpiry.ExpiresAt = inHours(72)
+	if _, err := store.AdjustCredit(ctx, otherExpiry, creditsNow); !errors.Is(err, credits.ErrIdempotencyConflict) {
+		t.Fatalf("another expiry: %v", err)
+	}
+	noExpiry := base
+	noExpiry.ExpiresAt = nil
+	if _, err := store.AdjustCredit(ctx, noExpiry, creditsNow); !errors.Is(err, credits.ErrIdempotencyConflict) {
+		t.Fatalf("no expiry: %v", err)
+	}
+}

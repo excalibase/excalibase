@@ -164,7 +164,7 @@ func TestLotExpiresOnlyOncetheMeterHasPassedIt(t *testing.T) {
 	if err := store.AdvanceCreditMeterWatermark(ctx, "org-w", creditsNow.Add(5*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := store.ExpireCreditLots(ctx, later); err != nil || n != 0 {
+	if n, err := store.ExpireCreditLots(ctx, later, false); err != nil || n != 0 {
 		t.Fatalf("the meter has not reached the expiry: expired %d %v", n, err)
 	}
 	if balance := creditInvariant(t, store, "org-w"); balance != 500 {
@@ -173,10 +173,10 @@ func TestLotExpiresOnlyOncetheMeterHasPassedIt(t *testing.T) {
 	if err := store.AdvanceCreditMeterWatermark(ctx, "org-w", creditsNow.Add(11*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := store.ExpireCreditLots(ctx, later); err != nil || n != 1 {
+	if n, err := store.ExpireCreditLots(ctx, later, false); err != nil || n != 1 {
 		t.Fatalf("the meter passed the expiry: expired %d %v", n, err)
 	}
-	if n, _ := store.ExpireCreditLots(ctx, later); n != 0 {
+	if n, _ := store.ExpireCreditLots(ctx, later, false); n != 0 {
 		t.Fatal("a lot expired twice")
 	}
 	if balance := creditInvariant(t, store, "org-w"); balance != 0 {
@@ -190,10 +190,10 @@ func TestLotExpiresOnlyOncetheMeterHasPassedIt(t *testing.T) {
 func TestLotExpiresByTheClockWhenNoMeterHasStarted(t *testing.T) {
 	store := testStore(t)
 	fundOrg(t, store, "org-nometer", "a", 500, inHours(10))
-	if n, err := store.ExpireCreditLots(context.Background(), creditsNow.Add(11*time.Hour)); err != nil || n != 1 {
+	if n, err := store.ExpireCreditLots(context.Background(), creditsNow.Add(11*time.Hour), false); err != nil || n != 1 {
 		t.Fatalf("an unmetered lot expires on its date: %d %v", n, err)
 	}
-	if n, _ := store.ExpireCreditLots(context.Background(), creditsNow.Add(5*time.Hour)); n != 0 {
+	if n, _ := store.ExpireCreditLots(context.Background(), creditsNow.Add(5*time.Hour), false); n != 0 {
 		t.Fatal("a lot expired before its date")
 	}
 }
@@ -240,7 +240,7 @@ func TestCreditLedgerInvariantHoldsUnderRandomOperations(t *testing.T) {
 			}
 			_ = store.AdvanceCreditMeterWatermark(ctx, orgID, end)
 		default:
-			if _, err := store.ExpireCreditLots(ctx, clock); err != nil {
+			if _, err := store.ExpireCreditLots(ctx, clock, false); err != nil {
 				t.Fatalf("step %d expire: %v", step, err)
 			}
 		}
@@ -262,4 +262,22 @@ func adjustForTest(t *testing.T, store *Store, orgID string, amount credits.Micr
 func negativeAdjustment(orgID string, amount credits.Micros, key string) credits.Adjustment {
 	return credits.Adjustment{OrgID: orgID, Amount: -amount, Actor: "admin-1", Reason: "claw back for a test", IdempotencyKey: key,
 		Audit: credits.AuditRecord{UserID: "admin-1", Action: "admin.credit_adjust", Resource: "org"}}
+}
+
+// Once a meter runs, an org it has not started on must not lose credit to the clock: the hours before
+// the expiry are not billed yet.
+func TestWithMeteringOnALotWaitsForItsOrgsFirstWatermark(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	fundOrg(t, store, "org-gm", "a", 500, inHours(10))
+	later := creditsNow.Add(20 * time.Hour)
+	if n, err := store.ExpireCreditLots(ctx, later, true); err != nil || n != 0 {
+		t.Fatalf("no watermark and metering on: expired %d %v", n, err)
+	}
+	if err := store.AdvanceCreditMeterWatermark(ctx, "org-gm", later); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := store.ExpireCreditLots(ctx, later, true); n != 1 {
+		t.Fatal("a metered org's lot expires once the watermark passes it")
+	}
 }

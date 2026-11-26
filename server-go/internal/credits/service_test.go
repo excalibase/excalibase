@@ -10,14 +10,15 @@ import (
 
 type recordingLedger struct {
 	Ledger
-	orgs        map[string]bool
-	adjustments []Adjustment
-	terms       map[string]string
-	grants      []string
-	waitlist    []string
-	pending     []string
-	outcomes    map[string]GrantOutcome
-	expired     int
+	orgs             map[string]bool
+	adjustments      []Adjustment
+	terms            map[string]string
+	grants           []string
+	waitlist         []string
+	pending          []string
+	outcomes         map[string]GrantOutcome
+	expired          int
+	requireWatermark bool
 }
 
 func (l *recordingLedger) CreditOrgExists(_ context.Context, orgID string) (bool, error) {
@@ -39,8 +40,9 @@ func (l *recordingLedger) GrantCreditTrial(_ context.Context, userID string, _ R
 	return GrantResult{Outcome: l.outcomes[userID]}, nil
 }
 
-func (l *recordingLedger) ExpireCreditLots(context.Context, time.Time) (int, error) {
+func (l *recordingLedger) ExpireCreditLots(_ context.Context, _ time.Time, requireWatermark bool) (int, error) {
 	l.expired++
+	l.requireWatermark = requireWatermark
 	return 0, nil
 }
 
@@ -140,5 +142,17 @@ func TestSweepExpiresGrantsPendingAndServesTheQueueUntilTheCapIsFull(t *testing.
 	newTestService(ledger).Sweep(context.Background())
 	if ledger.expired != 1 || strings.Join(ledger.grants, "") != "abcd" {
 		t.Fatalf("expired %d grants %v: every new arrival is queued, then the queue stops at the first person who still must wait", ledger.expired, ledger.grants)
+	}
+}
+
+func TestSweepExpiresByTheWatermarkOnceMeteringIsOn(t *testing.T) {
+	for _, metered := range []bool{false, true} {
+		ledger := &recordingLedger{}
+		rules := testRules
+		rules.Metered = metered
+		NewService(ledger, rules, func() time.Time { return serviceNow }).Sweep(context.Background())
+		if ledger.requireWatermark != metered {
+			t.Errorf("metered=%v but the ledger was told requireWatermark=%v", metered, ledger.requireWatermark)
+		}
 	}
 }

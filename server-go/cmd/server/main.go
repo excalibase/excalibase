@@ -160,6 +160,9 @@ func runServer(cfg config.AppConfig) {
 	if err := trustBackfillCheck(cfg, sqlStore); err != nil {
 		log.Fatal(err)
 	}
+	if err := creditsBootCheck(cfg); err != nil {
+		log.Fatal(err)
+	}
 
 	// Use platform store as InstanceStore (same interface)
 	var store storage.InstanceStore = sqlStore

@@ -259,8 +259,8 @@ func (s *Store) AdjustCredit(ctx context.Context, adjustment credits.Adjustment,
 			return err
 		}
 		if existing, found, err := findCreditEntryByKey(ctx, tx, key); err != nil || found {
-			if err == nil && (existing.OrgID != adjustment.OrgID || existing.Amount != adjustment.Amount) {
-				err = credits.ErrIdempotencyConflict
+			if err == nil {
+				err = checkSameAdjustment(ctx, tx, existing, adjustment)
 			}
 			entry = existing
 			return err
@@ -331,10 +331,19 @@ func findCreditEntryByKey(ctx context.Context, tx *sql.Tx, key string) (credits.
 	return entry, err == nil, err
 }
 
-func (s *Store) ExpireCreditLots(ctx context.Context, now time.Time) (int, error) {
+// creditWatermarkBound is the watermark an org with no meter row is read at: the clock, or, once a meter
+// runs, nothing, so the org keeps its lots until the meter has started on it.
+func creditWatermarkBound(requireWatermark bool, clock string) string {
+	if requireWatermark {
+		return "w.watermark"
+	}
+	return "COALESCE(w.watermark, " + clock + ")"
+}
+
+func (s *Store) ExpireCreditLots(ctx context.Context, now time.Time, requireWatermark bool) (int, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT l.id, l.org_id FROM credit_lots l LEFT JOIN credit_meter_watermarks w ON w.org_id = l.org_id
-		 WHERE l.remaining_micros > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= $1 AND l.expires_at <= COALESCE(w.watermark, $1)
+		 WHERE l.remaining_micros > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= $1 AND l.expires_at <= `+creditWatermarkBound(requireWatermark, "$1")+`
 		 ORDER BY l.expires_at, l.id LIMIT $2`, now.UTC(), creditExpiryBatch)
 	if err != nil {
 		return 0, err
@@ -357,7 +366,7 @@ func (s *Store) ExpireCreditLots(ctx context.Context, now time.Time) (int, error
 	}
 	expired := 0
 	for _, lot := range lots {
-		done, err := s.expireCreditLot(ctx, lot.lotID, lot.orgID, now)
+		done, err := s.expireCreditLot(ctx, lot.lotID, lot.orgID, now, requireWatermark)
 		if err != nil {
 			return expired, err
 		}
@@ -368,7 +377,7 @@ func (s *Store) ExpireCreditLots(ctx context.Context, now time.Time) (int, error
 	return expired, nil
 }
 
-func (s *Store) expireCreditLot(ctx context.Context, lotID int64, orgID string, now time.Time) (bool, error) {
+func (s *Store) expireCreditLot(ctx context.Context, lotID int64, orgID string, now time.Time, requireWatermark bool) (bool, error) {
 	done := false
 	err := s.inCreditTx(ctx, func(tx *sql.Tx) error {
 		if _, err := lockCreditAccount(ctx, tx, orgID, now); err != nil {
@@ -377,7 +386,7 @@ func (s *Store) expireCreditLot(ctx context.Context, lotID int64, orgID string, 
 		var remaining int64
 		err := tx.QueryRowContext(ctx,
 			`SELECT l.remaining_micros FROM credit_lots l LEFT JOIN credit_meter_watermarks w ON w.org_id = l.org_id
-			 WHERE l.id = $1 AND l.remaining_micros > 0 AND l.expires_at <= $2 AND l.expires_at <= COALESCE(w.watermark, $2) FOR UPDATE OF l`,
+			 WHERE l.id = $1 AND l.remaining_micros > 0 AND l.expires_at <= $2 AND l.expires_at <= `+creditWatermarkBound(requireWatermark, "$2")+` FOR UPDATE OF l`,
 			lotID, now.UTC()).Scan(&remaining)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -401,3 +410,21 @@ func (s *Store) expireCreditLot(ctx context.Context, lotID int64, orgID string, 
 }
 
 var _ credits.Ledger = (*Store)(nil)
+
+// checkSameAdjustment refuses a replayed key that asks for something else than the first request did.
+func checkSameAdjustment(ctx context.Context, tx *sql.Tx, existing credits.Entry, adjustment credits.Adjustment) error {
+	if existing.OrgID != adjustment.OrgID || existing.Amount != adjustment.Amount || existing.Reason != adjustment.Reason {
+		return credits.ErrIdempotencyConflict
+	}
+	if adjustment.Amount < 0 {
+		return nil
+	}
+	var stored sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT expires_at FROM credit_lots WHERE source_entry_id = $1`, existing.ID).Scan(&stored); err != nil {
+		return err
+	}
+	if stored.Valid != (adjustment.ExpiresAt != nil) || (stored.Valid && !stored.Time.Equal(adjustment.ExpiresAt.Truncate(time.Microsecond))) {
+		return credits.ErrIdempotencyConflict
+	}
+	return nil
+}

@@ -212,7 +212,7 @@ func (s *Service) AdvanceMeterWatermark(ctx context.Context, orgID string, to ti
 // Sweep expires lots the meter has passed, grants the sign-up credit to people
 // whose verification no direct call caught, and serves the queue in order.
 func (s *Service) Sweep(ctx context.Context) {
-	if _, err := s.ledger.ExpireCreditLots(ctx, s.now()); err != nil {
+	if _, err := s.ledger.ExpireCreditLots(ctx, s.now(), s.rules.Metered); err != nil {
 		log.Printf("credits sweep: expire: %v", err)
 	}
 	pending, err := s.ledger.PendingCreditTrialUsers(ctx, s.rules.TermsVersion, sweepBatch)

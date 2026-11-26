@@ -124,3 +124,19 @@ func TestCreditsAdminRouteNeedsAnIdempotencyKeyAndASession(t *testing.T) {
 		t.Errorf("an access token must not grant: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestBootRefusesCreditsWithoutTheContainerGate(t *testing.T) {
+	on := func(flags ...features.Feature) config.AppConfig { return config.AppConfig{DarkFeatures: flags} }
+	if err := creditsBootCheck(on(features.Credits)); err == nil || !strings.Contains(err.Error(), "FEATURE_LIMITEDTRIAL") {
+		t.Fatalf("credits on and the gate off must refuse to boot: %v", err)
+	}
+	if err := creditsBootCheck(on(features.Credits, features.LimitedTrial)); err != nil {
+		t.Fatalf("both on: %v", err)
+	}
+	if err := creditsBootCheck(on(features.LimitedTrial)); err != nil {
+		t.Fatalf("the gate alone: %v", err)
+	}
+	if err := creditsBootCheck(on()); err != nil {
+		t.Fatalf("both off: %v", err)
+	}
+}
