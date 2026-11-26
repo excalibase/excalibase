@@ -920,6 +920,7 @@ func orgDeleteRouter(t *testing.T, deleteErr error, instances storage.InstanceSt
 
 	handler := NewOrgHandler(failingDeleteStore{Store: store, err: deleteErr}, store)
 	handler.SetNodePlacement(&fakeNodes{nodes: 5})
+	handler.SetOrgGuard(suspendedOrgGuard())
 	if instances != nil {
 		handler.SetInstanceStore(instances)
 	}
