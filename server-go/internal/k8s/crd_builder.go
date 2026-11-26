@@ -71,6 +71,9 @@ type PostgreSQLClusterOpts struct {
 	AllowPlaintext bool
 	// QueryStats turns on pg_stat_statements for the slow-queries page (EXC-654).
 	QueryStats bool
+	// AuditLog is the pgaudit.log setting a cluster that has audit on keeps, so a
+	// restored database whose extension exists still has the library preloaded.
+	AuditLog string
 }
 
 // BackupOpts turns a cluster's backups on. The cluster only names its
@@ -443,6 +446,9 @@ func buildPostgresql(opts PostgreSQLClusterOpts) map[string]interface{} {
 	maps.Copy(params, tierPlatformParameters(opts.Tier))
 	if opts.QueryStats {
 		maps.Copy(params, queryStatsParameters())
+	}
+	if opts.AuditLog != "" {
+		params[AuditLogParameter] = opts.AuditLog
 	}
 	var sharedPreloadLibs []interface{}
 	// DocumentDB's configuration is applied after the tenant's, and wins.

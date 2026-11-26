@@ -60,15 +60,15 @@ func TestDatabaseLogsUnavailableWhenThePodLogCannotBeRead(t *testing.T) {
 }
 
 func TestAuditLogsAreThePgauditLinesOfThePodLog(t *testing.T) {
-	svc, mock := setupAuditTest(t)
-	mock.PodLogs["org-aud-db/aud-db-postgres-1"] = strings.Join([]string{
+	svc, _, mock := setupAuditTest(t)
+	mock.PodLogs[testOpsDBNS+"/"+testOpsDBPostgres+"-1"] = strings.Join([]string{
 		`{"level":"info","logger":"postgres","msg":"record","record":{"message":"checkpoint complete"}}`,
 		`{"level":"info","logger":"pgaudit","msg":"record","record":{"audit":{"audit_type":"SESSION","command":"SELECT"}}}`,
 		`{"level":"info","logger":"postgres","msg":"record","record":{"message":"AUDIT: SESSION,1,1,READ,SELECT,,,SELECT 1,<not logged>"}}`,
 		`{"level":"info","logger":"postgres","msg":"record","record":{"message":"connection received"}}`,
 	}, "\n")
 
-	logs, err := svc.GetAuditLogs(context.Background(), testAudDB, 100)
+	logs, err := svc.GetAuditLogs(context.Background(), testOpsDB, 100)
 	if err != nil {
 		t.Fatalf("GetAuditLogs: %v", err)
 	}
@@ -80,10 +80,10 @@ func TestAuditLogsAreThePgauditLinesOfThePodLog(t *testing.T) {
 }
 
 func TestAuditLogsKeepTheLastLines(t *testing.T) {
-	svc, mock := setupAuditTest(t)
-	mock.PodLogs["org-aud-db/aud-db-postgres-1"] = "AUDIT: one\nAUDIT: two\nAUDIT: three\n"
+	svc, _, mock := setupAuditTest(t)
+	mock.PodLogs[testOpsDBNS+"/"+testOpsDBPostgres+"-1"] = "AUDIT: one\nAUDIT: two\nAUDIT: three\n"
 
-	logs, err := svc.GetAuditLogs(context.Background(), testAudDB, 2)
+	logs, err := svc.GetAuditLogs(context.Background(), testOpsDB, 2)
 	if err != nil {
 		t.Fatalf("GetAuditLogs: %v", err)
 	}
@@ -146,18 +146,18 @@ func TestDatabaseUsageIsUnsetWhenNoPostgresPodIsSampled(t *testing.T) {
 }
 
 func TestAuditLogsAreEmptyWhenNothingWasAudited(t *testing.T) {
-	svc, mock := setupAuditTest(t)
-	mock.PodLogs["org-aud-db/aud-db-postgres-1"] = `{"logger":"postgres","msg":"record"}` + "\n"
+	svc, _, mock := setupAuditTest(t)
+	mock.PodLogs[testOpsDBNS+"/"+testOpsDBPostgres+"-1"] = `{"logger":"postgres","msg":"record"}` + "\n"
 
-	logs, err := svc.GetAuditLogs(context.Background(), testAudDB, 100)
+	logs, err := svc.GetAuditLogs(context.Background(), testOpsDB, 100)
 	if err != nil || logs != "" {
 		t.Fatalf("logs = %q, err = %v", logs, err)
 	}
 }
 
 func TestAuditLogsFailWhenThePodLogCannotBeRead(t *testing.T) {
-	svc, _ := setupAuditTest(t)
-	if _, err := svc.GetAuditLogs(context.Background(), testAudDB, 100); err == nil {
+	svc, _, _ := setupAuditTest(t)
+	if _, err := svc.GetAuditLogs(context.Background(), testOpsDB, 100); err == nil {
 		t.Fatal("expected an error")
 	}
 }

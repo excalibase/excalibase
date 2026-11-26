@@ -475,7 +475,9 @@ type Alert struct {
 // --- Audit ---
 
 type AuditConfig struct {
-	Enabled  bool              `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Status is "enabled", "pending" (pgaudit is preloaded, the extension is not created yet) or "disabled".
+	Status   string            `json:"status,omitempty"`
 	LogLevel string            `json:"logLevel,omitempty"`
 	Settings map[string]string `json:"settings,omitempty"`
 }

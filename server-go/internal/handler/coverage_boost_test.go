@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -58,7 +59,7 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
 	backupSvc.SetBackupCredentials(testBackupCredentials(t))
 	perfSvc := service.NewPerformanceService(store, mock)
-	auditSvc := service.NewAuditService(store, mock)
+	auditSvc := service.NewAuditService(store, mock, provSvc)
 	snapshotSvc := service.NewSnapshotService(store, mock, dir)
 	migrationSvc := service.NewMigrationService(store, newFakeVault(), dir)
 	alertSvc := service.NewAlertingService(dir)
@@ -94,7 +95,7 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 			r.Route("/metrics", func(r chi.Router) { metricsH.Routes(r) })
 			r.Route("/backup", func(r chi.Router) { backupH.Routes(r) })
 			r.Route("/performance", func(r chi.Router) { perfH.Routes(r) })
-			r.Route("/audit", func(r chi.Router) { auditH.Routes(r) })
+			r.Route("/audit", func(r chi.Router) { auditH.Routes(r, func(next http.Handler) http.Handler { return next }) })
 			r.Route("/snapshot", func(r chi.Router) { snapshotH.Routes(r) })
 			r.Route("/migrations", func(r chi.Router) { migrationH.Routes(r) })
 		})

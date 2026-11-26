@@ -299,7 +299,9 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if err := a.issueRestoreCredentials(ctx, inst.ProjectID, &target); err != nil {
 		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
 	}
-	err = target.render(inst, recoveryTarget, clusterIdentity{image: image, altNames: altNames, queryStats: a.queryStats})
+	err = target.render(inst, recoveryTarget, clusterIdentity{image: image, altNames: altNames, queryStats: a.queryStats,
+		// The source's database holds the pgaudit extension, so the copy needs the library preloaded.
+		auditLog: inst.Parameters[k8s.AuditLogParameter]})
 	if err != nil {
 		return nil, fmt.Errorf("restore %s at tier %s: %w", inst.ProjectID, plan.Tier, err)
 	}
@@ -378,6 +380,7 @@ type clusterIdentity struct {
 	image      string
 	altNames   []string
 	queryStats bool
+	auditLog   string
 }
 
 // render builds the cluster a new project with the source's settings and the
@@ -397,6 +400,7 @@ func (target *restoreTarget) render(src *domain.DatabaseInstance, recoveryTarget
 		Parameters:        src.Parameters,
 		ServerAltDNSNames: id.altNames,
 		QueryStats:        id.queryStats,
+		AuditLog:          id.auditLog,
 		// The same DocumentDB cluster creation builds: preload, pg_cron and
 		// the gateway plugin are fixed when a cluster is created.
 		DocumentDB:             src.DocumentDB,

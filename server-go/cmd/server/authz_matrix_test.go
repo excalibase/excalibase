@@ -141,7 +141,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		perfHandler:           handler.NewPerformanceHandler(service.NewPerformanceService(instances, mock)),
 		requestMetricsHandler: handler.NewRequestMetricsHandler(service.NewRequestMetricsService(nil, emptyRequestMetrics{}, instances)),
 		queryStatsHandler:     handler.NewQueryStatsHandler(service.NewQueryStatsService(instances, provSvc, nil, features.NewStatic(features.All()...))),
-		auditHandler:          handler.NewAuditHandler(service.NewAuditService(instances, mock)),
+		auditHandler:          handler.NewAuditHandler(service.NewAuditService(instances, mock, provSvc)),
 		snapshotHandler:       handler.NewSnapshotHandler(service.NewSnapshotService(instances, mock, dir)),
 		migrationHandler:      handler.NewMigrationHandler(service.NewMigrationService(instances, nil, dir)),
 		alertHandler:          handler.NewAlertHandler(service.NewAlertingService(dir)),

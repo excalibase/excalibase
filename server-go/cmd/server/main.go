@@ -1792,7 +1792,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	startMySQLBinlogShipping(cfg.Features(), mysqlBinlogShipLock(cfg, sqlStore), mysqlBackups, hostMySQLBackups, store)
 	startMySQLBackupWaitSweep(mysqlBackupWaitLock(cfg, sqlStore), provSvc.MySQLProvisioner(), store)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
-	auditSvc := service.NewAuditService(store, k8sClient)
+	auditSvc := service.NewAuditService(store, k8sClient, provSvc)
 	// Snapshot exports stay Kubernetes-only: no engine for the connector.
 	snapshotSvc := buildSnapshotService(store, k8sClient, cfg.StoragePath, buildDocumentConnector(k8sClient, nil, vc, store))
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
@@ -2280,7 +2280,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			r.Group(func(r chi.Router) {
 				r.Use(dev)
 				r.Use(db)
-				r.Route("/audit", func(r chi.Router) { d.auditHandler.Routes(r) })
+				r.Route("/audit", func(r chi.Router) { d.auditHandler.Routes(r, admin) })
 				r.Route("/migrations", func(r chi.Router) { d.migrationHandler.Routes(r) })
 				r.Route("/permissions", d.permissionHandler.PermissionRoutes)
 				r.Route("/tracked-functions", d.permissionHandler.TrackedFunctionRoutes)

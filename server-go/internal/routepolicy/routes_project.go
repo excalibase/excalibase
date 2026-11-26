@@ -47,7 +47,7 @@ var provisionRows = []Row{
 
 	{Methods: get, Pattern: "/api/provision/{projectId}/audit/config", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, Discloses: NoSecret},
 	{Methods: get, Pattern: "/api/provision/{projectId}/audit/logs", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, Discloses: NoSecret},
-	{Methods: post, Pattern: "/api/provision/{projectId}/audit/enable", Trust: trustNone, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
+	{Methods: post, Pattern: "/api/provision/{projectId}/audit/enable", Trust: trustNone, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "restarts the database to preload pgaudit", Database: true},
 	{Methods: get, Pattern: "/api/provision/{projectId}/migrations/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, MySQLRefusal: MySQLNoMigrations, Discloses: NoSecret},
 	{Methods: post, Pattern: "/api/provision/{projectId}/migrations/", Trust: trustNone, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, MySQLRefusal: MySQLNoMigrations},
 

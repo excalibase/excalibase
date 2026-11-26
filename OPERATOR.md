@@ -1487,3 +1487,9 @@ Off until `FEATURE_SELFHEAL=true` (Helm `env.FEATURE_SELFHEAL`, or `.env` on a s
 - A pause or resume that did not settle tells the customer "we are retrying automatically" instead of asking them to retry.
 
 The purge retry's attempt count lives in the process, so a restart or a new leader delays the alert by at most its limit and never raises a false one.
+
+## Database audit (pgaudit)
+
+`POST /api/provision/{id}/audit/enable` (Admin) turns on pgaudit for a Postgres project on Kubernetes. It **restarts the database**: CloudNativePG preloads the library only once a `pgaudit.log` setting is on the cluster, and changing it rolls the instances (a few seconds on one instance, a switchover on an HA tier). The call answers `202` as soon as the cluster is changed; a background task then waits for the library and creates the extension. Poll `GET /api/provision/{id}/audit/config`: `status` is `pending` while pgaudit is preloaded but the extension is not created yet, and `enabled` (with `enabled: true`) only when both are done. Enabling again while the setting is there writes nothing and finishes a task that was lost, for example by a platform restart.
+
+Body: `{"enabled": true, "settings": {"pgaudit.log": "ddl,write"}}`. The default is `ddl,role,write`; classes are `read, write, function, role, ddl, misc, misc_set, all`. Anything else is a `400`, as is `"enabled": false`: turning audit off is not supported, because the extension's event triggers need the library. Restores and plan rollbacks keep the setting. On a single host the route answers `409`: audit is Kubernetes-only.
