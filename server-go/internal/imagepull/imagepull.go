@@ -122,6 +122,57 @@ func pullOnce(ctx context.Context, engine Engine, ref string) error {
 	return Drain(stream)
 }
 
+// hubPrefixEnv is the variable testcontainers reads to start Docker Hub images from a mirror.
+const hubPrefixEnv = "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX"
+
+var dockerHubHosts = []string{"docker.io/", "index.docker.io/", "registry-1.docker.io/"}
+
+// Mirrored names ref the way testcontainers will once TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX is
+// set: a Docker Hub image under that prefix, without a library/ segment. Any other registry's
+// image, and every image when the variable is empty, keeps its name. Testcontainers does not
+// touch a name that carries docker.io itself, so this does for the pull that precedes it.
+func Mirrored(ref string) string {
+	prefix := strings.TrimRight(os.Getenv(hubPrefixEnv), "/")
+	if prefix == "" {
+		return ref
+	}
+	path, isHub := hubPath(ref)
+	if !isHub {
+		return ref
+	}
+	return prefix + "/" + path
+}
+
+func hubPath(ref string) (string, bool) {
+	for _, host := range dockerHubHosts {
+		if rest, found := strings.CutPrefix(ref, host); found {
+			return strings.TrimPrefix(rest, "library/"), true
+		}
+	}
+	if first, _, hasPath := strings.Cut(ref, "/"); hasPath && (strings.ContainsAny(first, ".:") || first == "localhost") {
+		return "", false
+	}
+	return strings.TrimPrefix(ref, "library/"), true
+}
+
+// taggingEngine is an Engine that can also give an image another name.
+type taggingEngine interface {
+	Engine
+	ImageTag(ctx context.Context, source, target string) error
+}
+
+// keepOriginalName names the mirrored image as the code under test asks for it, so a pull by that
+// name finds it local. A reference with a digest cannot be a tag: its callers use Mirrored.
+func keepOriginalName(ctx context.Context, engine taggingEngine, mirrored, original string) error {
+	if mirrored == original || strings.Contains(original, "@") {
+		return nil
+	}
+	if err := engine.ImageTag(ctx, mirrored, original); err != nil {
+		return fmt.Errorf("tag %s as %s: %w", mirrored, original, err)
+	}
+	return nil
+}
+
 // ryukImage is the reaper container testcontainers starts before the first
 // container of a run; it pulls it through the same path that drops failures.
 const ryukImage = "testcontainers/ryuk:0.13.0"
@@ -149,12 +200,16 @@ func EnsureLocal(ctx context.Context, ref string) error {
 	}
 	if !ryukDisabled(os.Getenv, os.Getenv("HOME")) {
 		ryukOnce.Do(func() {
-			if err := Ensure(ctx, engine, ryukImage, 3, 5*time.Second); err != nil {
+			if err := Ensure(ctx, engine, Mirrored(ryukImage), 3, 5*time.Second); err != nil {
 				log.Printf("imagepull: %v", err)
 			}
 		})
 	}
-	return Ensure(ctx, engine, ref, 3, 5*time.Second)
+	source := Mirrored(ref)
+	if err := Ensure(ctx, engine, source, 3, 5*time.Second); err != nil {
+		return err
+	}
+	return keepOriginalName(ctx, engine, source, ref)
 }
 
 // socketPath is the default daemon socket testcontainers looks for.

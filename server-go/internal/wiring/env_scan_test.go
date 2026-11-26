@@ -21,6 +21,10 @@ var envReadAllowList = map[string]string{
 	// they grow, and a new file there is the intended shape, not an escape.
 	"internal/config/": "the one place settings are loaded",
 
+	// Test-only helpers (EXC-881): they read the testcontainers mirror variables CI sets, to start
+	// images and k3s clusters from the GHCR mirror. Nothing in a running service uses them.
+	"internal/testutil/k3smirror/k3smirror.go": "TESTCONTAINERS_* and mirror login settings for test clusters",
+
 	// Local-development address overrides for a tenant connection. They are
 	// pure tunables — nothing selects a provider or turns a subsystem on —
 	// and each caller reads the same three through projectdb.Overrides.

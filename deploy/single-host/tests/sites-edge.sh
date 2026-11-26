@@ -9,9 +9,13 @@
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# EXC-881: CI pulls Docker Hub images from its mirror (IMAGE_MIRROR); unset, the names are unchanged.
+# shellcheck disable=SC1091
+. "$DIR/../../ci/mirror-images.sh"
 ENGINE=${1:-docker}
 CADDY_IMAGE=$(sed -n 's/^ *image: \(docker.io\/library\/caddy:.*\)$/\1/p' "$DIR/../compose.yaml")
 [ -n "$CADDY_IMAGE" ] || { echo "no Caddy image in compose.yaml" >&2; exit 1; }
+CADDY_IMAGE=$(mirror_ref "$CADDY_IMAGE")
 NET=sites-edge-test-$$
 FAILURES=0
 
@@ -31,9 +35,9 @@ class Stub(http.server.BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers(); self.wfile.write(sys.argv[2].encode())
 http.server.ThreadingHTTPServer(("", int(sys.argv[1])), Stub).serve_forever()'
 $ENGINE run -d --name "$NET-provisioning" --network "$NET" --network-alias provisioning \
-  docker.io/library/python:3.13-alpine python -c "$STUB" 24006 provisioning >/dev/null
+  "$(mirror_ref docker.io/library/python:3.13-alpine)" python -c "$STUB" 24006 provisioning >/dev/null
 $ENGINE run -d --name "$NET-studio" --network "$NET" --network-alias studio \
-  docker.io/library/python:3.13-alpine python -c "$STUB" 80 studio >/dev/null
+  "$(mirror_ref docker.io/library/python:3.13-alpine)" python -c "$STUB" 80 studio >/dev/null
 $ENGINE run -d --name "$NET-edge" --network "$NET" -p 127.0.0.1::443 \
   -e EXCALIBASE_DOMAIN=example.test -e EXCALIBASE_TLS=internal -e STUDIO_ALLOW_CIDRS="0.0.0.0/0 ::/0" \
   -v "$DIR/../edge/Caddyfile:/etc/caddy/Caddyfile:ro" "$CADDY_IMAGE" >/dev/null

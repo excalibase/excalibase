@@ -10,8 +10,11 @@
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# EXC-881: CI pulls Docker Hub images from its mirror (IMAGE_MIRROR); unset, the names are unchanged.
+# shellcheck disable=SC1091
+. "$DIR/../../ci/mirror-images.sh"
 ENGINE=${1:-docker}
-OLD=${HOST_FIREWALL_OLD_IMAGE:-docker.io/excalibase/provisioning:latest}
+OLD=${HOST_FIREWALL_OLD_IMAGE:-$(mirror_ref docker.io/excalibase/provisioning:latest)}
 WORK=$(mktemp -d)
 PROJECT=exc683-gate-$$
 fail() { echo "FAIL: $*" >&2; exit 1; }

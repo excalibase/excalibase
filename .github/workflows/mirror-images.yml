@@ -1,0 +1,78 @@
+name: Mirror images
+
+# EXC-881: CI pulled its third-party images from Docker Hub and hit its pull rate limit, even
+# logged in. This copies every image on the lists into ghcr.io/excalibase/mirror/, keeping the
+# manifest list and the digest, so CI pulls from GHCR. The platform list is the source of truth;
+# the engine repository keeps its own, and both are mirrored here.
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      engine_ref:
+        description: >-
+          Branch or tag of excalibase-graphql whose ci/mirror-images.txt is copied too. An engine PR that
+          adds an image runs this with its branch, so its CI finds the image; the daily run uses main.
+        default: main
+  push:
+    branches: [main]
+    paths:
+      - deploy/ci/mirror-images.txt
+      - deploy/ci/mirror-images.sh
+      - .github/workflows/mirror-images.yml
+
+permissions:
+  contents: read
+  packages: write
+
+# One copy at a time: two runs pushing the same tag would race.
+concurrency:
+  group: mirror-images
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Copy the lists into the mirror
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - name: Crane
+        run: |
+          go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # Trust: the engine list is another repository's file, fetched from a ref a maintainer of this
+      # repository names (dispatch needs write access here). Entries are only ever copied FROM Docker
+      # Hub, so a list can add images to the mirror but cannot put arbitrary content there.
+      - name: Join the platform and engine lists
+        env:
+          ENGINE_REF: ${{ inputs.engine_ref || 'main' }}
+        run: |
+          sh deploy/ci/mirror-images.sh check-ref "$ENGINE_REF"
+          cp deploy/ci/mirror-images.txt "$RUNNER_TEMP/all.txt"
+          # The engine list arrives with the engine's CI change; until then only the platform list is copied.
+          status=$(curl -s -o "$RUNNER_TEMP/engine.txt" -w '%{http_code}' "https://raw.githubusercontent.com/excalibase/excalibase-graphql/$ENGINE_REF/ci/mirror-images.txt")
+          case "$status" in
+            200) cat "$RUNNER_TEMP/engine.txt" >> "$RUNNER_TEMP/all.txt" ;;
+            404) echo "::warning::the engine repository has no ci/mirror-images.txt yet" ;;
+            *) echo "engine list: HTTP $status"; exit 1 ;;
+          esac
+          grep -v '^[[:space:]]*\(#\|$\)' "$RUNNER_TEMP/all.txt" | sort -u > "$RUNNER_TEMP/list.txt"
+          echo "$(wc -l < "$RUNNER_TEMP/list.txt") images to mirror"
+      - name: Log in to ghcr.io and Docker Hub
+        env:
+          REGISTRY_ACTOR: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | crane auth login ghcr.io --username "$REGISTRY_ACTOR" --password-stdin
+          if [ -n "$DOCKERHUB_USERNAME" ]; then
+            printf '%s' "$DOCKERHUB_TOKEN" | crane auth login index.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
+          fi
+      - name: Copy
+        run: sh deploy/ci/mirror-images.sh sync "$RUNNER_TEMP/list.txt"

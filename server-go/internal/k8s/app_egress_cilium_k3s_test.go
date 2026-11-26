@@ -3,6 +3,7 @@
 package k8s
 
 import (
+	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"maps"
 	"net"
@@ -82,7 +83,7 @@ func (lab *egressLab) startCiliumClusterWith(t *testing.T, extra ...testcontaine
 	if err := imagepull.EnsureLocal(lab.ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
 		t.Fatal(err)
 	}
-	container, err := k3s.Run(lab.ctx, "rancher/k3s:v1.31.6-k3s1", options...)
+	container, err := k3s.Run(lab.ctx, "rancher/k3s:v1.31.6-k3s1", append(options, k3smirror.Option())...)
 	// Registered before the error check: a container that failed to become ready still runs.
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {

@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 # EXC-880: every CI shard used to pull the same third-party images itself, so a run of many shards
 # hit the registries' rate limits. One job pulls each image once (with retries), saves them into an
-# artifact, and the shards load that instead.
+# artifact, and the shards load that instead. Since EXC-881 the pull is from the mirror, and a tagged
+# image also keeps its original name, so a pull by code that names the original finds it local.
 #
 #   sh deploy/ci/third-party-images.sh list <set>          print the references of a set
 #   sh deploy/ci/third-party-images.sh save <set> <file>   pull each once, write <file> (tar.gz)
@@ -16,6 +17,9 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+# EXC-881: with IMAGE_MIRROR set (CI) every Docker Hub image is pulled from ghcr.io/excalibase/mirror/.
+# shellcheck disable=SC1091
+. "$ROOT/deploy/ci/mirror-images.sh"
 CATALOG="$ROOT/server-go/internal/config/postgres_catalog.yaml"
 MYSQL_CATALOG="$ROOT/server-go/internal/config/mysql_catalog.yaml"
 COMPOSE="$ROOT/deploy/single-host/compose.yaml"
@@ -35,7 +39,7 @@ list_go_integration() {
 busybox:1.36
 ghcr.io/documentdb/documentdb/documentdb-local:latest
 ghcr.io/project-zot/zot-minimal-linux-amd64:v2.1.22@sha256:27729292c45f1dc0a323b69292d15cc13a5ca4b8bf05f81106e7f89a2b1abd08
-docker.io/grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193
+grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193
 localstack/localstack:3.7
 mysql:8.4
 nats:2.10-alpine
@@ -181,11 +185,19 @@ case "$cmd" in
     out=${3:?usage: save <set> <file>}
     refs=$(refs_of "$set_name")
     [ "$(echo "$refs" | grep -c .)" -ge 1 ] || { echo "too few references for $set_name:" >&2; echo "$refs" >&2; exit 1; }
-    for ref in $refs; do pull_with_retry "$ref" || { echo "could not pull $ref" >&2; exit 1; }; done
+    saved=
+    for ref in $refs; do
+      source=$(mirror_ref "$ref")
+      pull_with_retry "$source" || { echo "could not pull $source" >&2; exit 1; }
+      # A digest reference cannot be a tag; the code that pins one is pointed at the mirror instead.
+      case $ref in *@sha256:*) ;; *) [ "$source" = "$ref" ] || docker tag "$source" "$ref" ;; esac
+      saved="$saved $source"
+      case $ref in *@sha256:*) ;; *) [ "$source" = "$ref" ] || saved="$saved $ref" ;; esac
+    done
     # Not a pipe: dash has no pipefail, so a failed save must stop here, not become a green artifact.
     tar_file=${out%.gz}
     # shellcheck disable=SC2086 # one word per reference
-    docker save -o "$tar_file" $refs
+    docker save -o "$tar_file" $saved
     gzip -1 -f "$tar_file"
     ls -l "$out"
     ;;
@@ -196,15 +208,17 @@ case "$cmd" in
     docker load -i "$tar_file" >/dev/null
     rm -f "$tar_file"
     # `docker save` and `load` drop a name@sha256 reference on every Docker storage driver, so those
-    # always come back unnamed. Their layers are loaded, so this pull only fetches the manifest.
-    # A tagged reference that is missing is a real miss: said out loud, then pulled as before.
+    # always come back unnamed. Their layers are loaded, so this pull only fetches the manifest, from
+    # the mirror. A tagged reference that is missing is a real miss: said out loud, then pulled as before.
     for ref in $(refs_of "$set_name"); do
+      source=$(mirror_ref "$ref")
       case "$ref" in
-        *@sha256:*) pull_with_retry "$ref" || echo "::warning::could not pull $ref; the test will try itself" ;;
+        *@sha256:*) pull_with_retry "$source" || echo "::warning::could not pull $source; the test will try itself" ;;
         *)
           docker image inspect "$ref" >/dev/null 2>&1 && continue
           echo "::warning::$ref not found after load; pulling it"
-          pull_with_retry "$ref" || echo "::warning::could not pull $ref; the test will try itself"
+          pull_with_retry "$source" || { echo "::warning::could not pull $source; the test will try itself"; continue; }
+          [ "$source" = "$ref" ] || docker tag "$source" "$ref"
           ;;
       esac
     done

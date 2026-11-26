@@ -91,6 +91,10 @@ type SchedulerHandles struct {
 }
 
 // Stop cancels the scheduler context and waits for the sweep to exit.
+// It does not wait for invocations already running: they are detached from
+// the sweep so the deadline cannot cancel them, so they end with the process
+// or at their own timeout. A task cut off by process exit stays 'running'
+// and is reclaimed after the claim lease, which runs it again (at-least-once).
 // Safe to call multiple times — repeat calls are no-ops.
 func (h *SchedulerHandles) Stop() {
 	if h == nil || !h.started || h.cancel == nil {
