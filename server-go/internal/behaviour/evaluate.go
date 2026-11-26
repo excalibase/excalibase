@@ -10,6 +10,7 @@ import (
 const (
 	SignalSustainedEgress = "sustained_egress"
 	SignalRelaySymmetry   = "relay_symmetry"
+	SignalRelayDay        = "relay_symmetry_day"
 	SignalVolumeDaily     = "volume_daily"
 	SignalVolume30d       = "volume_30d"
 )
@@ -44,6 +45,7 @@ var evidenceKeys = map[string]bool{
 	"windowMinutes": true, "minutesAbove": true, "activeMinutes": true, "avgTxBps": true, "avgRxBps": true,
 	"percentOfReference": true, "referenceBps": true, "ratio": true, "txBytes": true, "rxBytes": true,
 	"percentOfPeriodReference": true, "periodHours": true, "apps": true,
+	"windowHours": true, "activeHours": true, "floorBps": true,
 }
 
 func evidenceKeysAllowed(evidence map[string]float64) bool {
@@ -58,21 +60,38 @@ func evidenceKeysAllowed(evidence map[string]float64) bool {
 // ValidEvidence says whether every key is one of the fixed numeric ones.
 func ValidEvidence(evidence map[string]float64) bool { return evidenceKeysAllowed(evidence) }
 
+// Observed is what the meter saw of one subject: its recent minutes, its
+// hours over the last day, and its byte totals over 24 hours and 30 days.
+type Observed struct {
+	Minutes []netmeter.Sample
+	Hours   []netmeter.Hourly
+	Totals  Totals
+}
+
 // Evaluate raises the findings for one subject: its recent minutes judged
-// against reference (bytes per second) and its volumes over 24 hours and 30 days.
-func Evaluate(cfg Config, subject Subject, reference float64, minutes []netmeter.Sample, totals Totals) []Finding {
+// against reference (bytes per second), its hours against the absolute floors
+// of its tier, and its volumes over 24 hours and 30 days.
+func Evaluate(cfg Config, subject Subject, reference float64, seen Observed) []Finding {
 	if reference <= 0 {
 		return nil
 	}
+	totals := seen.Totals
 	var findings []Finding
 	for _, check := range []func() *Finding{
-		func() *Finding { return sustainedEgress(cfg, subject, reference, minutes) },
-		func() *Finding { return relaySymmetry(cfg, subject, reference, minutes) },
+		func() *Finding { return sustainedEgress(cfg, subject, reference, seen.Minutes) },
+		func() *Finding { return relaySymmetry(cfg, subject, reference, seen.Minutes) },
+		func() *Finding { return relayDay(cfg, subject, seen.Hours) },
 		func() *Finding {
-			return volume(cfg, subject, reference, SignalVolumeDaily, 24, cfg.DailyVolumePercent, secondsPerDay, totals.TxDay, totals.RxDay)
+			return volume(subject, reference, volumeWindow{
+				signal: SignalVolumeDaily, hours: 24, linePercent: cfg.DailyVolumePercent, seconds: secondsPerDay,
+				floorBytes: cfg.DailyFloorBytes(subject.Tier), tx: totals.TxDay, rx: totals.RxDay,
+			})
 		},
 		func() *Finding {
-			return volume(cfg, subject, reference, SignalVolume30d, 24*daysPerMonth, cfg.MonthlyVolumePercent, secondsPerDay*daysPerMonth, totals.Tx30d, totals.Rx30d)
+			return volume(subject, reference, volumeWindow{
+				signal: SignalVolume30d, hours: 24 * daysPerMonth, linePercent: cfg.MonthlyVolumePercent,
+				seconds: secondsPerDay * daysPerMonth, tx: totals.Tx30d, rx: totals.Rx30d,
+			})
 		},
 	} {
 		if finding := check(); finding != nil {
@@ -137,14 +156,63 @@ func relaySymmetry(cfg Config, subject Subject, reference float64, minutes []net
 	}}
 }
 
-func volume(cfg Config, subject Subject, reference float64, signal string, hours, linePercent, seconds, tx, rx float64) *Finding {
-	full := reference * seconds
-	percent := tx / full * 100
-	if percent < linePercent {
+// volumeWindow is one volume check: the bytes sent and received over a period,
+// the share of the reference that is the line, and an absolute floor in bytes
+// (0 for none) that flags the subject on its own when lower than that line.
+type volumeWindow struct {
+	signal      string
+	hours       float64
+	linePercent float64
+	seconds     float64
+	floorBytes  float64
+	tx, rx      float64
+}
+
+// relayDay is the all-day relay signal: an absolute rate, not a share of the
+// reference. A relay that stays far under the tier's line (the real incident
+// moved under 1.5 GB in three days) still sends and receives about the same
+// amount, hour after hour. Only hours at or above the tier's floor count, and
+// the ratio is judged over those hours alone, so idle hours do not hide it.
+func relayDay(cfg Config, subject Subject, hours []netmeter.Hourly) *Finding {
+	floor := cfg.SymmetryFloorBps(subject.Tier)
+	if floor <= 0 {
 		return nil
 	}
-	return &Finding{Subject: subject, Signal: signal, Magnitude: percent, Evidence: map[string]float64{
-		"periodHours": hours, "txBytes": tx, "rxBytes": rx, "percentOfPeriodReference": percent, "referenceBps": reference,
+	var active int
+	var tx, rx float64
+	for _, hour := range hours {
+		if hour.AvgTxBps >= floor {
+			active++
+			tx += hour.AvgTxBps
+			rx += hour.AvgRxBps
+		}
+	}
+	if active < cfg.SymmetryDayHours || tx == 0 {
+		return nil
+	}
+	ratio := rx / tx
+	if ratio < cfg.SymmetryLow || ratio > cfg.SymmetryHigh {
+		return nil
+	}
+	avgTx := mean(tx, active)
+	return &Finding{Subject: subject, Signal: SignalRelayDay, Magnitude: avgTx / floor * 100, Evidence: map[string]float64{
+		"windowHours": float64(len(hours)), "activeHours": float64(active), "ratio": ratio,
+		"avgTxBps": avgTx, "avgRxBps": mean(rx, active), "floorBps": floor,
+	}}
+}
+
+func volume(subject Subject, reference float64, window volumeWindow) *Finding {
+	full := reference * window.seconds
+	percent := window.tx / full * 100
+	line := full * window.linePercent / 100
+	if window.floorBytes > 0 {
+		line = min(line, window.floorBytes)
+	}
+	if window.tx < line {
+		return nil
+	}
+	return &Finding{Subject: subject, Signal: window.signal, Magnitude: percent, Evidence: map[string]float64{
+		"periodHours": window.hours, "txBytes": window.tx, "rxBytes": window.rx, "percentOfPeriodReference": percent, "referenceBps": reference,
 	}}
 }
 
@@ -173,17 +241,26 @@ func SumByTimestamp(perApp [][]netmeter.Sample) []netmeter.Sample {
 	return out
 }
 
-// OwnerReference is what an owner as a whole is judged against: its highest
-// tier's reference, not the sum, so splitting a workload over many apps does
-// not buy more allowance. With no live app it is the default.
-func OwnerReference(referenceMbps map[string]float64, defaultMbps float64, tiers []string) float64 {
-	cfg := Config{ReferenceMbps: referenceMbps, DefaultReferenceMbps: defaultMbps}
-	best := 0.0
-	for _, tier := range tiers {
-		best = max(best, cfg.Reference(tier))
+// SumHours adds several apps' hours together, hour by hour, oldest first.
+func SumHours(perApp [][]netmeter.Hourly) []netmeter.Hourly {
+	byHour := map[int64]*netmeter.Hourly{}
+	for _, hours := range perApp {
+		for _, hour := range hours {
+			key := hour.Hour.Unix()
+			total := byHour[key]
+			if total == nil {
+				total = &netmeter.Hourly{Hour: hour.Hour}
+				byHour[key] = total
+			}
+			total.AvgRxBps += hour.AvgRxBps
+			total.AvgTxBps += hour.AvgTxBps
+			total.Samples += hour.Samples
+		}
 	}
-	if best == 0 {
-		return defaultMbps * bytesPerMbit
+	out := make([]netmeter.Hourly, 0, len(byHour))
+	for _, total := range byHour {
+		out = append(out, *total)
 	}
-	return best
+	sort.Slice(out, func(i, j int) bool { return out[i].Hour.Before(out[j].Hour) })
+	return out
 }

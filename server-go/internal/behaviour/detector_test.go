@@ -10,10 +10,17 @@ import (
 )
 
 type fakeHistory struct {
-	minutes []netmeter.Sample
-	volumes []AppVolume
-	err     error
-	since   time.Time
+	minutes    []netmeter.Sample
+	hours      []netmeter.Hourly
+	volumes    []AppVolume
+	err        error
+	since      time.Time
+	hoursSince time.Time
+}
+
+func (f *fakeHistory) RecentNetHours(_ context.Context, since time.Time) ([]netmeter.Hourly, error) {
+	f.hoursSince = since
+	return f.hours, f.err
 }
 
 func (f *fakeHistory) RecentNetMinutes(_ context.Context, since time.Time) ([]netmeter.Sample, error) {
@@ -190,4 +197,161 @@ func TestDetector_NeverActsOnAnApp(t *testing.T) {
 	var _ History = (*fakeHistory)(nil)
 	var _ Directory = fakeDirectory{}
 	var _ Reviews = (*recordedReviews)(nil)
+}
+
+// stamped marks minutes with the owner and tier the meter stored with them.
+func stamped(minutes []netmeter.Sample, owner, tier string) []netmeter.Sample {
+	for i := range minutes {
+		minutes[i].OwnerID, minutes[i].Tier = owner, tier
+	}
+	return minutes
+}
+
+func ownerFindingsOf(findings []Finding) []Finding {
+	var out []Finding
+	for _, f := range findings {
+		if f.AppID == "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func TestDetector_AnOwnerIsJudgedPerTierBucket(t *testing.T) {
+	projects, apps := ownerProjects()
+	projects["p2"] = Subject{OwnerID: "u1", OrgID: "o1", ProjectID: "p2", ProjectName: "two", Tier: "standard"}
+	var minutes []netmeter.Sample
+	// Five Free apps at 25% of one Free allowance each: 125% together.
+	for _, id := range []string{"f1", "f2", "f3", "f4", "f5"} {
+		minutes = append(minutes, stamped(minutesFor("p1", id, 25, 0.1), "u1", "free")...)
+	}
+	// One Standard app at 5% of a Free allowance, which is nothing against a Standard one.
+	minutes = append(minutes, stamped(minutesFor("p2", "s1", 5, 0.1), "u1", "standard")...)
+	reviews := &recordedReviews{}
+	clock := now
+	newDetector(&fakeHistory{minutes: minutes}, fakeDirectory{apps: apps, projects: projects}, reviews, &clock).Sample(context.Background())
+	got := ownerFindingsOf(reviews.findings)
+	if len(got) != 1 || got[0].Tier != "free" || got[0].Signal != SignalSustainedEgress || got[0].Evidence["apps"] != 5 {
+		t.Fatalf("the Free bucket (125%% of the Free reference) is flagged on its own; the Standard app does not lift it: %+v", got)
+	}
+}
+
+func TestDetector_AnOwnersMinutesSurviveTheProjectBeingDeleted(t *testing.T) {
+	var minutes []netmeter.Sample
+	minutes = append(minutes, stamped(minutesFor("p-gone-1", "a", 90, 0.1), "u9", "free")...)
+	reviews := &recordedReviews{}
+	clock := now
+	// The directory no longer has the project, or any app of it.
+	newDetector(&fakeHistory{minutes: minutes}, fakeDirectory{projects: map[string]Subject{}}, reviews, &clock).Sample(context.Background())
+	got := ownerFindingsOf(reviews.findings)
+	if len(got) != 1 || got[0].OwnerID != "u9" || got[0].Tier != "free" {
+		t.Fatalf("the owner and tier stored with the minutes attribute them without the directory: %+v", reviews.findings)
+	}
+}
+
+func TestDetector_MinutesWithoutASnapshotFallBackToTheDirectoryAndUnknownOnesAreDropped(t *testing.T) {
+	projects, apps := ownerProjects()
+	minutes := append(minutesFor("p3", "d", 90, 0.1), minutesFor("p-nobody", "x", 90, 0.1)...)
+	reviews := &recordedReviews{}
+	clock := now
+	newDetector(&fakeHistory{minutes: minutes}, fakeDirectory{apps: apps, projects: projects}, reviews, &clock).Sample(context.Background())
+	got := ownerFindingsOf(reviews.findings)
+	if len(got) != 1 || got[0].OwnerID != "u2" {
+		t.Fatalf("p3 is u2's through the directory; p-nobody belongs to nobody we know: %+v", got)
+	}
+}
+
+// One app that is in the minute series and in the totals is one app: its
+// bytes are counted once, not once per source.
+func TestDetector_AnAppInTheSeriesAndTheTotalsIsCountedOnce(t *testing.T) {
+	projects, apps := ownerProjects()
+	day := freeRef * 86400
+	history := &fakeHistory{
+		minutes: minutesFor("p3", "d", 5, 1),
+		volumes: []AppVolume{{ProjectID: "p3", AppID: "d", Totals: Totals{TxDay: day * 0.20}}},
+	}
+	reviews := &recordedReviews{}
+	clock := now
+	newDetector(history, fakeDirectory{apps: apps, projects: projects}, reviews, &clock).Sample(context.Background())
+	if len(reviews.findings) != 0 {
+		t.Fatalf("20%% of a day counted once is under the 30%% line, double counting would flag it: %+v", reviews.findings)
+	}
+}
+
+func TestDetector_ReadsTheLastDayOfHoursAndFlagsAnAllDayRelay(t *testing.T) {
+	projects, apps := ownerProjects()
+	hours := hoursOf(firstHours(6), 10.5*kb, 10.5*kb)
+	for i := range hours {
+		hours[i].ProjectID, hours[i].AppID, hours[i].OwnerID, hours[i].Tier = "p3", "d", "u2", "free"
+	}
+	history := &fakeHistory{hours: hours}
+	reviews := &recordedReviews{}
+	clock := now
+	cfg := DefaultConfig()
+	detector := NewDetector(DetectorDeps{History: history, Directory: fakeDirectory{apps: apps, projects: projects}, Reviews: reviews}, cfg)
+	detector.now = func() time.Time { return clock }
+	detector.Sample(context.Background())
+	if history.hoursSince != now.Add(-24*time.Hour) {
+		t.Fatalf("hours since %v", history.hoursSince)
+	}
+	var appLevel, ownerLevel int
+	for _, f := range reviews.findings {
+		if f.Signal != SignalRelayDay {
+			continue
+		}
+		if f.AppID == "d" {
+			appLevel++
+		}
+		if f.AppID == "" && f.OwnerID == "u2" {
+			ownerLevel++
+		}
+	}
+	if appLevel != 1 || ownerLevel != 1 {
+		t.Fatalf("app level %d owner level %d: %+v", appLevel, ownerLevel, reviews.findings)
+	}
+}
+
+func TestDetector_HoursAloneCarryTheSnapshotToo(t *testing.T) {
+	hours := hoursOf(firstHours(6), 10.5*kb, 10.5*kb)
+	for i := range hours {
+		hours[i].ProjectID, hours[i].AppID, hours[i].OwnerID, hours[i].Tier = "p-gone", "d", "u9", "free"
+	}
+	reviews := &recordedReviews{}
+	clock := now
+	detector := NewDetector(DetectorDeps{History: &fakeHistory{hours: hours}, Directory: fakeDirectory{projects: map[string]Subject{}}, Reviews: reviews}, DefaultConfig())
+	detector.now = func() time.Time { return clock }
+	detector.Sample(context.Background())
+	got := ownerFindingsOf(reviews.findings)
+	if len(got) != 1 || got[0].OwnerID != "u9" || got[0].Signal != SignalRelayDay {
+		t.Fatalf("findings = %+v", reviews.findings)
+	}
+}
+
+func TestDetector_ASnapshotWithoutATierTakesTheDirectorysTierInLowerCase(t *testing.T) {
+	projects := map[string]Subject{"p1": {OwnerID: "u1", ProjectID: "p1", Tier: "FREE"}}
+	minutes := stamped(minutesFor("p1", "a", 90, 0.1), "u1", "")
+	reviews := &recordedReviews{}
+	clock := now
+	newDetector(&fakeHistory{minutes: minutes}, fakeDirectory{projects: projects}, reviews, &clock).Sample(context.Background())
+	got := ownerFindingsOf(reviews.findings)
+	if len(got) != 1 || got[0].Tier != "free" {
+		t.Fatalf("the Free reference applies, so 90%% of it is flagged on the free bucket: %+v", got)
+	}
+	projects["p1"] = Subject{OwnerID: "u1", ProjectID: "p1", Tier: "standard"}
+	reviews2 := &recordedReviews{}
+	newDetector(&fakeHistory{minutes: stamped(minutesFor("p1", "a", 90, 0.1), "u1", "")}, fakeDirectory{projects: projects}, reviews2, &clock).Sample(context.Background())
+	if got := ownerFindingsOf(reviews2.findings); len(got) != 0 {
+		t.Fatalf("90%% of the Free reference is 9%% of the Standard one: %+v", got)
+	}
+}
+
+func TestDetector_AnUnstampedProjectsDirectoryTierIsLowerCased(t *testing.T) {
+	projects := map[string]Subject{"p1": {OwnerID: "u1", ProjectID: "p1", Tier: "FREE"}}
+	reviews := &recordedReviews{}
+	clock := now
+	newDetector(&fakeHistory{minutes: minutesFor("p1", "a", 90, 0.1)}, fakeDirectory{projects: projects}, reviews, &clock).Sample(context.Background())
+	got := ownerFindingsOf(reviews.findings)
+	if len(got) != 1 || got[0].Tier != "free" {
+		t.Fatalf("findings = %+v", got)
+	}
 }

@@ -1,3 +1,12 @@
+-- The meter stamps each minute with the owner and tier its project had at the
+-- time, so the history outlives a deleted project. Rows from before this
+-- carry no owner and are attributed through the live directory while they
+-- last. No backfill: the signal is in shadow mode behind its flag.
+ALTER TABLE app_net_samples ADD COLUMN IF NOT EXISTS owner_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_net_samples ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_net_hourly ADD COLUMN IF NOT EXISTS owner_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_net_hourly ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT '';
+
 -- Behaviour review (EXC-844): what the network meter's findings leave for a
 -- person to look at. Nothing here references an app, a project, an org or a
 -- user: each row snapshots the ids and names it was made with, so the evidence
@@ -12,6 +21,8 @@ CREATE TABLE IF NOT EXISTS abuse_review (
     app_id TEXT NOT NULL DEFAULT '',
     app_name TEXT NOT NULL DEFAULT '',
     tier TEXT NOT NULL DEFAULT '',
+    -- The tier an owner-level finding was judged on (empty for an app's finding): an owner is judged once per tier.
+    bucket TEXT NOT NULL DEFAULT '',
     signal TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'dismissed', 'actioned')),
     first_seen TIMESTAMPTZ NOT NULL,
@@ -24,8 +35,8 @@ CREATE TABLE IF NOT EXISTS abuse_review (
     mute_until TIMESTAMPTZ
 );
 
--- One open review per owner, app and signal; repeats update it.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_abuse_review_open ON abuse_review(owner_id, app_id, signal) WHERE status = 'open';
+-- One open review per owner, app, tier bucket and signal; repeats update it.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_abuse_review_open ON abuse_review(owner_id, app_id, bucket, signal) WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS idx_abuse_review_status_seen ON abuse_review(status, last_seen DESC);
 -- The latest dismissal of a key, for the mute rule.
-CREATE INDEX IF NOT EXISTS idx_abuse_review_key_dismissed ON abuse_review(owner_id, app_id, signal, dismissed_at DESC) WHERE status = 'dismissed';
+CREATE INDEX IF NOT EXISTS idx_abuse_review_key_dismissed ON abuse_review(owner_id, app_id, bucket, signal, dismissed_at DESC) WHERE status = 'dismissed';

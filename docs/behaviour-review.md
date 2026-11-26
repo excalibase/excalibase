@@ -20,17 +20,58 @@ these are the defaults.
 | Signal | Raised when |
 |---|---|
 | `sustained_egress` | sent bytes per second are at least 80 % of the reference in at least 45 of the last 60 minutes |
-| `relay_symmetry` | in at least 45 of the last 60 minutes the app sent at least 25 % of the reference, and over those minutes received between 0.6 and 1.6 times what it sent (a relay hands on what it takes in; a website is send-heavy, an uploader or downloader is receive-heavy) |
-| `volume_daily` | bytes sent in 24 hours are at least 30 % of what the reference rate would send in a day |
+| `relay_symmetry` | in at least 45 of the last 60 minutes the app sent at least 25 % of the reference, and over those minutes received between 0.5 and 2 times what it sent (a relay hands on what it takes in; a website is send-heavy, an uploader or downloader is receive-heavy) |
+| `relay_symmetry_day` | in at least 6 of the last 24 hours the app sent at least 10 KB/s on average, and over those hours received between 0.5 and 2 times what it sent. The rate is absolute, it does not scale with the reference, and only Free has one by default |
+| `volume_daily` | bytes sent in 24 hours are at least 30 % of what the reference rate would send in a day, or at least the tier's daily floor (3 GB for Free, no floor for the other tiers) if that is lower |
 | `volume_30d` | bytes sent in 30 days are at least 20 % of what the reference rate would send in 30 days |
 
 Each signal is evaluated for every app, and again for the owner of the apps as
-a whole: the owner's minutes are added together, and the owner is judged
-against its highest tier's reference, not the sum, so splitting a workload over
-several apps does not buy more allowance. The owner total also counts deleted
-apps of projects that still exist, so deleting and recreating an app does not
-reset the evidence. A project that was deleted can no longer be attributed to
-an owner.
+a whole, once per tier: an owner's Free apps are added together and judged
+against the Free reference, its Standard apps against the Standard one, so a
+single Standard app does not raise the allowance of a dozen Free ones. Splitting
+a workload over several apps does not buy more allowance either.
+
+The meter writes the owner and tier on every minute when it takes it, and the
+hourly rollups keep them, so the owner's evidence does not depend on the
+project or app still existing: deleting and recreating a project or an app does
+not reset it. Rows written before this snapshot existed have no owner and are
+attributed through the live project list while they last; traffic of a deleted
+project that has neither is not attributed.
+
+## What the absolute floors are for
+
+The reference-scaled signals only see what is large next to the tier's line. On
+Free (10 Mbit/s) that means nothing under about 2 Mbit/s is flagged, and the
+disguised proxies seen in production moved far less: under 1.5 GB in about
+three days, a few KB/s. The two absolute floors do not scale with the reference
+and are set per tier:
+
+- `relay_symmetry_day` looks at the last 24 hours as hourly averages. An hour
+  counts when the app sent at least the floor (10 KB/s for Free); the signal
+  needs 6 such hours, and judges the receive/send ratio over those hours alone,
+  so idle hours do not hide a relay that only works part of the day.
+- the daily floor flags a few GB sent in 24 hours however far under the
+  reference line that is. 3 GB a day is about 2.8 % of what Free's reference
+  would carry.
+
+A steady 2 Mbit/s each way is caught by both. A chat app (about 1 KB/s each way)
+or a small API (a few KB/s out, less in) is below the rate floor, and a busy
+hour of an API is not a relay.
+
+What this does not do: a relay quieter than the floor, or one that stays under
+the daily floor and spreads over fewer than 6 hours, is not seen by traffic
+volume at all. Low-volume relays are mainly caught by the connection signals,
+which look at what the traffic does rather than how much there is: long-lived
+sessions at the edge (HAProxy session duration, phase P2b) and one app talking
+to many distinct peers (Hubble fan-out, phase P5). Volume review is the net;
+those are the tools for the small fish.
+
+Padding: a relay can add dummy traffic in one direction to push its ratio out
+of the band. The band is wide (0.5 to 2), the all-day signal judges it over
+hours, and padding costs the operator bandwidth that makes `sustained_egress`
+and the volume signals more likely. It can still be evaded by someone who
+shapes both directions on purpose; that is what the connection signals and a
+person's review are for.
 
 A quiet 1:1 connection such as a chat WebSocket is below the volume floor, a
 batch job's short burst is below the minutes needed, and send-heavy or
@@ -49,7 +90,10 @@ Reference rates (Mbit/s) default to Free 10, Standard 100, Enterprise 1000, and
 | `BEHAVIOUR_WINDOW_MINUTES` | 60 |
 | `BEHAVIOUR_SUSTAINED_PERCENT` | 80 |
 | `BEHAVIOUR_SUSTAINED_MINUTES` | 45 |
-| `BEHAVIOUR_SYMMETRY_LOW`, `BEHAVIOUR_SYMMETRY_HIGH` | 0.6, 1.6 |
+| `BEHAVIOUR_SYMMETRY_LOW`, `BEHAVIOUR_SYMMETRY_HIGH` | 0.5, 2 |
+| `BEHAVIOUR_SYMMETRY_FLOOR_KBPS` | `free=10` (a tier not named has no all-day relay signal; `=0` clears one) |
+| `BEHAVIOUR_SYMMETRY_DAY_HOURS` | 6 |
+| `BEHAVIOUR_DAILY_FLOOR_GB` | `free=3` (a tier not named has no floor) |
 | `BEHAVIOUR_SYMMETRY_MIN_PERCENT` | 25 |
 | `BEHAVIOUR_DAILY_VOLUME_PERCENT` | 30 |
 | `BEHAVIOUR_MONTHLY_VOLUME_PERCENT` | 20 |
@@ -60,13 +104,17 @@ Reference rates (Mbit/s) default to Free 10, Standard 100, Enterprise 1000, and
 | `BEHAVIOUR_GROWTH_FACTOR` | 2 |
 | `BEHAVIOUR_DISMISSED_RETENTION_DAYS` | 180 |
 
-A value that is not a positive number, a symmetry band that is empty, or a
-sustained-minutes count larger than the window is logged and the default is
-kept.
+A setting that is set but unusable (not a positive number, a tier pair that is
+malformed, an empty symmetry band, a sustained-minutes count larger than the
+window, more than 24 day-hours) stops the boot with an error naming the
+variable, while `FEATURE_BEHAVIOURREVIEW` is on. There is no fall-back to the
+default: a threshold the operator did not mean is worse than a stopped boot.
+With the flag off the settings are not checked.
 
 ## What a review holds
 
-One row per owner, app and signal in `abuse_review`:
+One row per owner, app, signal and, for an owner-level finding, tier in
+`abuse_review`:
 
 - the snapshot taken when it was made: owner, org, project and app ids and
   names, and the tier. Nothing references an app, project or account, so the
@@ -78,7 +126,7 @@ One row per owner, app and signal in `abuse_review`:
   refuses any other key.
 
 A finding that repeats updates the open row. Dismissing a review mutes its
-owner, app and signal for 14 days; a finding in that time opens a new review
+owner, app, tier bucket and signal for 14 days; a finding in that time opens a new review
 only if it has grown to twice the peak the dismissed one had. After the mute
 any finding opens a new review. Dismissed reviews are deleted after 180 days;
 open ones are kept, and so are ones marked actioned.

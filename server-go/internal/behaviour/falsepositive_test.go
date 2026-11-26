@@ -23,7 +23,7 @@ func TestEvaluate_OrdinaryAppsAreNotFlagged(t *testing.T) {
 		"an idle app":                                              series(60, 0, 0),
 	}
 	for name, minutes := range cases {
-		if got := Evaluate(cfg, app("free"), freeRef, minutes, Totals{TxDay: freeRef * 86400 * 0.05, Tx30d: freeRef * 86400 * 30 * 0.02}); len(got) != 0 {
+		if got := Evaluate(cfg, app("free"), freeRef, Observed{Minutes: minutes, Totals: Totals{TxDay: freeRef * 86400 * 0.05, Tx30d: freeRef * 86400 * 30 * 0.02}}); len(got) != 0 {
 			t.Errorf("%s was flagged: %+v", name, got)
 		}
 	}
@@ -42,7 +42,7 @@ func TestEvaluate_TheKnownIncidentShapesAreFlagged(t *testing.T) {
 		"hy2x: tx heavy at 95%, still sustained":               {series(60, 95, 0.3), SignalSustainedEgress},
 	}
 	for name, tc := range cases {
-		if got := signals(Evaluate(cfg, app("free"), freeRef, tc.minutes, Totals{})); got[tc.want].Signal == "" {
+		if got := signals(Evaluate(cfg, app("free"), freeRef, Observed{Minutes: tc.minutes, Totals: Totals{}})); got[tc.want].Signal == "" {
 			t.Errorf("%s: %s not raised: %+v", name, tc.want, got)
 		}
 	}

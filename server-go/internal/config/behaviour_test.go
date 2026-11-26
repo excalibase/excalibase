@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,47 +60,68 @@ func TestLoad_BehaviourSettingsComeFromTheEnvironment(t *testing.T) {
 	}
 }
 
-func TestLoad_ABadBehaviourSettingKeepsItsDefaultNotZero(t *testing.T) {
-	for name, value := range map[string]string{
+// A typo in a threshold must stop the boot while the flag is on: falling back to a
+// default would hide the mistake, and the default may not be what the operator meant.
+func TestValidate_ABadBehaviourSettingFailsBootWhileTheFlagIsOn(t *testing.T) {
+	bad := map[string]string{
 		"BEHAVIOUR_SUSTAINED_PERCENT": "abc", "BEHAVIOUR_SUSTAINED_MINUTES": "0", "BEHAVIOUR_WINDOW_MINUTES": "-5",
 		"BEHAVIOUR_EVAL_MINUTES": "0", "BEHAVIOUR_GROWTH_FACTOR": "0.5", "BEHAVIOUR_TIER_MBPS": "free=fast",
+		"BEHAVIOUR_SYMMETRY_FLOOR_KBPS": "free=lots", "BEHAVIOUR_DAILY_FLOOR_GB": "free", "BEHAVIOUR_SYMMETRY_DAY_HOURS": "25",
+		"BEHAVIOUR_SYMMETRY_MIN_PERCENT": "x", "BEHAVIOUR_DAILY_VOLUME_PERCENT": "0", "BEHAVIOUR_MUTE_DAYS": "1.5",
+	}
+	for name, value := range bad {
+		clearBehaviourEnv(t)
+		t.Setenv("FEATURE_BEHAVIOURREVIEW", "true")
+		t.Setenv(name, value)
+		err := Load().Validate()
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s=%q: Validate() = %v, want an error naming the variable", name, value, err)
+		}
+		t.Setenv("FEATURE_BEHAVIOURREVIEW", "")
+		if err := Load().Validate(); err != nil {
+			t.Errorf("%s=%q with the flag off must not stop the boot: %v", name, value, err)
+		}
+	}
+}
+
+func TestValidate_IncoherentBehaviourSettingsFailBootWhileTheFlagIsOn(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"a backwards symmetry band":                  {"BEHAVIOUR_SYMMETRY_LOW": "2", "BEHAVIOUR_SYMMETRY_HIGH": "1"},
+		"more sustained minutes than the window":     {"BEHAVIOUR_WINDOW_MINUTES": "30", "BEHAVIOUR_SUSTAINED_MINUTES": "45"},
+		"a tier reference of zero":                   {"BEHAVIOUR_TIER_MBPS": "free=0"},
+		"a tier pair with no name":                   {"BEHAVIOUR_TIER_MBPS": "=10"},
+		"a day-hours count above the hours in a day": {"BEHAVIOUR_SYMMETRY_DAY_HOURS": "30"},
 	} {
 		clearBehaviourEnv(t)
-		t.Setenv(name, value)
-		got, want := Load().Behaviour, behaviour.DefaultConfig()
-		if got.SustainedPercent != want.SustainedPercent || got.SustainedMinutes != want.SustainedMinutes || got.WindowMinutes != want.WindowMinutes ||
-			got.EvalEvery != want.EvalEvery || got.GrowthFactor != want.GrowthFactor || got.ReferenceMbps["free"] != want.ReferenceMbps["free"] {
-			t.Errorf("%s=%q: %+v", name, value, got)
+		t.Setenv("FEATURE_BEHAVIOURREVIEW", "true")
+		for k, v := range env {
+			t.Setenv(k, v)
+		}
+		if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "BEHAVIOUR_") {
+			t.Errorf("%s: Validate() = %v", name, err)
 		}
 	}
 }
 
-func TestLoad_ASymmetryBandThatIsBackwardsFallsBackAsAPair(t *testing.T) {
+func TestValidate_GoodBehaviourSettingsPassWithTheFlagOn(t *testing.T) {
 	clearBehaviourEnv(t)
-	t.Setenv("BEHAVIOUR_SYMMETRY_LOW", "2")
-	t.Setenv("BEHAVIOUR_SYMMETRY_HIGH", "1")
-	got, want := Load().Behaviour, behaviour.DefaultConfig()
-	if got.SymmetryLow != want.SymmetryLow || got.SymmetryHigh != want.SymmetryHigh {
-		t.Errorf("band = %v..%v", got.SymmetryLow, got.SymmetryHigh)
+	t.Setenv("FEATURE_BEHAVIOURREVIEW", "true")
+	t.Setenv("BEHAVIOUR_SYMMETRY_FLOOR_KBPS", "free=15,standard=0")
+	t.Setenv("BEHAVIOUR_DAILY_FLOOR_GB", "free=2.5")
+	t.Setenv("BEHAVIOUR_SYMMETRY_DAY_HOURS", "8")
+	if err := Load().Validate(); err != nil {
+		t.Fatal(err)
+	}
+	got := Load().Behaviour
+	if got.SymmetryFloorKBps["free"] != 15 || got.SymmetryFloorKBps["standard"] != 0 || got.DailyFloorGB["free"] != 2.5 || got.SymmetryDayHours != 8 {
+		t.Errorf("settings = %+v", got)
 	}
 }
 
-func TestLoad_ASustainedMinutesCountLargerThanTheWindowIsRefused(t *testing.T) {
+func TestLoad_TheAbsoluteFloorsHaveDocumentedDefaults(t *testing.T) {
 	clearBehaviourEnv(t)
-	t.Setenv("BEHAVIOUR_WINDOW_MINUTES", "30")
-	t.Setenv("BEHAVIOUR_SUSTAINED_MINUTES", "45")
-	got, want := Load().Behaviour, behaviour.DefaultConfig()
-	if got.WindowMinutes != want.WindowMinutes || got.SustainedMinutes != want.SustainedMinutes {
-		t.Errorf("a signal that could never fire was accepted: %d of %d", got.SustainedMinutes, got.WindowMinutes)
-	}
-}
-
-func TestLoad_ATierReferenceOfZeroOrLessIsRefused(t *testing.T) {
-	for _, value := range []string{"free=0", "free=-5", "free=10,standard=0", "=10", "free", ""} {
-		clearBehaviourEnv(t)
-		t.Setenv("BEHAVIOUR_TIER_MBPS", value)
-		if got := Load().Behaviour.ReferenceMbps; got["free"] != 10 || got["standard"] != 100 {
-			t.Errorf("BEHAVIOUR_TIER_MBPS=%q: %+v", value, got)
-		}
+	got := Load().Behaviour
+	if got.SymmetryFloorKBps["free"] != 10 || got.SymmetryDayHours != 6 || got.DailyFloorGB["free"] != 3 || got.SymmetryLow != 0.5 || got.SymmetryHigh != 2 {
+		t.Errorf("defaults = %+v", got)
 	}
 }

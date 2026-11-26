@@ -37,6 +37,10 @@ type Sample struct {
 	TxBps     float64
 	// MaxInstanceTxBps is the busiest single instance, which a per-pod cap is judged against.
 	MaxInstanceTxBps float64
+	// OwnerID and Tier are who owned the project and its tier when the minute was taken, so the history
+	// outlives the project's deletion. Empty when the meter could not say.
+	OwnerID string
+	Tier    string
 }
 
 // Aggregate adds the instances of each app together, ordered by project then app.
@@ -82,4 +86,7 @@ type Hourly struct {
 	AvgTxBps         float64
 	MaxTxBps         float64
 	MaxInstanceTxBps float64
+	// OwnerID and Tier are the snapshot carried by the hour's minutes.
+	OwnerID string
+	Tier    string
 }

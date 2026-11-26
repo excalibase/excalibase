@@ -45,5 +45,7 @@ type Review struct {
 // AppVolume is one app's bytes over the last 24 hours and 30 days.
 type AppVolume struct {
 	ProjectID, AppID string
+	// OwnerID and Tier are the snapshot taken with the traffic; empty when it predates the snapshot.
+	OwnerID, Tier string
 	Totals
 }

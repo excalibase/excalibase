@@ -145,6 +145,8 @@ type AppConfig struct {
 	NetMeter NetMeter
 	// Behaviour holds the thresholds of behaviour review (EXC-844).
 	Behaviour behaviour.Config
+	// BehaviourErr is what is wrong with the BEHAVIOUR_* settings; Validate refuses it while the flag is on.
+	BehaviourErr error
 	// HostLogs is a single host's stored log search (EXC-672).
 	HostLogs HostLogs
 
@@ -472,6 +474,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateFunctionEgress(); err != nil {
 		return err
 	}
+	if err := c.validateBehaviour(); err != nil {
+		return err
+	}
 	if err := c.validateAppLocalRegistries(); err != nil {
 		return err
 	}
@@ -498,6 +503,7 @@ func (c AppConfig) Validate() error {
 
 func Load() AppConfig {
 	cfg := load()
+	cfg.Behaviour, cfg.BehaviourErr = loadBehaviour()
 	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
 	cfg.SelfHealAlertAfter = envInt("EXCALIBASE_SELFHEAL_ALERT_AFTER", 5)
 	cfg.Trust = loadTrust()
@@ -582,7 +588,6 @@ func load() AppConfig {
 		RequestMetricsTargets:          loadRequestMetricsTargets(),
 		HostMetrics:                    loadHostMetrics(),
 		NetMeter:                       loadNetMeter(),
-		Behaviour:                      loadBehaviour(),
 		HostLogs:                       loadHostLogs(),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),

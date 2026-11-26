@@ -14,6 +14,9 @@ type fullReviewStore struct{}
 func (fullReviewStore) RecentNetMinutes(context.Context, time.Time) ([]netmeter.Sample, error) {
 	return nil, nil
 }
+func (fullReviewStore) RecentNetHours(context.Context, time.Time) ([]netmeter.Hourly, error) {
+	return nil, nil
+}
 func (fullReviewStore) NetVolumes(context.Context, time.Time) ([]behaviour.AppVolume, error) {
 	return nil, nil
 }

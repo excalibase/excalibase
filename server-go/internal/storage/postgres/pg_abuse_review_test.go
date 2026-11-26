@@ -295,3 +295,109 @@ func TestReviewDirectory_NamesEachAppAndProjectWithItsOwnerAndTier(t *testing.T)
 		t.Fatalf("projects = %+v", projects)
 	}
 }
+
+func stampedSample(at time.Time, app string, tx float64) netmeter.Sample {
+	sample := netSample(at, app, tx, tx, tx)
+	sample.ProjectID, sample.OwnerID, sample.Tier = "p-cust", "u-cust", "free"
+	return sample
+}
+
+func TestProjectOwners_NamesEachProjectsOwnerAndTier(t *testing.T) {
+	store, _ := consoleFixture(t)
+	owners, err := store.ProjectOwners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owners["p-cust"] != (netmeter.Owner{ID: "u-cust", Tier: "free"}) || owners["p-other"].ID != "u-other" {
+		t.Fatalf("owners = %+v", owners)
+	}
+}
+
+// HIGH: deleting a project must not reset its owner's evidence. The owner and
+// tier live on the minute rows, the hourly rollups and the volumes read from them.
+func TestNetHistory_AnOwnersTrafficSurvivesTheProjectBeingDeleted(t *testing.T) {
+	store, _ := consoleFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 26, 12, 30, 0, 0, time.UTC)
+	rolledHour := now.Add(-5 * time.Hour).Truncate(time.Hour)
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO app_net_hourly (hour, project_id, app_id, samples, avg_rx_bps, avg_tx_bps, max_tx_bps, max_instance_tx_bps, owner_id, tier)
+		VALUES ($1, 'p-cust', 'a-run', 60, 100, 200, 300, 300, 'u-cust', 'free')`, rolledHour); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendNetSamples(ctx, []netmeter.Sample{stampedSample(now.Add(-10*time.Minute), "a-run", 20), stampedSample(now.Add(-2*time.Minute), "a-run", 20)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{`DELETE FROM apps WHERE project_id = 'p-cust'`, `DELETE FROM database_instances WHERE project_id = 'p-cust'`} {
+		if _, err := store.db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	minutes, err := store.RecentNetMinutes(ctx, now.Add(-time.Hour))
+	if err != nil || len(minutes) != 2 || minutes[0].OwnerID != "u-cust" || minutes[0].Tier != "free" {
+		t.Fatalf("minutes = %+v %v", minutes, err)
+	}
+	hours, err := store.RecentNetHours(ctx, now.Add(-24*time.Hour))
+	if err != nil || len(hours) != 1 || hours[0].OwnerID != "u-cust" || hours[0].Tier != "free" || hours[0].AvgTxBps != 20 || hours[0].Samples != 2 {
+		t.Fatalf("hours = %+v %v", hours, err)
+	}
+	volumes, err := store.NetVolumes(ctx, now)
+	if err != nil || len(volumes) != 1 || volumes[0].OwnerID != "u-cust" || volumes[0].Tier != "free" {
+		t.Fatalf("volumes = %+v %v", volumes, err)
+	}
+	if owners, _ := store.ProjectOwners(ctx); len(owners) != 1 || owners["p-cust"].ID != "" {
+		t.Fatalf("the directory forgot the project, as it does: %+v", owners)
+	}
+}
+
+func TestNetSamples_RollUpKeepsTheOwnerAndTier(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 26, 12, 30, 0, 0, time.UTC)
+	first := now.Add(-3 * time.Hour).Truncate(time.Hour)
+	var batch []netmeter.Sample
+	for i := 0; i < 3; i++ {
+		sample := stampedSample(first.Add(time.Duration(i)*time.Minute), "a-run", 10)
+		sample.ProjectID = "proj-1"
+		batch = append(batch, sample)
+	}
+	if err := store.AppendNetSamples(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PruneNetSamples(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	hourly, err := store.ListNetHourly(ctx, "proj-1", "a-run", first.Add(-time.Hour))
+	if err != nil || len(hourly) != 1 || hourly[0].OwnerID != "u-cust" || hourly[0].Tier != "free" {
+		t.Fatalf("hourly = %+v %v", hourly, err)
+	}
+}
+
+func TestReviews_AnOwnerLevelFindingIsOneRowPerTierBucket(t *testing.T) {
+	store := testStore(t)
+	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	for _, tier := range []string{"free", "standard"} {
+		f := reviewFinding("", 90)
+		f.Tier = tier
+		record(t, store, f, t0)
+		record(t, store, f, t0.Add(time.Minute))
+	}
+	reviews := listAll(t, store)
+	if len(reviews) != 2 {
+		t.Fatalf("the Free bucket and the Standard bucket of one owner are two rows: %+v", reviews)
+	}
+	for _, r := range reviews {
+		if r.Tier == "free" {
+			if err := store.DismissReview(context.Background(), r.ID, "a", t0, 14); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	free, standard := reviewFinding("", 90), reviewFinding("", 90)
+	free.Tier, standard.Tier = "free", "standard"
+	if got := record(t, store, free, t0.Add(time.Hour)); got != behaviour.OutcomeSuppressed {
+		t.Fatalf("the Free bucket's dismissal mutes the Free bucket: %v", got)
+	}
+	if got := record(t, store, standard, t0.Add(time.Hour)); got != behaviour.OutcomeUpdated {
+		t.Fatalf("and leaves the Standard bucket's open row alone: %v", got)
+	}
+}

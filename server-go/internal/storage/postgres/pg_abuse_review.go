@@ -42,17 +42,25 @@ func (s *Store) RecordFinding(ctx context.Context, f behaviour.Finding, now time
 
 const touchOpenReviewSQL = `UPDATE abuse_review SET last_seen = $4, peak = GREATEST(peak, $5), evidence = $6,
 	org_id = $7, project_id = $8, project_name = $9, app_name = $10, tier = $11
-	WHERE owner_id = $1 AND app_id = $2 AND signal = $3 AND status = 'open'`
+	WHERE owner_id = $1 AND app_id = $2 AND signal = $3 AND bucket = $12 AND status = 'open'`
 
-const insertReviewSQL = `INSERT INTO abuse_review (owner_id, org_id, project_id, project_name, app_id, app_name, tier, signal, first_seen, last_seen, peak, evidence)
-	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11)
-	ON CONFLICT (owner_id, app_id, signal) WHERE status = 'open' DO UPDATE SET last_seen = EXCLUDED.last_seen,
+const insertReviewSQL = `INSERT INTO abuse_review (owner_id, org_id, project_id, project_name, app_id, app_name, tier, signal, first_seen, last_seen, peak, evidence, bucket)
+	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12)
+	ON CONFLICT (owner_id, app_id, bucket, signal) WHERE status = 'open' DO UPDATE SET last_seen = EXCLUDED.last_seen,
 		peak = GREATEST(abuse_review.peak, EXCLUDED.peak), evidence = EXCLUDED.evidence
 	RETURNING (xmax = 0)`
 
+// reviewBucket is the tier an owner-level finding was judged on; an app's finding has none, so an upgrade does not split it.
+func reviewBucket(f behaviour.Finding) string {
+	if f.AppID != "" {
+		return ""
+	}
+	return f.Tier
+}
+
 func recordFindingIn(ctx context.Context, tx *sql.Tx, f behaviour.Finding, evidence []byte, now time.Time, rules behaviour.Rules) (behaviour.Outcome, error) {
 	touched, err := tx.ExecContext(ctx, touchOpenReviewSQL, f.OwnerID, f.AppID, f.Signal, now, f.Magnitude, evidence,
-		f.OrgID, f.ProjectID, f.ProjectName, f.AppName, f.Tier)
+		f.OrgID, f.ProjectID, f.ProjectName, f.AppName, f.Tier, reviewBucket(f))
 	if err != nil {
 		return "", fmt.Errorf("update review: %w", err)
 	}
@@ -62,8 +70,8 @@ func recordFindingIn(ctx context.Context, tx *sql.Tx, f behaviour.Finding, evide
 	var dismissedPeak float64
 	var muteUntil sql.NullTime
 	err = tx.QueryRowContext(ctx, `SELECT dismissed_peak, mute_until FROM abuse_review
-		WHERE owner_id = $1 AND app_id = $2 AND signal = $3 AND status = 'dismissed'
-		ORDER BY dismissed_at DESC LIMIT 1`, f.OwnerID, f.AppID, f.Signal).Scan(&dismissedPeak, &muteUntil)
+		WHERE owner_id = $1 AND app_id = $2 AND signal = $3 AND bucket = $4 AND status = 'dismissed'
+		ORDER BY dismissed_at DESC LIMIT 1`, f.OwnerID, f.AppID, f.Signal, reviewBucket(f)).Scan(&dismissedPeak, &muteUntil)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("read dismissal: %w", err)
 	}
@@ -72,7 +80,7 @@ func recordFindingIn(ctx context.Context, tx *sql.Tx, f behaviour.Finding, evide
 	}
 	var inserted bool
 	if err := tx.QueryRowContext(ctx, insertReviewSQL, f.OwnerID, f.OrgID, f.ProjectID, f.ProjectName, f.AppID, f.AppName, f.Tier,
-		f.Signal, now, f.Magnitude, evidence).Scan(&inserted); err != nil {
+		f.Signal, now, f.Magnitude, evidence, reviewBucket(f)).Scan(&inserted); err != nil {
 		return "", fmt.Errorf("insert review: %w", err)
 	}
 	if !inserted {
@@ -144,7 +152,7 @@ func (s *Store) PruneReviews(ctx context.Context, now time.Time, dismissedRetent
 
 // RecentNetMinutes reads every app's minute rows since a time, oldest first.
 func (s *Store) RecentNetMinutes(ctx context.Context, since time.Time) ([]netmeter.Sample, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT ts, project_id, app_id, instances, rx_bps, tx_bps, max_instance_tx_bps
+	rows, err := s.db.QueryContext(ctx, `SELECT ts, project_id, app_id, instances, rx_bps, tx_bps, max_instance_tx_bps, owner_id, tier
 		FROM app_net_samples WHERE ts >= $1 ORDER BY ts`, since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("recent net minutes: %w", err)
@@ -153,11 +161,34 @@ func (s *Store) RecentNetMinutes(ctx context.Context, since time.Time) ([]netmet
 	var out []netmeter.Sample
 	for rows.Next() {
 		var sample netmeter.Sample
-		if err := rows.Scan(&sample.At, &sample.ProjectID, &sample.AppID, &sample.Instances, &sample.RxBps, &sample.TxBps, &sample.MaxInstanceTxBps); err != nil {
+		if err := rows.Scan(&sample.At, &sample.ProjectID, &sample.AppID, &sample.Instances, &sample.RxBps, &sample.TxBps, &sample.MaxInstanceTxBps, &sample.OwnerID, &sample.Tier); err != nil {
 			return nil, err
 		}
 		sample.At = sample.At.UTC()
 		out = append(out, sample)
+	}
+	return out, rows.Err()
+}
+
+// RecentNetHours folds the minute rows since a time into one row per app and
+// hour, each the average of the minutes that exist in it.
+func (s *Store) RecentNetHours(ctx context.Context, since time.Time) ([]netmeter.Hourly, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT date_trunc('hour', ts AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', project_id, app_id,
+		COUNT(*), AVG(rx_bps), AVG(tx_bps), MAX(tx_bps), MAX(max_instance_tx_bps), MAX(owner_id), MAX(tier)
+		FROM app_net_samples WHERE ts >= $1 GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`, since.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("recent net hours: %w", err)
+	}
+	defer rows.Close()
+	var out []netmeter.Hourly
+	for rows.Next() {
+		var hour netmeter.Hourly
+		if err := rows.Scan(&hour.Hour, &hour.ProjectID, &hour.AppID, &hour.Samples, &hour.AvgRxBps, &hour.AvgTxBps,
+			&hour.MaxTxBps, &hour.MaxInstanceTxBps, &hour.OwnerID, &hour.Tier); err != nil {
+			return nil, err
+		}
+		hour.Hour = hour.Hour.UTC()
+		out = append(out, hour)
 	}
 	return out, rows.Err()
 }
@@ -167,13 +198,13 @@ func (s *Store) RecentNetMinutes(ctx context.Context, since time.Time) ([]netmet
 // two parts of the month never overlap: an hour is rolled up whole, and only
 // minutes after the last rolled hour are counted from the minute table.
 const volumeSQL = `
-	SELECT project_id, app_id, 'day', SUM(tx_bps * 60), SUM(rx_bps * 60)
+	SELECT project_id, app_id, 'day', SUM(tx_bps * 60), SUM(rx_bps * 60), MAX(owner_id), MAX(tier)
 	FROM app_net_samples WHERE ts >= $1 GROUP BY project_id, app_id
 	UNION ALL
-	SELECT project_id, app_id, 'month', SUM(avg_tx_bps * samples * 60), SUM(avg_rx_bps * samples * 60)
+	SELECT project_id, app_id, 'month', SUM(avg_tx_bps * samples * 60), SUM(avg_rx_bps * samples * 60), MAX(owner_id), MAX(tier)
 	FROM app_net_hourly WHERE hour >= $2 GROUP BY project_id, app_id
 	UNION ALL
-	SELECT project_id, app_id, 'month', SUM(tx_bps * 60), SUM(rx_bps * 60)
+	SELECT project_id, app_id, 'month', SUM(tx_bps * 60), SUM(rx_bps * 60), MAX(owner_id), MAX(tier)
 	FROM app_net_samples
 	WHERE ts >= $2 AND ts >= COALESCE((SELECT MAX(hour) + INTERVAL '1 hour' FROM app_net_hourly), '-infinity'::timestamptz)
 	GROUP BY project_id, app_id`
@@ -189,9 +220,9 @@ func (s *Store) NetVolumes(ctx context.Context, now time.Time) ([]behaviour.AppV
 	byApp := map[key]*behaviour.AppVolume{}
 	var order []key
 	for rows.Next() {
-		var project, app, period string
+		var project, app, period, owner, tier string
 		var tx, rx float64
-		if err := rows.Scan(&project, &app, &period, &tx, &rx); err != nil {
+		if err := rows.Scan(&project, &app, &period, &tx, &rx, &owner, &tier); err != nil {
 			return nil, err
 		}
 		id := key{project, app}
@@ -200,6 +231,9 @@ func (s *Store) NetVolumes(ctx context.Context, now time.Time) ([]behaviour.AppV
 			volume = &behaviour.AppVolume{ProjectID: project, AppID: app}
 			byApp[id] = volume
 			order = append(order, id)
+		}
+		if volume.OwnerID == "" {
+			volume.OwnerID, volume.Tier = owner, tier
 		}
 		if period == "day" {
 			volume.TxDay, volume.RxDay = tx, rx
@@ -216,6 +250,27 @@ func (s *Store) NetVolumes(ctx context.Context, now time.Time) ([]behaviour.AppV
 		out = append(out, *byApp[id])
 	}
 	return out, nil
+}
+
+// ProjectOwners is each project's owner and tier now, for the meter to stamp on its samples.
+func (s *Store) ProjectOwners(ctx context.Context) (map[string]netmeter.Owner, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT di.project_id, o.owner_id, o.tier
+		FROM database_instances di JOIN orgs o ON o.id = di.org_id`)
+	if err != nil {
+		return nil, fmt.Errorf("project owners: %w", err)
+	}
+	defer rows.Close()
+	owners := map[string]netmeter.Owner{}
+	for rows.Next() {
+		var project string
+		var owner netmeter.Owner
+		if err := rows.Scan(&project, &owner.ID, &owner.Tier); err != nil {
+			return nil, err
+		}
+		owner.Tier = strings.ToLower(owner.Tier)
+		owners[project] = owner
+	}
+	return owners, rows.Err()
 }
 
 // ReviewDirectory names every live app and every project with its owner, org

@@ -20,6 +20,10 @@ more than 48 hours old, hourly rows after 30 days. A finished hour is rolled up
 once and never rebuilt, so the hour at the edge of the window keeps its full
 figures.
 
+Both tables also carry the owner id and tier the project had when the minute was
+taken (added with behaviour review, empty on older rows), so [behaviour
+review](behaviour-review.md) can attribute the history after the project is gone.
+
 No IP address, DNS name or payload is read or stored; only byte counts. The
 tables reference no app, project or user, so the history outlives a deleted app.
 
