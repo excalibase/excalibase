@@ -27,7 +27,7 @@ export function InfiniteColumn(props: InfiniteColumnProps) {
   const sentinel = useRef<HTMLDivElement>(null);
   const canLoad = hasMore && !isLoadingMore && !loadMoreError && !isLoading;
   const load = useRef(onLoadMore);
-  load.current = onLoadMore;
+  useEffect(() => { load.current = onLoadMore; });
 
   useEffect(() => {
     const target = sentinel.current;
@@ -37,7 +37,7 @@ export function InfiniteColumn(props: InfiniteColumnProps) {
     }, { root: scroller.current, rootMargin: '0px 0px 80px 0px' });
     observer.observe(target);
     return () => observer.disconnect();
-  }, [canLoad, count]);
+  }, [canLoad]);
 
   const empty = !isLoading && !loadError && count === 0;
   return (

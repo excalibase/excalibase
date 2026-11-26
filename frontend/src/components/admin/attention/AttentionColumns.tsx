@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ComponentType } from 'react';
 import { Link } from 'react-router-dom';
 import type { UseInfiniteQueryResult, InfiniteData } from '@tanstack/react-query';
 import type { CursorPage, DomainCount, ProjectBrief, SuspendedBrief } from '../../../api/adminConsole';
@@ -36,12 +36,12 @@ function RunLabel({ text, count, tone }: { readonly text: string; readonly count
   );
 }
 
-function Runs<T>({ runs, tone, row }: { readonly runs: Run<T>[]; readonly tone: string; readonly row: (item: T, showReason: boolean) => React.ReactNode }) {
+function Runs<T>({ runs, tone, Row, idOf }: { readonly runs: Run<T>[]; readonly tone: string; readonly Row: ComponentType<{ item: T; showReason: boolean }>; readonly idOf: (item: T) => string }) {
   return runs.map((run, index) => (
     <li key={`${run.key}-${index}`} className="space-y-0.5">
       {run.items.length > 1 && run.key && <RunLabel text={run.key} count={run.items.length} tone={tone} />}
       <ul role="list" className="space-y-0.5">
-        {run.items.map((item) => row(item, run.items.length === 1))}
+        {run.items.map((item) => <Row key={idOf(item)} item={item} showReason={run.items.length === 1} />)}
       </ul>
     </li>
   ));
@@ -66,7 +66,7 @@ export function SuspendedColumn({ query }: { readonly query: PagedQuery<Suspende
   const runs = groupRuns(items, (item) => item.reason);
   return (
     <InfiniteColumn title="Newly suspended" emptyText="None in the last 24 h." {...columnProps(query, items)}>
-      <Runs runs={runs} tone="text-text-secondary" row={(item, showReason) => <SuspendedRow key={item.userId} item={item} showReason={showReason} />} />
+      <Runs runs={runs} tone="text-text-secondary" Row={SuspendedRow} idOf={(item) => item.userId} />
     </InfiniteColumn>
   );
 }
@@ -89,7 +89,7 @@ export function FailedColumn({ query }: { readonly query: PagedQuery<ProjectBrie
   const runs = groupRuns(items, (item) => item.failureReason ?? '');
   return (
     <InfiniteColumn title="Failed projects" emptyText="None." {...columnProps(query, items)}>
-      <Runs runs={runs} tone="text-red-400" row={(item, showReason) => <FailedRow key={item.projectId} item={item} showReason={showReason} />} />
+      <Runs runs={runs} tone="text-red-400" Row={FailedRow} idOf={(item) => item.projectId} />
     </InfiniteColumn>
   );
 }
