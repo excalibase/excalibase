@@ -11,6 +11,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
@@ -535,6 +536,7 @@ func (h *VaultHandler) PutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer lockFunctionSecrets(path)()
 	written, err := putVaultSecret(h.v, path, data, r.Header.Get("If-None-Match") == "*")
 	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {
@@ -553,6 +555,7 @@ func (h *VaultHandler) PutSecret(w http.ResponseWriter, r *http.Request) {
 
 func (h *VaultHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	path := extractSecretPath(r)
+	defer lockFunctionSecrets(path)()
 	if err := h.v.Delete(path); err != nil {
 		if errors.Is(err, vault.ErrSealed) {
 			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
@@ -582,6 +585,18 @@ func (h *VaultHandler) DeletePrefix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"deleted": deleted})
+}
+
+// lockFunctionSecrets takes the project's function-secrets lock when the path
+// is that secret, so a write here cannot interleave with the store's set and
+// delete (EXC-897). Any other path takes nothing.
+func lockFunctionSecrets(path string) func() {
+	if projectID, ok := edgefn.FunctionSecretsProject(path); ok {
+		return edgefn.LockProjectSecrets(projectID)
+	}
+	return func() {
+		// no lock was taken for this path, so there is nothing to release
+	}
 }
 
 func extractSecretPath(r *http.Request) string {
