@@ -453,6 +453,9 @@ jobs:
       # Where gVisor keeps a container's root, and that a read-only root with a capped /tmp holds under it (EXC-732).
       - name: gVisor root filesystem
         if: matrix.gvisor == '1'
+        env:
+          # Docker Hub rate-limits CI hosts; the mirror holds the same digest.
+          IMAGE_MIRROR: ghcr.io/excalibase/mirror
         run: sh deploy/single-host/tests/gvisor-rootfs.sh
       - name: Fresh install (${{ matrix.name }})
         if: matrix.script == 'smoke'

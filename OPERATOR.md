@@ -1498,9 +1498,10 @@ Body: `{"enabled": true, "settings": {"pgaudit.log": "ddl,write"}}`. The default
 
 App containers on Docker or Podman run with a read-only root filesystem. They write `/tmp`, a tmpfs sized at `APP_TMP_PERCENT` (default 25) percent of the app's memory limit, and their disk volume. This replaces a disk quota on the engine's writable layer, which only some storage engines can enforce (`--storage-opt size` needs overlay2 on xfs with project quotas; the containerd snapshotter has none). An app that writes elsewhere fails with `Read-only file system`: tell its owner to point caches at `/tmp` or give the app a disk; the framework list is in docs/deployment/docker-local.md.
 
-- `/tmp` is memory, so a larger `APP_TMP_PERCENT` takes memory from the app, never disk. It counts against the app's own limit.
-- An app's disk volume is still on the host's filesystem with its size recorded, not enforced. Watch the host's disk (the host monitor's disk alert) until the engine can cap it.
-- An image's own `VOLUME` is writable and uncapped; provisioning logs `WARN: the image of ... declares a VOLUME at ...`.
-- The readiness probe now lives on a small anonymous volume (`/.excalibase`) that goes with the container.
-- Kubernetes apps are not covered by this change.
+- `/tmp` is memory, so a larger `APP_TMP_PERCENT` takes memory from the app, never disk. It counts against the app's own limit, and an `exec` mount, because runtimes run native helpers from it.
+- **An app's disk volume is not capped.** It is on the host's filesystem with its size recorded, not enforced, so an app can still fill the host through it. Whether and how to cap it (a loopback or quota-backed volume) is an open owner decision. Watch the host's disk (the host monitor's disk alert) until then.
+- An image's own `VOLUME` paths each get a capped tmpfs from the same `APP_TMP_PERCENT` budget (split evenly with `/tmp`); the engine makes no anonymous volume. Podman keeps the image's files in the directory (`tmpcopyup`); Docker rejects that option, so the directory starts empty.
+- The readiness probe and the edge CA live in a volume of the platform's own (`excalibase-vol-probe-<digest>`, labelled `excalibase.shared-readonly`), filled once through a container that is never started and mounted read-only into every app. A new probe binary or CA makes a new volume and removes the old one.
+- Logs rotate per container: `APP_LOG_MAX_SIZE` (default `5m`) times `APP_LOG_MAX_FILES` (default `3`) files, json-file driver, so 15 MiB per container and 1.5 GiB for a hundred. The platform cannot read the host's free space, so these are fixed numbers per container: multiply by the apps you expect and compare with the disk.
+- Kubernetes apps get the same read-only root and an in-memory `/tmp` in their own change.
 

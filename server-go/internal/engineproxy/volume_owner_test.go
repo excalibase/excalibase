@@ -136,7 +136,11 @@ func TestVolumeOwnersReadsBothForms(t *testing.T) {
 	if err := json.Unmarshal(body, &create); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(create.named(), ","); got != "excalibase-proj-a,excalibase-proj-b" {
+	var names []string
+	for _, mounted := range create.named() {
+		names = append(names, mounted.name)
+	}
+	if got := strings.Join(names, ","); got != "excalibase-proj-a,excalibase-proj-b" {
 		t.Fatalf("named volumes = %s", got)
 	}
 }
@@ -168,5 +172,62 @@ func TestVolumeOwnersAdoptsOnlyAV16DatabaseVolume(t *testing.T) {
 		if len(owners) > 1 {
 			t.Errorf("%s: owners %v name more than the project", tc.name, owners)
 		}
+	}
+}
+
+// The readiness probe's volume is the platform's: any app may mount it read-only and none may write
+// it; only the container the platform labelled as its filler may mount it writable.
+func TestASharedVolumeIsMountedReadOnlyByAnyApp(t *testing.T) {
+	shared := map[string]string{"excalibase.managed": "true", SharedReadOnlyLabel: "true"}
+	app := map[string]any{"excalibase.project": "p1", "excalibase.app": "a1"}
+	filler := map[string]any{SharedFillLabel: "true"}
+	cases := []struct {
+		name     string
+		labels   map[string]any
+		readOnly bool
+		allowed  bool
+	}{
+		{"an app, read-only", app, true, true},
+		{"another project's app, read-only", map[string]any{"excalibase.project": "p2", "excalibase.app": "b1"}, true, true},
+		{"an app, writable", app, false, false},
+		{"an unlabelled container, writable", map[string]any{}, false, false},
+		{"the filler, writable", filler, false, true},
+	}
+	for _, tc := range cases {
+		engine, proxy := volumeEngine(t)
+		engine.volumes["excalibase-proj-probe"] = shared
+		body := string(createBody(t, func(b map[string]any) {
+			all := map[string]any{"excalibase.managed": "true"}
+			for key, value := range tc.labels {
+				all[key] = value
+			}
+			b["Labels"] = all
+			hostConfig(b)["Mounts"] = []any{map[string]any{"Type": "volume", "Source": "excalibase-proj-probe", "Target": "/.excalibase", "ReadOnly": tc.readOnly}}
+		}))
+		call(t, proxy, http.MethodPost, "/v1.47/containers/create?name=excalibase-app-x", body)
+		if got := engine.reached("POST /v1.47/containers/create"); got != tc.allowed {
+			t.Errorf("%s: forwarded %v, want %v", tc.name, got, tc.allowed)
+		}
+	}
+}
+
+func TestASharedVolumeIsNotMountedThroughABind(t *testing.T) {
+	engine, proxy := volumeEngine(t)
+	engine.volumes["excalibase-proj-probe"] = map[string]string{"excalibase.managed": "true", SharedReadOnlyLabel: "true"}
+	call(t, proxy, http.MethodPost, "/v1.47/containers/create?name=excalibase-app-x",
+		mountingCreate(t, map[string]any{"excalibase.project": "p1", "excalibase.app": "a1"}, "excalibase-proj-probe", true))
+	if engine.reached("POST /v1.47/containers/create") {
+		t.Fatal("a bind mounted the shared volume writable")
+	}
+}
+
+func TestCheckVolumeCreateAdmitsASharedVolumeWithoutAnOwner(t *testing.T) {
+	policy := Policy{ManagedLabel: "excalibase.managed", VolumePrefix: "excalibase-proj-"}
+	body := `{"Name":"excalibase-proj-probe-ab12","Labels":{"excalibase.managed":"true","excalibase.shared-readonly":"true"}}`
+	if err := policy.CheckVolumeCreate([]byte(body)); err != nil {
+		t.Fatalf("shared volume refused: %v", err)
+	}
+	if err := policy.CheckVolumeCreate([]byte(`{"Name":"excalibase-proj-x","Labels":{"excalibase.managed":"true","excalibase.shared-readonly":"false"}}`)); err == nil {
+		t.Fatal("a volume that is not shared and names no owner was admitted")
 	}
 }

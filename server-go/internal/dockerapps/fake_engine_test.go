@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -20,7 +21,9 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/excalibase/provisioning-poc/internal/engineproxy"
@@ -44,6 +47,15 @@ type fakeContainer struct {
 }
 
 // hasVolumeAt reports whether path is inside a volume the container mounts.
+func (c *fakeContainer) volumeMountAt(path string) (mount.Mount, bool) {
+	for _, m := range c.host.Mounts {
+		if m.Type == mount.TypeVolume && (path == m.Target || strings.HasPrefix(path, strings.TrimSuffix(m.Target, "/")+"/")) {
+			return m, true
+		}
+	}
+	return mount.Mount{}, false
+}
+
 func (c *fakeContainer) hasVolumeAt(path string) bool {
 	for target := range c.config.Volumes {
 		if path == target || strings.HasPrefix(path, strings.TrimSuffix(target, "/")+"/") {
@@ -69,16 +81,26 @@ type fakeEngine struct {
 	removeOptions []container.RemoveOptions
 	// imageVolumes are VOLUMEs the test image declares.
 	imageVolumes []string
-	mu           sync.Mutex
-	seq          int
-	containers   map[string]*fakeContainer
-	networks     map[string]*fakeNetwork
-	volumes      map[string]map[string]string
-	pulled       []string
-	pullAuth     map[string]string
-	pullErr      map[string]string
-	runtimes     []string
-	podman       bool
+	// failCopy and failImageInspect make those calls fail.
+	failCopy, failImageInspect bool
+	// filler is the create of the probe volume's filler container, which is removed once it has copied.
+	filler *struct {
+		name   string
+		config container.Config
+		host   container.HostConfig
+	}
+	// volumeFiles are what was copied into each named volume, by volume then path.
+	volumeFiles map[string]map[string][]byte
+	mu          sync.Mutex
+	seq         int
+	containers  map[string]*fakeContainer
+	networks    map[string]*fakeNetwork
+	volumes     map[string]map[string]string
+	pulled      []string
+	pullAuth    map[string]string
+	pullErr     map[string]string
+	runtimes    []string
+	podman      bool
 	// rootful is a Podman run as root, whose bridges have an address on the host.
 	rootful bool
 	// gatewayMode is how the engine takes an isolated gateway: "" honours it (Docker 28+),
@@ -191,9 +213,22 @@ func (f *fakeEngine) ContainerCreate(_ context.Context, config *container.Config
 		if !ok {
 			return container.CreateResponse{}, errdefs.ErrNotFound.WithMessage("no such volume " + m.Source)
 		}
+		if labels[engineproxy.SharedReadOnlyLabel] == "true" {
+			if err := engineproxy.CheckSharedMount(m.Source, m.ReadOnly, config.Labels); err != nil {
+				return container.CreateResponse{}, errdefs.ErrPermissionDenied.WithMessage(err.Error())
+			}
+			continue
+		}
 		if err := engineproxy.CheckVolumeOwner(m.Source, labels, config.Labels); err != nil {
 			return container.CreateResponse{}, errdefs.ErrPermissionDenied.WithMessage(err.Error())
 		}
+	}
+	if strings.HasSuffix(name, "-fill") {
+		f.filler = &struct {
+			name   string
+			config container.Config
+			host   container.HostConfig
+		}{name, *config, *host}
 	}
 	f.seq++
 	id := fmt.Sprintf("c%04d", f.seq)
@@ -272,6 +307,9 @@ func (f *fakeEngine) ContainerInspect(_ context.Context, id string) (container.I
 		mounts = append(mounts, container.MountPoint{Type: mount.TypeVolume, Name: "anon-" + shortHash(target, 8), Destination: target})
 	}
 	for _, target := range f.imageVolumes {
+		if _, covered := host.Tmpfs[path.Clean(target)]; covered {
+			continue
+		}
 		mounts = append(mounts, container.MountPoint{Type: mount.TypeVolume, Name: "anon-" + shortHash(target, 8), Destination: target})
 	}
 	for _, m := range host.Mounts {
@@ -320,6 +358,9 @@ func (f *fakeEngine) ContainerWait(_ context.Context, id string, _ container.Wai
 func (f *fakeEngine) CopyToContainer(_ context.Context, id, dst string, content io.Reader, _ container.CopyToContainerOptions) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failCopy {
+		return errdefs.ErrUnavailable.WithMessage("copy failed")
+	}
 	c, err := f.find(id)
 	if err != nil {
 		return err
@@ -335,8 +376,21 @@ func (f *fakeEngine) CopyToContainer(_ context.Context, id, dst string, content 
 		}
 		body, _ := io.ReadAll(reader)
 		path := strings.TrimSuffix(dst, "/") + "/" + header.Name
-		// The engine refuses a copy into a read-only root, except into a volume mounted in it.
-		if c.host.ReadonlyRootfs && !c.hasVolumeAt(dst) {
+		// The engine refuses a copy into a read-only root, except into a writable volume mounted in it.
+		if m, ok := c.volumeMountAt(dst); ok {
+			if m.ReadOnly {
+				return errdefs.ErrPermissionDenied.WithMessage("mounted volume is marked read-only")
+			}
+			if f.volumeFiles == nil {
+				f.volumeFiles = map[string]map[string][]byte{}
+			}
+			if f.volumeFiles[m.Source] == nil {
+				f.volumeFiles[m.Source] = map[string][]byte{}
+			}
+			f.volumeFiles[m.Source][path] = body
+			continue
+		}
+		if c.host.ReadonlyRootfs {
 			return errdefs.ErrPermissionDenied.WithMessage("container rootfs is marked read-only")
 		}
 		c.files[path] = body
@@ -371,7 +425,7 @@ func (f *fakeEngine) ContainerExecInspect(_ context.Context, execID string) (con
 		return container.ExecInspect{}, errdefs.ErrNotFound
 	}
 	code := 0
-	if _, injected := c.files[probePath]; !injected || (f.probeOK != nil && !f.probeOK(c)) {
+	if _, injected := f.fileInContainer(c, probePath); !injected || (f.probeOK != nil && !f.probeOK(c)) {
 		code = 1
 	}
 	return container.ExecInspect{ExecID: execID, ContainerID: c.id, ExitCode: code}, nil
@@ -396,6 +450,22 @@ func (f *fakeEngine) ImageList(_ context.Context, options image.ListOptions) ([]
 		return []image.Summary{{ID: ref[0]}}, nil
 	}
 	return nil, nil
+}
+
+func (f *fakeEngine) ImageInspect(_ context.Context, ref string, _ ...client.ImageInspectOption) (image.InspectResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failImageInspect {
+		return image.InspectResponse{}, errdefs.ErrUnavailable.WithMessage("inspect failed")
+	}
+	if !slices.Contains(f.pulled, ref) && !strings.HasPrefix(ref, "tools") {
+		return image.InspectResponse{}, errdefs.ErrNotFound.WithMessage("no such image " + ref)
+	}
+	volumes := map[string]struct{}{}
+	for _, target := range f.imageVolumes {
+		volumes[target] = struct{}{}
+	}
+	return image.InspectResponse{Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Volumes: volumes}}}, nil
 }
 
 func (f *fakeEngine) NetworkCreate(_ context.Context, name string, options network.CreateOptions) (network.CreateResponse, error) {
@@ -577,4 +647,32 @@ func (f *fakeEngine) appContainers(appID string) []*fakeContainer {
 	}
 	slices.SortFunc(out, func(a, b *fakeContainer) int { return a.created.Compare(b.created) })
 	return out
+}
+
+// fileInContainer is a file at path in the container's own layer or in a volume mounted into it.
+func (f *fakeEngine) fileInContainer(c *fakeContainer, path string) ([]byte, bool) {
+	if body, ok := c.files[path]; ok {
+		return body, true
+	}
+	if m, ok := c.volumeMountAt(path); ok {
+		body, found := f.volumeFiles[m.Source][path]
+		return body, found
+	}
+	return nil, false
+}
+
+func (f *fakeEngine) fileBody(c *fakeContainer, path string) []byte {
+	body, _ := f.fileInContainer(c, path)
+	return body
+}
+
+// ownedVolumes are the volumes an app or project owns; the platform's shared probe volume is no one's.
+func (f *fakeEngine) ownedVolumes() map[string]map[string]string {
+	owned := map[string]map[string]string{}
+	for name, labels := range f.volumes {
+		if labels[engineproxy.SharedReadOnlyLabel] != "true" {
+			owned[name] = labels
+		}
+	}
+	return owned
 }

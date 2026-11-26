@@ -494,6 +494,9 @@ services:
       APP_USERNS: ${APP_USERNS:-auto}
       # The share of an app's memory limit its /tmp may fill; its root filesystem is read-only (EXC-732).
       APP_TMP_PERCENT: ${APP_TMP_PERCENT:-25}
+      # Each app container's log is rotated at this size, keeping this many files (15 MiB per container by default).
+      APP_LOG_MAX_SIZE: ${APP_LOG_MAX_SIZE:-5m}
+      APP_LOG_MAX_FILES: ${APP_LOG_MAX_FILES:-3}
       # "internet" lets apps call out; by default they reach only their project.
       APP_EGRESS: ${APP_EGRESS:-none}
       # Rootless Podman's egress reaches the LAN and metadata, unguardable: accept takes that knowingly.

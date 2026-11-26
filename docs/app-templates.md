@@ -108,5 +108,5 @@ On a single host a project's apps always share its network, so there is nothing 
 
 ## Where an app may write
 
-On a single host an app's root filesystem is read-only: it may write `/tmp` (a size-capped tmpfs) and its own disk, and nothing else (EXC-732). The templates above are built for that: the Valkey and RabbitMQ apps keep their data on their disk, and the nginx `web` placeholder uses `/tmp`. An image of your own that writes elsewhere (Next.js `.next/cache`, Python `__pycache__`, stock nginx's `/var/cache/nginx`) must be pointed at `/tmp` or given a disk; see "Apps (containers)" in [docker-local.md](deployment/docker-local.md#apps-containers).
+An app's root filesystem is read-only: it may write `/tmp` (a size-capped, in-memory directory), any `VOLUME` its image declares (also capped and in memory, so empty after a restart) and its own disk, and nothing else (EXC-732). Give an app a disk for anything that must last. The templates above are built for that: the Valkey and RabbitMQ apps keep their data on their disk, and the nginx `web` placeholder uses `/tmp`. An image of your own that writes elsewhere (Next.js `.next/cache`, Python `__pycache__`, stock nginx's `/var/cache/nginx`) must be pointed at `/tmp` or given a disk; see "Apps (containers)" in [docker-local.md](deployment/docker-local.md#apps-containers).
 

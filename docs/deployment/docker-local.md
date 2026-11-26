@@ -228,21 +228,24 @@ with the edge's own CA (`EXCALIBASE_TLS=internal`), as soon as it is routed.
 | The host's own services | not reachable | not reachable on Docker 28 or later without egress (see Host isolation) |
 | Disk | a volume of the size asked | a named volume (`excalibase-vol-...`) on the host's disk; the size is recorded, not enforced by the filesystem |
 | Root filesystem | writable | read-only; `/tmp` is a memory-backed tmpfs capped at `APP_TMP_PERCENT` of the memory limit; the app's disk is the other place it writes (see below) |
-| Readiness | kubelet probe | the platform's probe, copied into the container, on the app's health check path |
+| Readiness | kubelet probe | the platform's probe, read from a read-only volume of the platform's, on the app's health check path |
 | Rollout | rolling update; with a disk, recreate | the same: new containers beside the old, the route moves when they are ready |
 | Certificates | cert-manager | the edge, one per hostname |
 | Copies | up to the plan's | one host: a plan with more copies is refused |
 
 **What an app may write (EXC-732).** An app's root filesystem is read-only, so
-nothing it writes can fill the host's disk through the engine's writable layer,
+what it writes cannot fill the host's disk through the engine's writable layer,
 on any storage engine (overlay2, the containerd snapshotter, btrfs, ZFS) and
-under gVisor alike; no `--storage-opt` quota is needed. An app may write
-only:
+under gVisor alike; no `--storage-opt` quota is needed. **The app's own disk
+is not capped by this**: its size is recorded, not enforced, so an app can
+still fill the host through it until that is capped (an open decision). An app
+may write only:
 
 - `/tmp`, a tmpfs of `APP_TMP_PERCENT` percent (default 25) of the app's memory
   limit. It is memory, not disk: the kernel refuses writes past its size
   (`No space left on device`), it is charged to the app's own memory limit and
-  gone at every restart. It is not `noexec`.
+  gone at every restart. It is mounted `exec`, because runtimes unpack and run
+  native helpers from it (sqlite-jdbc, Netty).
 - the app's **disk**, at the path it was given (`/data` in the templates). Its
   size is recorded, not enforced by the filesystem (see the Disk row above).
 
@@ -257,10 +260,22 @@ Writes anywhere else fail with `Read-only file system`. Common cases:
 | Java | `-Djava.io.tmpdir=/tmp` (the default), no writes to the working directory |
 | Uploads, SQLite, caches that must last | the app's disk, not `/tmp` |
 
-An image's own `VOLUME` is the exception to the read-only root: the engine
-makes it an anonymous, writable volume on the host's disk that nothing caps.
-Provisioning logs `WARN: the image of <container> declares a VOLUME at <path>`
-when it creates such an app; give the app a disk at that path instead.
+An image's own `VOLUME` paths (Valkey's and RabbitMQ's declare them) are not left
+to the engine, which would make each an anonymous, writable, uncapped volume on
+the host's disk. Each gets a tmpfs of its own, `exec`, sized from the same
+`APP_TMP_PERCENT` budget: the budget is split evenly between `/tmp` and the
+image's volumes. A path the app's own disk is mounted at keeps the disk. On
+Podman the image's files in that directory are copied up into the tmpfs
+(`tmpcopyup`); Docker rejects the option, so there the tmpfs starts empty and
+hides any file the image put in the directory. Data in an image volume is gone
+at every restart: give the app a disk at that path to keep it.
+
+**Logs (EXC-732).** Each app container's log is rotated: `APP_LOG_MAX_SIZE`
+(default `5m`) per file, `APP_LOG_MAX_FILES` (default `3`) files, json-file
+driver. One container holds at most size times files, 15 MiB by default, so a
+hundred app containers hold at most 1.5 GiB of log between them. Size it
+against your host: containers times size times files, a fixed number per
+container because the host's free space is not known to the platform.
 
 ```bash
 docker ps --filter label=excalibase.component=app    # running apps

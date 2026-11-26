@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/logsafe"
@@ -115,6 +116,8 @@ func (h *Handler) authorize(r *http.Request) error {
 	case api == "/images/json" && r.Method == http.MethodGet:
 		return nil
 	case api == "/images/create" && r.Method == http.MethodPost:
+		return nil
+	case r.Method == http.MethodGet && isImageInspect(api):
 		return nil
 	case api == "/containers/create" && r.Method == http.MethodPost:
 		names := r.URL.Query()["name"]
@@ -284,4 +287,11 @@ func stripVersion(raw string) string {
 		return match[1]
 	}
 	return raw
+}
+
+// isImageInspect is GET /images/{name}/json: what an image declares, such as its VOLUMEs.
+func isImageInspect(api string) bool {
+	name, found := strings.CutPrefix(api, "/images/")
+	name, suffixed := strings.CutSuffix(name, "/json")
+	return found && suffixed && name != "" && !strings.Contains(name, "..")
 }

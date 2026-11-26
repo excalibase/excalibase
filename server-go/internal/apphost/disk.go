@@ -47,7 +47,7 @@ var (
 
 	// systemDirectories hold the image itself; a disk at or under one hides it.
 	systemDirectories = []string{
-		"/bin", "/boot", "/etc", "/lib", "/lib32", "/lib64", "/run", "/sbin", "/usr", "/var/run",
+		"/bin", "/boot", "/etc", "/lib", "/lib32", "/lib64", "/run", "/sbin", "/usr", "/var/run", "/tmp", "/.excalibase",
 	}
 	// /var itself is the image's, but /var/lib/<service> is the usual data directory.
 	varDirectory = "/var"

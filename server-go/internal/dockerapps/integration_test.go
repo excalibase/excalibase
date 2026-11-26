@@ -20,6 +20,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -145,6 +146,13 @@ func (r *realRig) cleanup() {
 	}
 	for _, name := range []string{r.db, r.edge} {
 		_ = r.direct.ContainerRemove(ctx, name, container.RemoveOptions{Force: true})
+	}
+	// The shared probe volume is no project's, so a teardown leaves it; this rig made it.
+	shared, _ := r.direct.VolumeList(ctx, volume.ListOptions{Filters: labelFilter(engineproxy.SharedReadOnlyLabel, "true")})
+	for _, probe := range shared.Volumes {
+		if strings.HasPrefix(probe.Name, r.prefix+"-vol-") {
+			_ = r.direct.VolumeRemove(ctx, probe.Name, false)
+		}
 	}
 }
 

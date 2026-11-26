@@ -170,7 +170,7 @@ func TestTeardownRemovesEveryTraceOfTheProject(t *testing.T) {
 	if err := h.rt.TeardownProject(ctx, testProject, testDB); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.engine.appContainers("app-01")) != 0 || len(h.engine.volumes) != 0 || h.route() != "" {
+	if len(h.engine.appContainers("app-01")) != 0 || len(h.engine.ownedVolumes()) != 0 || h.route() != "" {
 		t.Fatal("project left behind")
 	}
 	if _, ok := h.engine.networks[testNet]; ok {

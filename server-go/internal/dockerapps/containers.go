@@ -1,8 +1,6 @@
 package dockerapps
 
 import (
-	"archive/tar"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +21,7 @@ import (
 )
 
 const (
-	// probePath is where the readiness probe is copied in before a container starts.
+	// probePath is where the readiness probe is mounted, read-only, from the platform's probe volume.
 	probeDir  = ".excalibase"
 	probePath = "/" + probeDir + "/probe"
 	// edgeCAPath holds the edge's own CA root in an app when the edge issues locally; Node reads it
@@ -104,7 +102,11 @@ var unsandboxedCapabilities = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUI
 
 // hostConfig is the app's isolation: its sandbox, its project's network, its
 // tier's limits, and nothing of the host's.
-func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
+func (r *Runtime) hostConfig(spec containerSpec, probeVolume string, imageVolumes []string) (*container.HostConfig, error) {
+	tmpfs, err := r.scratchMounts(spec, imageVolumes)
+	if err != nil {
+		return nil, err
+	}
 	pids := appPidsLimit
 	host := &container.HostConfig{
 		NetworkMode:   container.NetworkMode(r.networkName(spec.Project)),
@@ -117,10 +119,14 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 		Resources: container.Resources{
 			Memory: spec.MemoryBytes, MemorySwap: spec.MemoryBytes, NanoCPUs: spec.NanoCPUs, PidsLimit: &pids,
 		},
-		// Nothing an app writes to its root can fill the host's disk, whatever storage engine or
-		// sandbox sits under it: it writes /tmp (capped, below) and its disk (EXC-732).
+		// The root is read-only, so an app writes only /tmp and the image's own VOLUME paths (capped
+		// tmpfs, in memory) and its disk, whatever storage engine or sandbox sits under it (EXC-732).
 		ReadonlyRootfs: true,
-		Tmpfs:          map[string]string{"/tmp": r.tmpOptions(spec)},
+		Tmpfs:          tmpfs,
+		LogConfig:      r.logConfig(),
+		// The probe and the edge CA arrive read-only from a volume of the platform's own.
+		Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: probeVolume, Target: "/" + probeDir, ReadOnly: true,
+			VolumeOptions: &mount.VolumeOptions{NoCopy: true}}},
 	}
 	// Inside the sandbox an app keeps what Kubernetes gives it; without one it keeps
 	// only what an image needs to step down from root and to bind a low port.
@@ -133,18 +139,9 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 		host.UsernsMode = spec.Userns.mode()
 	}
 	if spec.DiskClaim != "" {
-		host.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: r.volumeName(spec.DiskClaim), Target: spec.DiskMountPath}}
+		host.Mounts = append(host.Mounts, mount.Mount{Type: mount.TypeVolume, Source: r.volumeName(spec.DiskClaim), Target: spec.DiskMountPath})
 	}
-	return host
-}
-
-// tmpOptions is /tmp: memory, so no disk and no storage engine is involved, and the kernel
-// refuses writes past its size. A tmpfs is charged to the container's memory limit, so its size
-// is a share of that limit, never more than the container could hold anyway. Programs may run
-// from it, so it is not noexec.
-func (r *Runtime) tmpOptions(spec containerSpec) string {
-	size := spec.MemoryBytes * int64(r.opts.TmpPercent) / 100
-	return "rw,nosuid,nodev,mode=1777,size=" + strconv.FormatInt(size, 10)
+	return host, nil
 }
 
 // serviceAlias is the name the app's siblings reach it by; one of the
@@ -163,10 +160,7 @@ func (r *Runtime) createAppContainer(ctx context.Context, spec containerSpec, re
 	if err != nil {
 		return "", err
 	}
-	config := &container.Config{Image: spec.Image, Env: withEdgeCA(spec.Env, edgeCA), Labels: r.appLabels(spec, replica),
-		// The root is read-only, so the engine refuses a copy into it: the probe goes into a volume
-		// of its own, which dies with the container (remove asks for its volumes).
-		Volumes: map[string]struct{}{"/" + probeDir: {}}}
+	config := &container.Config{Image: spec.Image, Env: withEdgeCA(spec.Env, edgeCA), Labels: r.appLabels(spec, replica)}
 	if len(spec.Args) > 0 {
 		config.Cmd = spec.Args
 	}
@@ -177,32 +171,24 @@ func (r *Runtime) createAppContainer(ctx context.Context, spec containerSpec, re
 	endpoints := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
 		r.networkName(spec.Project): {Aliases: []string{alias}},
 	}}
+	probeVolume, err := r.probeVolume(ctx, spec.Image, edgeCA)
+	if err != nil {
+		return "", err
+	}
+	imageVolumes, err := r.imageVolumes(ctx, spec.Image)
+	if err != nil {
+		return "", err
+	}
+	host, err := r.hostConfig(spec, probeVolume, imageVolumes)
+	if err != nil {
+		return "", err
+	}
 	name := appContainerName(spec.Project, spec.AppID, spec.DeployID, replica)
-	created, err := r.engine.ContainerCreate(ctx, config, r.hostConfig(spec), endpoints, nil, name)
+	created, err := r.engine.ContainerCreate(ctx, config, host, endpoints, nil, name)
 	if err != nil {
 		return "", fmt.Errorf("create %s: %w", name, err)
 	}
-	if err := r.injectProbe(ctx, created.ID, edgeCA); err != nil {
-		return "", errors.Join(err, r.remove(ctx, created.ID))
-	}
-	r.warnImageVolumes(ctx, created.ID, name, spec)
 	return created.ID, nil
-}
-
-// warnImageVolumes says when the image declares a VOLUME of its own. The engine makes that an
-// anonymous, writable volume whatever the root is, so writes there are neither read-only nor
-// capped (EXC-732). The deploy goes on; the operator is told.
-func (r *Runtime) warnImageVolumes(ctx context.Context, id, name string, spec containerSpec) {
-	inspect, err := r.engine.ContainerInspect(ctx, id)
-	if err != nil {
-		return
-	}
-	for _, mounted := range inspect.Mounts {
-		if mounted.Type != mount.TypeVolume || mounted.Destination == "/"+probeDir || mounted.Destination == spec.DiskMountPath {
-			continue
-		}
-		r.warn("WARN: the image of %s declares a VOLUME at %s: writes there are on an anonymous host volume, not read-only and not capped", name, mounted.Destination)
-	}
 }
 
 // edgeCA is the edge's own CA root when it issues locally, else nil: then a public CA signs its certificates.
@@ -223,39 +209,6 @@ func withEdgeCA(env []string, edgeCA []byte) []string {
 		return env
 	}
 	return append(slices.Clone(env), nodeExtraCAs+"="+edgeCAPath)
-}
-
-func (r *Runtime) injectProbe(ctx context.Context, id string, edgeCA []byte) error {
-	var archive bytes.Buffer
-	writer := tar.NewWriter(&archive)
-	entries := []struct {
-		header tar.Header
-		body   []byte
-	}{
-		{tar.Header{Name: "probe", Mode: 0o755, Typeflag: tar.TypeReg, Size: int64(len(r.opts.ProbeBinary))}, r.opts.ProbeBinary},
-	}
-	if edgeCA != nil {
-		entries = append(entries, struct {
-			header tar.Header
-			body   []byte
-		}{tar.Header{Name: "edge-ca.crt", Mode: 0o644, Typeflag: tar.TypeReg, Size: int64(len(edgeCA))}, edgeCA})
-	}
-	for _, entry := range entries {
-		if err := writer.WriteHeader(&entry.header); err != nil {
-			return fmt.Errorf("pack the readiness probe: %w", err)
-		}
-		if _, err := writer.Write(entry.body); err != nil {
-			return fmt.Errorf("pack the readiness probe: %w", err)
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("pack the readiness probe: %w", err)
-	}
-	// The engine decides by the destination: a path inside a volume is writable under a read-only root.
-	if err := r.engine.CopyToContainer(ctx, id, "/"+probeDir, &archive, container.CopyToContainerOptions{}); err != nil {
-		return fmt.Errorf("copy the readiness probe into %s: %w", id, err)
-	}
-	return nil
 }
 
 // probeReady runs the probe inside the container; any failure to run it is "not ready".

@@ -64,6 +64,9 @@ if [ -n "$AC" ]; then
   $DOCKER exec "$AC" sh -c 'touch /tmp/probe && touch /data/probe' >/dev/null 2>&1 && ok "the app writes /tmp and its disk" || ko "the app cannot write /tmp or /data"
   [ "$($DOCKER inspect "$AC" --format '{{.HostConfig.ReadonlyRootfs}}')" = true ] && ok "the engine holds the root read-only" || ko "root is not read-only in the engine"
   case "$($DOCKER inspect "$AC" --format '{{json .HostConfig.Tmpfs}}')" in *'"/tmp":"'*size=*) ok "/tmp is a size-capped tmpfs" ;; *) ko "/tmp is not capped: $($DOCKER inspect "$AC" --format '{{json .HostConfig.Tmpfs}}')" ;; esac
+  $DOCKER exec "$AC" sh -c 'grep " /tmp " /proc/mounts' | grep -q noexec && ko "/tmp is mounted noexec" || ok "/tmp is not noexec"
+  $DOCKER exec "$AC" sh -c 'dd if=/dev/zero of=/.excalibase/filler bs=1M count=1 2>/dev/null' && ko "the app wrote to the probe volume" || ok "the probe volume is read-only to the app"
+  case "$($DOCKER inspect "$AC" --format '{{json .HostConfig.LogConfig.Config}}')" in *max-size*max-file*|*max-file*max-size*) ok "the app's log is rotated" ;; *) ko "the app's log is not capped" ;; esac
 else
   ko "no app container to check the root filesystem on"
 fi
