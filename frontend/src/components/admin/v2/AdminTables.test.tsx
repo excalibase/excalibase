@@ -28,7 +28,7 @@ function renderWith(ui: React.ReactElement) {
 
 const lastParams = (url: string) => {
   const calls = vi.mocked(api.get).mock.calls.filter(([called]) => called === url);
-  return (calls.at(-1)?.[1] as { params: Record<string, unknown> }).params;
+  return (calls.at(-1)?.[1] as { params: Record<string, unknown> } | undefined)?.params;
 };
 
 describe('column definitions', () => {
