@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
+	"sync"
 
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -57,8 +59,37 @@ func validateSecretKeyShape(key string) error {
 // no org dimension (projectId is globally unique).
 // Stored as a single map[string]string entry — all secrets for a project
 // are loaded and reloaded together. Keeps the worker deploy step simple.
+//
+// Set and Delete read the whole map and write it back, so every change to a
+// project's secrets runs under LockProjectSecrets: two at once would both
+// start from the same map and the second write would undo the first (EXC-897).
 type SecretsStore struct {
 	vault vaultclient.VaultClient
+}
+
+// projectSecretLocks holds one lock per project, shared by everything in this
+// process that changes the project's function secrets: the store, the vault
+// route a platform admin writes through, and project deletion. It lives in
+// this process; the control plane runs as a single replica.
+var projectSecretLocks sync.Map // projectID -> *sync.Mutex
+
+// LockProjectSecrets takes the project's secrets lock and returns the unlock.
+func LockProjectSecrets(projectID string) func() {
+	lock, _ := projectSecretLocks.LoadOrStore(projectID, &sync.Mutex{})
+	mutex := lock.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
+}
+
+// FunctionSecretsProject names the project whose function secrets a vault path
+// holds, and reports whether the path is exactly that.
+func FunctionSecretsProject(path string) (string, bool) {
+	rest, found := strings.CutPrefix(path, "projects/")
+	projectID, tail, cut := strings.Cut(rest, "/")
+	if !found || !cut || projectID == "" || tail != "edgefn/secrets" {
+		return "", false
+	}
+	return projectID, true
 }
 
 func NewSecretsStore(vault vaultclient.VaultClient) *SecretsStore {
@@ -104,9 +135,8 @@ func (s *SecretsStore) ListKeys(projectID string) ([]string, error) {
 	return keys, nil
 }
 
-// Set stores (or updates) a single secret. Reads the full map, updates one key,
-// writes it back. Not atomic across concurrent callers — acceptable for a low-
-// traffic admin surface.
+// Set stores (or updates) a single secret. Reads the full map, updates one key
+// and writes it back, all under the project's lock.
 func (s *SecretsStore) Set(projectID, key, value string) error {
 	if s.vault == nil {
 		return fmt.Errorf("vault not configured")
@@ -120,6 +150,7 @@ func (s *SecretsStore) Set(projectID, key, value string) error {
 	if len(value) > MaxSecretValueLen {
 		return fmt.Errorf("secret value exceeds max length %d", MaxSecretValueLen)
 	}
+	defer LockProjectSecrets(projectID)()
 	all, err := s.GetAll(projectID)
 	if err != nil {
 		return err
@@ -141,6 +172,7 @@ func (s *SecretsStore) Delete(projectID, key string) error {
 	if err := validateSecretKeyShape(key); err != nil {
 		return err
 	}
+	defer LockProjectSecrets(projectID)()
 	all, err := s.GetAll(projectID)
 	if err != nil {
 		return err

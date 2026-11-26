@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -380,5 +381,46 @@ func TestDeprovisionPurgesTheOAuthClientSecrets(t *testing.T) {
 	}
 	if _, leaked := vault.data[secretPath]; leaked {
 		t.Error("the OAuth client secret must be purged with the project")
+	}
+}
+
+// prefixRecorder notes when a prefix delete ran.
+type prefixRecorder struct {
+	stubbornVault
+	deleted chan string
+}
+
+func (p *prefixRecorder) DeletePrefix(prefix string) (int, error) {
+	p.deleted <- prefix
+	return 0, nil
+}
+
+func (p *prefixRecorder) List(string) ([]string, error) { return nil, nil }
+
+// EXC-897: a change to the project's function secrets in flight finishes
+// before deletion removes them.
+func TestDeleteVaultCredentialsWaitsForTheFunctionSecretsLock(t *testing.T) {
+	svc, _, _ := setupDeletionTest(t)
+	recorder := &prefixRecorder{deleted: make(chan string, 1)}
+	svc.vault = recorder
+	unlock := edgefn.LockProjectSecrets(testDeletingProj)
+	finished := make(chan error, 1)
+	go func() {
+		finished <- svc.deleteVaultCredentials(context.Background(), &domain.DatabaseInstance{ProjectID: testDeletingProj})
+	}()
+
+	select {
+	case prefix := <-recorder.deleted:
+		t.Fatalf("%s was removed while the project's secrets were being changed", prefix)
+	case <-time.After(150 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the deletion never ran once the lock was free")
 	}
 }

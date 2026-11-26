@@ -17,6 +17,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/metrics"
@@ -1690,7 +1691,12 @@ func (s *ProvisioningService) deleteVaultCredentials(_ context.Context, inst *do
 	}
 	// Path is project-scoped only — no orgSlug guessing.
 	prefix := vaultProjectPrefix(inst.ProjectID)
-	if _, err := s.vault.DeletePrefix(prefix); err != nil {
+	// A set or delete of the project's function secrets in flight finishes
+	// before they are removed, not after.
+	unlock := edgefn.LockProjectSecrets(inst.ProjectID)
+	_, err := s.vault.DeletePrefix(prefix)
+	unlock()
+	if err != nil {
 		return fmt.Errorf("vault delete prefix %s: %w", prefix, err)
 	}
 	left, err := s.vault.List(prefix)
