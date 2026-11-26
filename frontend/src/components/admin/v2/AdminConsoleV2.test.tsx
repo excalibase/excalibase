@@ -22,6 +22,10 @@ describe('which tabs an admin sees', () => {
     expect(adminTabs(false).map((t) => t.id)).toEqual(['projects', 'platform']);
   });
 
+  test('the first analytics tab starts a new group', () => {
+    expect(adminTabs(true, true).filter((t) => t.startsGroup).map((t) => t.id)).toEqual(['analytics-users']);
+  });
+
   test('the analytics tabs sit before the platform cards and only for a platform admin', () => {
     expect(adminTabs(true, true).map((t) => t.id)).toEqual([
       'attention', 'projects', 'users', 'orgs', 'analytics-users', ANALYTICS_TABS.abuse, 'analytics-traffic', 'analytics-storage', 'platform',

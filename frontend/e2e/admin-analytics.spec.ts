@@ -45,6 +45,9 @@ test.describe('admin analytics tabs', () => {
     await page.goto('/admin');
     await expect(page.getByRole('tab', { name: /Sign-ups\s*292/ })).toBeVisible();
     await expect(page.getByRole('tab', { name: /Abuse\s*98/ })).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const tabTops = await page.getByRole('tab').evaluateAll((els) => new Set(els.map((el) => Math.round(el.getBoundingClientRect().top))).size);
+    expect(tabTops).toBe(1);
     await page.getByRole('tab', { name: /Sign-ups/ }).click();
     await expect(page.getByLabel('Needs attention').getByRole('button', { name: /98 accounts had a deploy refused/ })).toBeVisible();
     await expect(page.getByText('fldubai.com')).toBeVisible();

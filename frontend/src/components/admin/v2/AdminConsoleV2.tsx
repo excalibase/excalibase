@@ -38,7 +38,7 @@ function countBadge(count: number | undefined, alarming: boolean): AdminTab['bad
 export function adminTabs(canMutate: boolean, analytics = false, badges: AnalyticsBadges = {}): AdminTab[] {
   const analyticsTabs: AdminTab[] = canMutate && analytics
     ? [
-      { id: ANALYTICS_TABS.users, label: 'Sign-ups', badge: countBadge(badges.signups, false) },
+      { id: ANALYTICS_TABS.users, label: 'Sign-ups', startsGroup: true, badge: countBadge(badges.signups, false) },
       { id: ANALYTICS_TABS.abuse, label: 'Abuse', badge: countBadge(badges.stillActive, true) },
       { id: ANALYTICS_TABS.traffic, label: 'Traffic', badge: { text: 'no data', tone: 'warn' } },
       { id: ANALYTICS_TABS.storage, label: 'Storage', badge: { text: 'no data', tone: 'warn' } },
