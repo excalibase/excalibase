@@ -23,6 +23,9 @@ type renewalHarness struct {
 	kube      *k8s.MockClient
 	restarted []string
 	now       time.Time
+	// hold stands for the project lease; by default it admits an ACTIVE project
+	// as the store holds it now.
+	hold func(ctx context.Context, projectID string) (*domain.DatabaseInstance, func(), error)
 }
 
 func newRenewalHarness(t *testing.T, status string) *renewalHarness {
@@ -46,8 +49,20 @@ func newRenewalHarness(t *testing.T, status string) *renewalHarness {
 		}
 		h.vault.data[vaultCredentialPath(renewProject, role)] = material.AddTo(map[string]string{"username": role, "password": "pw"})
 	}
+	h.hold = func(_ context.Context, projectID string) (*domain.DatabaseInstance, func(), error) {
+		inst, err := store.FindByProjectID(projectID)
+		if err == nil {
+			err = requireActive(projectID, inst.Status)
+		}
+		return inst, func() {
+			// the fake lease holds nothing to give back
+		}, err
+	}
 	h.renewer = NewRoleCertificateRenewer(RoleCertificateRenewerConfig{
 		Instances: store, Kube: h.kube, Vault: h.vault,
+		HoldProject: func(ctx context.Context, projectID string) (*domain.DatabaseInstance, func(), error) {
+			return h.hold(ctx, projectID)
+		},
 		RestartReplication: func(_ context.Context, inst *domain.DatabaseInstance) error {
 			h.restarted = append(h.restarted, inst.ProjectID)
 			return nil

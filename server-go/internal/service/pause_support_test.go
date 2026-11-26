@@ -248,7 +248,7 @@ func TestRestartReplicationRedeploysTheWatcher(t *testing.T) {
 	if err := h.svc.RestartReplication(context.Background(), inst); err != nil {
 		t.Fatalf("RestartReplication: %v", err)
 	}
-	if !strings.Contains(strings.Join(h.kube.Calls, ","), "InstallHelmChart:"+inst.Namespace+"/excalibase-watcher") {
+	if !strings.Contains(strings.Join(h.kube.Calls, ","), "ApplyHelmChart:"+inst.Namespace+"/excalibase-watcher") {
 		t.Errorf("the watcher chart must be reinstalled, calls=%v", h.kube.Calls)
 	}
 }

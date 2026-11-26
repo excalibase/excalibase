@@ -26,6 +26,8 @@ const (
 	OperationTLSChange     ProjectOperation = "TLS setting change"
 	OperationAllowList     ProjectOperation = "allow-list change"
 	OperationRollbackRetry ProjectOperation = "rollback retry"
+	// OperationWatcherRestart redeploys a running project's CDC watcher onto a renewed certificate.
+	OperationWatcherRestart ProjectOperation = "watcher restart"
 )
 
 // ErrProjectOperationRunning is what every caller refused the project's

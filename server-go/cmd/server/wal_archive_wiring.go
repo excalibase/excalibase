@@ -36,6 +36,16 @@ func wireRenewalAlerts(cfg config.AppConfig, renewer *service.BackupCredentialRe
 	return true
 }
 
+// wireRoleCertAlerts makes the role certificate renewer raise an alert for a
+// project whose renewal or watcher restart keeps failing (EXC-887).
+func wireRoleCertAlerts(cfg config.AppConfig, renewer *service.RoleCertificateRenewer, alerts *service.AlertingService, notifier service.AlertNotifier) bool {
+	if alerts == nil || !features.Enabled(context.Background(), cfg.Features(), features.WALArchiveAlert) {
+		return false
+	}
+	renewer.SetAlerts(alerts, notifier, cfg.RoleCertAlertAfter)
+	return true
+}
+
 // alertMailBatch gathers the alerts one root cause raises in the same pass into one mail.
 const alertMailBatch = 30 * time.Second
 

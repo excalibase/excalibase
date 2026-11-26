@@ -652,7 +652,7 @@ func (m *MockClient) GetSecret(ctx context.Context, namespace, name string) (map
 	if m.WildcardSecret != nil {
 		return m.WildcardSecret, nil
 	}
-	return nil, fmt.Errorf("secret not found: %s", key)
+	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, name)
 }
 
 func (m *MockClient) CreateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
@@ -844,6 +844,21 @@ func (m *MockClient) InstallHelmChart(ctx context.Context, namespace, releaseNam
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "InstallHelmChart:"+namespace+"/"+releaseName)
+	if m.HelmError != nil {
+		return m.HelmError
+	}
+	if _, exists := m.HelmReleases[namespace+"/"+releaseName]; exists {
+		return fmt.Errorf("install %s: %w", releaseName, ErrReleaseInUse)
+	}
+	m.HelmReleases[namespace+"/"+releaseName] = values
+	return nil
+}
+
+// ApplyHelmChart installs the release, or upgrades it when it exists.
+func (m *MockClient) ApplyHelmChart(ctx context.Context, namespace, releaseName, chartPath string, values map[string]interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ApplyHelmChart:"+namespace+"/"+releaseName)
 	if m.HelmError != nil {
 		return m.HelmError
 	}

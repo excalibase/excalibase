@@ -106,6 +106,11 @@ func TestK3sHelmInstallUninstall(t *testing.T) {
 		t.Error("deployment helm-e2e should exist after install")
 	}
 
+	t.Log("Applying the chart over its own release...")
+	if err := client.ApplyHelmChart(ctx, ns, "my-release", chartPath, values); err != nil {
+		t.Fatalf("ApplyHelmChart over an existing release: %v", err)
+	}
+
 	t.Log("Uninstalling chart...")
 	if err := client.UninstallHelmChart(ctx, ns, "my-release"); err != nil {
 		t.Fatalf("UninstallHelmChart: %v", err)

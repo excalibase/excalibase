@@ -919,7 +919,7 @@ func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, spec WatcherS
 		},
 	}
 	maps.Copy(values, watcherTLSValues(spec))
-	if err := p.client.InstallHelmChart(ctx, namespace, watcherReleaseName, p.watcherChartPath, values); err != nil {
+	if err := p.client.ApplyHelmChart(ctx, namespace, watcherReleaseName, p.watcherChartPath, values); err != nil {
 		log.Printf("WARN: watcher deployment failed for %s: %v", projectID, err)
 		return err
 	}
@@ -999,7 +999,7 @@ func (p *PostgreSQLProvisioner) RemoveDatabase(ctx context.Context, namespace, p
 	if err := p.deleteArchiveStores(ctx, namespace, projectID); err != nil {
 		return err
 	}
-	for _, secret := range []string{k8s.BackupCredentialsSecretName, k8s.DocumentDBCredentialSecretName(projectID), watcherTLSSecretName(projectID)} {
+	for _, secret := range []string{k8s.BackupCredentialsSecretName, k8s.DocumentDBCredentialSecretName(projectID), WatcherTLSSecretName(projectID)} {
 		if err := p.client.DeleteSecret(ctx, namespace, secret); err != nil {
 			return err
 		}

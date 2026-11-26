@@ -671,6 +671,13 @@ func singleHostWatcherSpec(projectID, host string, port int, database, password 
 // publishes nothing.
 var ErrReplicationRestartUnavailable = errors.New("replication restart: watcher dependencies not configured")
 
+// HoldForWatcherRestart takes the project's lease for redeploying its watcher
+// and reads the project under it, admitting only an ACTIVE one: a pause that
+// holds the lease, or has since finished, must not find a watcher put back.
+func (s *ProvisioningService) HoldForWatcherRestart(ctx context.Context, projectID string) (*domain.DatabaseInstance, func(), error) {
+	return s.holdProject(ctx, projectID, OperationWatcherRestart, requireActive)
+}
+
 // RestartReplication reinstalls a project's CDC watcher. A pause removes it
 // so its replication session stops holding the database's shutdown open
 // (EXC-363); a resume puts it back, and only after the primary is serving —
