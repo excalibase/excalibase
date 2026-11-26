@@ -93,13 +93,12 @@ func (s *ProvisioningService) reconcileIfPending(ctx context.Context, inst *doma
 		return false, err
 	}
 	if err := s.reconcileProject(projectCtx, inst.ProjectID); err != nil {
-		left := errors.Is(err, errPlatformSchemaLeft)
-		if left {
-			s.trackSchemaAlert(inst.ProjectID, true)
+		if errors.Is(err, errPlatformSchemaLeft) || errors.Is(err, errPlatformRepairCutOff) {
+			s.trackSchemaAlert(inst.ProjectID, true, err)
 		}
 		return false, err
 	}
-	s.trackSchemaAlert(inst.ProjectID, false)
+	s.trackSchemaAlert(inst.ProjectID, false, nil)
 	return true, nil
 }
 
@@ -118,7 +117,7 @@ func (s *ProvisioningService) rolesPending(ctx context.Context, inst *domain.Dat
 	if err != nil || state.appReachesAuth || state.schemasDrifted {
 		return err == nil, err
 	}
-	s.trackSchemaAlert(inst.ProjectID, false)
+	s.trackSchemaAlert(inst.ProjectID, false, nil)
 	drifted, err := s.passwordsDrifted(inst, state.stored)
 	return len(drifted) > 0, err
 }

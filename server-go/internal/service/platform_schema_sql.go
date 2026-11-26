@@ -22,7 +22,8 @@ func platformSchemaScripts() (lockdown, quarantine, refusal string) {
 func schemaScoped(namespace string) *strings.Replacer {
 	scoped := strings.NewReplacer("{{NS}}", namespace, "{{QNS}}", "to_regnamespace(quarantine)")
 	return strings.NewReplacer("{{OWNED}}", scoped.Replace(customerOwnedObjects), "{{TAINTED_TABLES}}", taintedTables,
-		"{{LAST_TRY}}", strconv.Itoa(quarantineNameTries-1), "{{MOVABLE}}", scoped.Replace(movableObjects), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargets))
+		"{{LAST_TRY}}", strconv.Itoa(quarantineNameTries-1), "{{GRANTEES}}", scoped.Replace(schemaGrantees),
+		"{{QUARANTINE_GRANTEES}}", quarantineGrantees, "{{MOVABLE}}", scoped.Replace(movableObjects), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargets))
 }
 
 // The lockdown takes the schema back, reclaims the platform's own tables a
@@ -72,7 +73,7 @@ BEGIN
       EXECUTE format('DROP RULE %I ON %s', item.rulename, item.relation);
     END LOOP;
 
-    FOR holder IN SELECT r.rolname FROM pg_roles r WHERE {{CUSTOMER_R}} LOOP
+    FOR holder IN SELECT r.rolname FROM pg_roles r WHERE {{CUSTOMER_R}} AND r.oid IN ({{GRANTEES}}) LOOP
       EXECUTE format('REVOKE ALL ON SCHEMA %I FROM %I', entry.schema_name, holder.rolname);
       EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM %I', entry.schema_name, holder.rolname);
       EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM %I', entry.schema_name, holder.rolname);
@@ -116,7 +117,7 @@ BEGIN
     EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', quarantine);
     EXECUTE format('ALTER SCHEMA %I OWNER TO CURRENT_USER', quarantine);
     EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM PUBLIC', quarantine);
-    FOR holder IN SELECT r.rolname FROM pg_roles r WHERE {{CUSTOMER_R}} LOOP
+    FOR holder IN SELECT r.rolname FROM pg_roles r WHERE {{CUSTOMER_R}} AND r.oid IN ({{QUARANTINE_GRANTEES}}) LOOP
       EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM %I', quarantine, holder.rolname);
     END LOOP;
 
@@ -213,3 +214,17 @@ const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
 // quarantineNameTries bounds the schema names tried for one object whose name
 // is taken in the quarantine schema, before the repair refuses.
 const quarantineNameTries = 8
+
+// schemaGrantees is every role holding an explicit grant on {{NS}} or on a
+// relation, column or routine in it. A role holds no other grant there, so the
+// revokes need only name these: the cost follows the grants that exist, never
+// the number of roles the owner made.
+const schemaGrantees = `
+      SELECT a.grantee FROM pg_namespace n, aclexplode(n.nspacl) a WHERE n.oid = {{NS}}
+      UNION SELECT a.grantee FROM pg_class c, aclexplode(c.relacl) a WHERE c.relnamespace = {{NS}}
+      UNION SELECT a.grantee FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid, aclexplode(att.attacl) a WHERE c.relnamespace = {{NS}}
+      UNION SELECT a.grantee FROM pg_proc p, aclexplode(p.proacl) a WHERE p.pronamespace = {{NS}}`
+
+// quarantineGrantees is every role holding CREATE on the quarantine schema.
+const quarantineGrantees = `
+      SELECT a.grantee FROM pg_namespace n, aclexplode(n.nspacl) a WHERE n.nspname = quarantine AND a.privilege_type = 'CREATE'`

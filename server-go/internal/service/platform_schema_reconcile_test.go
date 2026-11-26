@@ -465,3 +465,51 @@ func TestReconcileProjectRoles_ASchemaStillUncleanAfterTheScriptsIsAlerted(t *te
 		t.Fatal("no alert for a schema left unclean")
 	}
 }
+
+// A repair cut off by a statement or lock timeout is a project alert, never
+// only a log line.
+func TestReconcileProjectRoles_ARepairCutOffByATimeoutIsAlerted(t *testing.T) {
+	for name, text := range map[string]string{
+		"statement timeout": "psql:<stdin>:75: ERROR:  57014: canceling statement due to statement timeout",
+		"lock timeout":      "psql:<stdin>:75: ERROR:  55P03: canceling statement due to lock timeout",
+		"lock code only":    "psql:<stdin>:75: ERROR:  55P03: could not obtain lock",
+		"statement code":    "psql:<stdin>:75: ERROR:  57014: cancelled",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newRotationHarness(t)
+			h.seedPreSchedulerCluster(t)
+			h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
+			alerts := NewAlertingService(t.TempDir())
+			h.svc.SetSchemaAlerts(alerts)
+			h.kube.ExecAnswer = func(cmd []string) (string, error) {
+				return probeAuthTag + "\tf\n" + probeSchemasTag + "\tt\n", nil
+			}
+			h.kube.ExecAnswerStdin = func(string) (string, error) { return "", errors.New("exit code 3: " + text) }
+			report := h.svc.ReconcileProjectRoles(context.Background())
+			if len(report.Failed) != 1 || !errors.Is(report.Failed[0], errPlatformRepairCutOff) {
+				t.Fatalf("report = %+v", report)
+			}
+			open := alerts.GetActiveAlertsForProject(rotProject)
+			if len(open) != 1 || open[0].Metric != platformSchemaMetric || !strings.Contains(open[0].Message, "timeout") {
+				t.Fatalf("alerts = %+v", open)
+			}
+		})
+	}
+}
+
+// The lockdown reads the grants that exist; it does not walk every role.
+func TestPlatformSchemaScripts_RevokeOnlyFromRolesThatHoldAGrant(t *testing.T) {
+	lockdown, quarantine, _ := platformSchemaScripts()
+	for name, script := range map[string]string{"lockdown": lockdown, "quarantine": quarantine} {
+		loops := strings.Split(script, "FOR holder IN")[1:]
+		if len(loops) == 0 {
+			t.Fatalf("the %s script revokes from no holder", name)
+		}
+		for _, loop := range loops {
+			header, _, _ := strings.Cut(loop, "LOOP")
+			if !strings.Contains(header, "aclexplode") {
+				t.Errorf("the %s script walks roles that hold no grant", name)
+			}
+		}
+	}
+}

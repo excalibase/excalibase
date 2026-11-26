@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // EXC-821 review round 2: who counts as the platform, and a repair that keeps
@@ -276,5 +277,65 @@ func TestPlatformSchemas_ExhaustedQuarantineNamesEndInARefusal(t *testing.T) {
 	}
 	if !scanBool(t, c.admin, `SELECT NOT has_schema_privilege('excalibase_app', 'auth', 'CREATE')`) {
 		t.Fatal("the revokes did not commit before the refusal")
+	}
+}
+
+// The owner can create thousands of roles in a second. The repair costs what the
+// grants cost, not roles times objects, so it ends well inside its timeout and
+// leaves the project clean.
+func TestPlatformSchemas_ThousandsOfCustomerRolesDoNotStopTheRepair(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	mustExec(t, c.admin, `DO $$ BEGIN FOR i IN 1..2000 LOOP EXECUTE format('CREATE ROLE bulk_%s NOLOGIN', i); END LOOP; END $$`)
+	mustExec(t, c.admin, `DO $$ BEGIN FOR i IN 1..300 LOOP EXECUTE format('CREATE TABLE auth.bulk_t%s (id int)', i); END LOOP; END $$`)
+	mustExec(t, c.admin, `GRANT USAGE ON SCHEMA auth TO bulk_7; GRANT SELECT ON auth.users TO bulk_1999`)
+	plantRoutine(t, c, "auth", "bulk_fn", "bulk_42")
+	started := time.Now()
+	if err := c.registerWith(t, ""); err != nil {
+		t.Fatalf("registration with 2000 customer roles: %v", err)
+	}
+	if took := time.Since(started); took > 30*time.Second {
+		t.Fatalf("the repair took %s with 2000 roles and 300 tables", took)
+	}
+	if c.probe(t) {
+		t.Fatal("drift left behind")
+	}
+	if scanBool(t, c.admin, `SELECT has_schema_privilege('bulk_7', 'auth', 'USAGE') OR has_table_privilege('bulk_1999', 'auth.users', 'SELECT')`) {
+		t.Fatal("a grant to one of the many roles survived")
+	}
+}
+
+// Each place a customer grant can sit is read for it: the schema, a table, a
+// column, a sequence and a function.
+func TestPlatformSchemas_EveryKindOfCustomerGrantIsRevoked(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	for _, statement := range []string{
+		`CREATE ROLE g_schema NOLOGIN`, `CREATE ROLE g_table NOLOGIN`, `CREATE ROLE g_column NOLOGIN`,
+		`CREATE ROLE g_sequence NOLOGIN`, `CREATE ROLE g_function NOLOGIN`, `CREATE ROLE g_cdc NOLOGIN`,
+		`GRANT USAGE ON SCHEMA auth TO g_schema`,
+		`GRANT SELECT ON auth.users TO g_table`,
+		`GRANT SELECT (email) ON auth.users TO g_column`,
+		`GRANT USAGE ON SEQUENCE auth.users_id_seq TO g_sequence`,
+		`CREATE FUNCTION auth.plain() RETURNS int LANGUAGE sql AS 'SELECT 1'`,
+		`GRANT EXECUTE ON FUNCTION auth.plain() TO g_function`,
+		`GRANT USAGE ON SCHEMA excalibase_cdc TO g_cdc`,
+	} {
+		mustExec(t, c.admin, statement)
+	}
+	c.register(t)
+	for name, check := range map[string]string{
+		"schema":   `has_schema_privilege('g_schema', 'auth', 'USAGE')`,
+		"table":    `has_table_privilege('g_table', 'auth.users', 'SELECT')`,
+		"column":   `has_column_privilege('g_column', 'auth.users', 'email', 'SELECT')`,
+		"sequence": `has_sequence_privilege('g_sequence', 'auth.users_id_seq', 'USAGE')`,
+		"function": `has_function_privilege('g_function', 'auth.plain()', 'EXECUTE')`,
+		"cdc":      `has_schema_privilege('g_cdc', 'excalibase_cdc', 'USAGE')`,
+	} {
+		if scanBool(t, c.admin, "SELECT "+check) {
+			t.Errorf("the %s grant survived", name)
+		}
 	}
 }

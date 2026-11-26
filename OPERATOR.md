@@ -1328,7 +1328,7 @@ PUBLIC's EXECUTE; it cannot refuse), the password repair, the registration SQL
   `excalibase_quarantine_<schema>`, the customer still the owner. The schema is
   taken over if it exists (owner to the superuser, CREATE revoked); an object whose
   name is taken there goes to a schema of its own, and when eight such names are
-  taken the repair refuses (alert) instead of looping. The repair scripts run with a 60 s statement_timeout. Nothing is dropped with CASCADE.
+  taken the repair refuses (alert) instead of looping. The repair scripts run with a 60 s statement_timeout. The revokes name only roles that hold a grant (read from the ACLs), so the owner creating thousands of roles does not slow them. A script cut off by a statement or lock timeout raises the same alert, with its own message. Nothing is dropped with CASCADE.
 - Any other relation a customer role owns, and a platform table whose policy,
   default, CHECK or index calls a routine or operator the platform does not own,
   is not touched: registration refuses ("left for an operator") after the
