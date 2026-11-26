@@ -93,9 +93,6 @@ func TestPlatformSchemas_CustomerObjectsAreQuarantinedNotAdopted(t *testing.T) {
 		`CREATE OPERATOR auth.### (LEFTARG = int, RIGHTARG = int, FUNCTION = auth.opfn)`,
 		`ALTER OPERATOR auth.### (int, int) OWNER TO excalibase_app`,
 		`ALTER FUNCTION auth.opfn(int, int) OWNER TO excalibase_app`,
-		`CREATE TABLE auth.planted (id int DEFAULT 1)`,
-		`ALTER TABLE auth.planted OWNER TO ` + customerOwner,
-		`CREATE RULE planted_rule AS ON INSERT TO auth.planted DO ALSO NOTHING`,
 		`GRANT USAGE ON SCHEMA auth TO cust_extra`,
 		`GRANT SELECT ON auth.users TO cust_extra`,
 	} {
@@ -186,7 +183,7 @@ func TestPlatformSchemas_RulesAreDroppedAndTaintedTablesAreRefused(t *testing.T)
 		if !c.probe(t) {
 			t.Errorf("%s: the probe did not see it", name)
 		}
-		err := c.pg.psqlErr(mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
+		err := c.registerWith(t, "")
 		if err == nil || !strings.Contains(err.Error(), "left for an operator") {
 			t.Errorf("%s: registration did not refuse the table: %v", name, err)
 		}
@@ -261,16 +258,16 @@ func TestPlatformSchemas_EachKindOfDriftIsSeenAndRepaired(t *testing.T) {
 	mustExec(t, c.admin, `CREATE FUNCTION public.app_trigger() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`)
 	mustExec(t, c.admin, `ALTER FUNCTION public.app_trigger() OWNER TO excalibase_app`)
 	for name, statement := range map[string]string{
-		"create on the watcher schema": `GRANT CREATE ON SCHEMA excalibase_cdc TO ` + customerOwner,
-		"usage on auth":                `GRANT USAGE ON SCHEMA auth TO excalibase_app`,
-		"customer-owned schema":        `ALTER SCHEMA excalibase_cdc OWNER TO ` + customerOwner,
-		"customer-owned function":      `CREATE FUNCTION auth.planted() RETURNS int LANGUAGE sql AS 'SELECT 1'; ALTER FUNCTION auth.planted() OWNER TO excalibase_app`,
-		"customer function trigger":    `CREATE TRIGGER planted BEFORE INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.app_trigger()`,
-		"customer-owned table":         `CREATE TABLE excalibase_cdc.planted (id int); ALTER TABLE excalibase_cdc.planted OWNER TO ` + customerOwner,
-		"customer-owned type":          `CREATE TYPE auth.planted_type AS (one int); ALTER TYPE auth.planted_type OWNER TO excalibase_app`,
-		"any other customer role":      `CREATE ROLE cust_extra NOLOGIN; GRANT USAGE ON SCHEMA auth TO cust_extra`,
-		"public may execute":           `CREATE FUNCTION auth.helper() RETURNS int LANGUAGE sql AS 'SELECT 1'`,
-		"tainted excalibase schema":    `CREATE TABLE excalibase.planted (id int); ALTER TABLE excalibase.planted OWNER TO excalibase_app`,
+		"create on the watcher schema":  `GRANT CREATE ON SCHEMA excalibase_cdc TO ` + customerOwner,
+		"usage on auth":                 `GRANT USAGE ON SCHEMA auth TO excalibase_app`,
+		"customer-owned schema":         `ALTER SCHEMA excalibase_cdc OWNER TO ` + customerOwner,
+		"customer-owned function":       `CREATE FUNCTION auth.planted() RETURNS int LANGUAGE sql AS 'SELECT 1'; ALTER FUNCTION auth.planted() OWNER TO excalibase_app`,
+		"customer function trigger":     `CREATE TRIGGER planted BEFORE INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.app_trigger()`,
+		"customer-owned platform table": `CREATE TABLE auth.api_keys (id int); ALTER TABLE auth.api_keys OWNER TO ` + customerOwner,
+		"customer-owned type":           `CREATE TYPE auth.planted_type AS (one int); ALTER TYPE auth.planted_type OWNER TO excalibase_app`,
+		"any other customer role":       `CREATE ROLE cust_extra NOLOGIN; GRANT USAGE ON SCHEMA auth TO cust_extra`,
+		"public may execute":            `CREATE FUNCTION auth.helper() RETURNS int LANGUAGE sql AS 'SELECT 1'`,
+		"tainted excalibase schema":     `CREATE TABLE excalibase.planted (id int); ALTER TABLE excalibase.planted OWNER TO excalibase_app`,
 	} {
 		mustExec(t, c.admin, statement)
 		if !c.probe(t) {

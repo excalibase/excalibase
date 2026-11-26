@@ -93,8 +93,13 @@ func (s *ProvisioningService) reconcileIfPending(ctx context.Context, inst *doma
 		return false, err
 	}
 	if err := s.reconcileProject(projectCtx, inst.ProjectID); err != nil {
+		left := errors.Is(err, errPlatformSchemaLeft)
+		if left {
+			s.trackSchemaAlert(inst.ProjectID, true)
+		}
 		return false, err
 	}
+	s.trackSchemaAlert(inst.ProjectID, false)
 	return true, nil
 }
 
@@ -113,6 +118,7 @@ func (s *ProvisioningService) rolesPending(ctx context.Context, inst *domain.Dat
 	if err != nil || state.appReachesAuth || state.schemasDrifted {
 		return err == nil, err
 	}
+	s.trackSchemaAlert(inst.ProjectID, false)
 	drifted, err := s.passwordsDrifted(inst, state.stored)
 	return len(drifted) > 0, err
 }
@@ -176,9 +182,8 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	if err != nil {
 		return err
 	}
-	roleSQL += driftSQL
-	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
-		return fmt.Errorf("re-run registration SQL: %w", err)
+	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, registrationScripts(roleSQL, driftSQL)...); err != nil {
+		return schemaLeftError(fmt.Errorf("re-run registration SQL: %w", err))
 	}
 	if err := verifyPlatformClean(ctx, exec, inst); err != nil {
 		return err
@@ -431,7 +436,7 @@ func verifyPlatformClean(ctx context.Context, exec roleSQLExecer, inst *domain.D
 		return errors.New("excalibase_app still reaches auth after the registration SQL")
 	}
 	if state.schemasDrifted {
-		return errors.New("a platform schema still holds customer changes after the registration SQL")
+		return errPlatformSchemaLeft
 	}
 	return nil
 }

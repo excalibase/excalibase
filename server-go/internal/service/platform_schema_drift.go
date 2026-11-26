@@ -13,22 +13,34 @@ import (
 
 // platformServiceSchemas are the platform's schemas whose objects belong to
 // one platform role: auth to auth_admin, excalibase_cdc to cdc_watcher. The
-// excalibase schema is the superuser's alone and has its own rebuild.
-var platformServiceSchemas = []struct{ schema, serviceRole string }{
-	{"auth", roleAuthAdmin},
-	{"excalibase_cdc", roleWatcher},
+// excalibase schema is the superuser's alone and has its own rebuild. tables
+// are the tables the platform's own services create there: one of them a
+// customer role came to own is taken back in place, never moved. Any other
+// relation a customer role owns is left for an operator. A table the auth
+// service adds later belongs in this list.
+var platformServiceSchemas = []struct {
+	schema, serviceRole string
+	tables              []string
+}{
+	{"auth", roleAuthAdmin, []string{"users", "refresh_tokens", "password_reset_tokens", "email_verification_tokens",
+		"email_otps", "auth_codes", "flow_states", "api_keys"}},
+	{"excalibase_cdc", roleWatcher, nil},
 }
+
+// platformSchemaLeftMarker is in the refusal's message, and in the error a
+// reconcile then reports.
+const platformSchemaLeftMarker = "left for an operator"
 
 // platformSchemaNames are the schemas a routine or operator may live in and
 // still count as the platform's, with the built-in ones.
 var platformSchemaNames = []string{"pg_catalog", "information_schema", "auth", "excalibase", "excalibase_cdc"}
 
 func serviceRolesArray() string {
-	var pairs []string
+	var rows []string
 	for _, entry := range platformServiceSchemas {
-		pairs = append(pairs, "("+sqlTextLiteral(entry.schema)+", "+sqlTextLiteral(entry.serviceRole)+")")
+		rows = append(rows, "("+sqlTextLiteral(entry.schema)+", "+sqlTextLiteral(entry.serviceRole)+", "+textArraySQL(entry.tables)+")")
 	}
-	return strings.Join(pairs, ", ")
+	return strings.Join(rows, ", ")
 }
 
 func textArraySQL(values []string) string {
@@ -40,20 +52,17 @@ func textArraySQL(values []string) string {
 }
 
 // customerRolePredicate is true for a role customer SQL can act as: any role
-// that is not a superuser and not one the platform holds. excalibase_app is
-// the one platform-named role customer SQL runs as. The owner, which holds
-// CREATEROLE, and every role it creates are customers.
+// that is not a superuser, not a predefined pg_ role (the server refuses to
+// create one) and not one of the exact roles the platform creates. Never a
+// prefix: the owner can create excalibase_helper. A role of a platform name
+// that a customer administers or granted membership in is the customer's.
+// excalibase_app, excalibase_runtime and excalibase_reader are not on the list,
+// since customers hold their passwords.
 func customerRolePredicate(alias string) string {
-	platform := make([]string, 0)
-	for _, name := range pgroles.ReservedNames() {
-		if name != roleApp {
-			platform = append(platform, name)
-		}
-	}
-	return strings.NewReplacer("{{R}}", alias, "{{NAMES}}", textArraySQL(platform), "{{PREFIXES}}", textArraySQL(pgroles.ReservedPrefixes()),
-		"{{APP}}", sqlTextLiteral(roleApp)).Replace(
-		`(NOT {{R}}.rolsuper AND ({{R}}.rolname = {{APP}} OR NOT (lower({{R}}.rolname) = ANY ({{NAMES}})
-    OR EXISTS (SELECT 1 FROM unnest({{PREFIXES}}) AS prefix_list(prefix) WHERE starts_with(lower({{R}}.rolname), prefix_list.prefix)))))`)
+	return strings.NewReplacer("{{R}}", alias, "{{NAMES}}", textArraySQL(pgroles.PlatformSchemaRoles())).Replace(
+		`(NOT {{R}}.rolsuper AND NOT starts_with({{R}}.rolname, 'pg_') AND ({{R}}.rolname <> ALL ({{NAMES}})
+    OR EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles mem ON mem.oid = m.member JOIN pg_roles grantor ON grantor.oid = m.grantor
+               WHERE m.roleid = {{R}}.oid AND ((m.admin_option AND NOT mem.rolsuper) OR NOT grantor.rolsuper))))`)
 }
 
 // SQL fragments both the repair and the probe read, so they cannot disagree.
@@ -80,6 +89,34 @@ const customerOwnedObjects = `(
     UNION ALL SELECT p.proowner FROM pg_proc p WHERE p.pronamespace = {{NS}}
     UNION ALL SELECT t.typowner FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
     UNION ALL SELECT op.oprowner FROM pg_operator op WHERE op.oprnamespace = {{NS}}
+  )`
+
+// movableObjects are the objects the quarantine moves: composite types,
+// routines, types and domains, and operators, with their owners, in {{NS}}.
+const movableObjects = `(
+    SELECT c.relowner AS owner FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind = 'c'
+    UNION ALL SELECT p.proowner FROM pg_proc p WHERE p.pronamespace = {{NS}}
+    UNION ALL SELECT t.typowner FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A' AND t.typtype <> 'm'
+    UNION ALL SELECT op.oprowner FROM pg_operator op WHERE op.oprnamespace = {{NS}}
+  )`
+
+// movableWithTargets is movableObjects as the statement that moves each, with
+// whether the name is already taken in the quarantine schema {{QNS}}.
+const movableWithTargets = `(
+    SELECT 'TYPE' AS kind, c.reltype::regtype::text AS ident, c.oid AS object_oid, c.relowner AS owner,
+           EXISTS (SELECT 1 FROM pg_type x WHERE x.typnamespace = {{QNS}} AND x.typname = c.relname) AS collides
+      FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind = 'c'
+    UNION ALL SELECT 'ROUTINE', p.oid::regprocedure::text, p.oid, p.proowner,
+           EXISTS (SELECT 1 FROM pg_proc x WHERE x.pronamespace = {{QNS}} AND x.proname = p.proname AND x.proargtypes = p.proargtypes)
+      FROM pg_proc p WHERE p.pronamespace = {{NS}}
+    UNION ALL SELECT CASE t.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END, t.oid::regtype::text, t.oid, t.typowner,
+           EXISTS (SELECT 1 FROM pg_type x WHERE x.typnamespace = {{QNS}} AND x.typname = t.typname)
+      FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A' AND t.typtype <> 'm'
+    UNION ALL SELECT 'OPERATOR', format('%I.%s (%s, %s)', (SELECT nspname FROM pg_namespace WHERE oid = {{NS}}), op.oprname,
+           coalesce(NULLIF(op.oprleft, 0)::regtype::text, 'NONE'), coalesce(NULLIF(op.oprright, 0)::regtype::text, 'NONE')),
+           op.oid, op.oprowner,
+           EXISTS (SELECT 1 FROM pg_operator x WHERE x.oprnamespace = {{QNS}} AND x.oprname = op.oprname AND x.oprleft = op.oprleft AND x.oprright = op.oprright)
+      FROM pg_operator op WHERE op.oprnamespace = {{NS}}
   )`
 
 // taintedTables are tables in {{NS}} with a policy, column default, CHECK or

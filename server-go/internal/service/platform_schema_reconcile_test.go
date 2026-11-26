@@ -365,3 +365,102 @@ func TestReconcileProjectRoles_RegeneratesAnEmptyFiledPassword(t *testing.T) {
 		t.Fatal("the registration SQL did not run")
 	}
 }
+
+// EXC-821: a schema the repair leaves for an operator is a project alert, not
+// only a log line, and the alert resolves once a pass finds it clean.
+func TestReconcileProjectRoles_RaisesAnAlertForASchemaLeftForAnOperatorAndResolvesIt(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
+	alerts := NewAlertingService(t.TempDir())
+	h.svc.SetSchemaAlerts(alerts)
+	h.kube.ExecAnswer = func(cmd []string) (string, error) {
+		return probeAuthTag + "\tf\n" + probeSchemasTag + "\tt\n", nil
+	}
+	h.kube.ExecAnswerStdin = func(string) (string, error) {
+		return "", errors.New("exit code 3: ERROR: 42501: schema auth holds a relation or a table that is " + platformSchemaLeftMarker)
+	}
+
+	report := h.svc.ReconcileProjectRoles(context.Background())
+
+	if len(report.Failed) != 1 || !errors.Is(report.Failed[0], errPlatformSchemaLeft) {
+		t.Fatalf("report = %+v", report)
+	}
+	open := alerts.GetActiveAlertsForProject(rotProject)
+	if len(open) != 1 || open[0].Metric != platformSchemaMetric || open[0].Severity != "CRITICAL" {
+		t.Fatalf("alerts = %+v", open)
+	}
+	h.svc.ReconcileProjectRoles(context.Background())
+	if got := len(alerts.GetActiveAlertsForProject(rotProject)); got != 1 {
+		t.Fatalf("a second failed pass left %d alerts, want the one", got)
+	}
+
+	h.kube.ExecAnswer = authProbeAnswers("f", "f")
+	h.kube.ExecAnswerStdin = nil
+	h.svc.ReconcileProjectRoles(context.Background())
+	if open := alerts.GetActiveAlertsForProject(rotProject); len(open) != 0 {
+		t.Fatalf("the alert stayed open after a clean pass: %+v", open)
+	}
+}
+
+// A failure that is not a schema left for an operator raises no such alert.
+func TestReconcileProjectRoles_AnOrdinaryFailureRaisesNoSchemaAlert(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	alerts := NewAlertingService(t.TempDir())
+	h.svc.SetSchemaAlerts(alerts)
+	h.kube.ExecError[rotPod] = context.DeadlineExceeded
+	h.svc.ReconcileProjectRoles(context.Background())
+	if open := alerts.GetActiveAlertsForProject(rotProject); len(open) != 0 {
+		t.Fatalf("alerts = %+v", open)
+	}
+}
+
+// The revokes, the password repair and the trigger drops are scripts of their
+// own that commit before the registration SQL, whose guards can refuse; the
+// quarantine and the refusal come after it.
+func TestRegistrationScripts_CommitWhatCannotRefuseBeforeWhatCan(t *testing.T) {
+	scripts := registrationScripts("ROLE SQL;", "REPAIR SQL;")
+	index := func(marker string) int {
+		for i, script := range scripts {
+			if strings.Contains(script, marker) {
+				return i
+			}
+		}
+		t.Fatalf("no script holds %q", marker)
+		return -1
+	}
+	lockdown, repair, role, quarantine, refusal := index("excalibase_schema_lockdown"), index("REPAIR SQL"), index("ROLE SQL"),
+		index("excalibase_schema_quarantine"), index("excalibase_schema_refusal")
+	if !(lockdown < repair && repair < role && role < quarantine && quarantine < refusal) {
+		t.Fatalf("script order = lockdown %d, repair %d, role %d, quarantine %d, refusal %d", lockdown, repair, role, quarantine, refusal)
+	}
+	for _, i := range []int{lockdown, quarantine} {
+		if strings.Contains(scripts[i], "RAISE EXCEPTION") {
+			t.Errorf("script %d can refuse", i)
+		}
+	}
+	if len(registrationScripts("ROLE SQL;", "")) != len(scripts)-1 {
+		t.Error("an empty password repair still ran as a script")
+	}
+}
+
+// A schema still unclean after the scripts ran, with none of them refusing,
+// is reported and alerted the same way.
+func TestReconcileProjectRoles_ASchemaStillUncleanAfterTheScriptsIsAlerted(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
+	alerts := NewAlertingService(t.TempDir())
+	h.svc.SetSchemaAlerts(alerts)
+	h.kube.ExecAnswer = func(cmd []string) (string, error) {
+		return probeAuthTag + "\tf\n" + probeSchemasTag + "\tt\n", nil
+	}
+	report := h.svc.ReconcileProjectRoles(context.Background())
+	if len(report.Failed) != 1 || !errors.Is(report.Failed[0], errPlatformSchemaLeft) {
+		t.Fatalf("report = %+v", report)
+	}
+	if len(alerts.GetActiveAlertsForProject(rotProject)) != 1 {
+		t.Fatal("no alert for a schema left unclean")
+	}
+}

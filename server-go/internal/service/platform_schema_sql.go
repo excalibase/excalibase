@@ -2,49 +2,56 @@ package service
 
 import "strings"
 
-// platformSchemaRepairSQL puts the platform's schemas back in the platform's
-// hands and is safe to run on a clean project (EXC-821). It never adopts what a
-// customer role made: such an object (relation, routine, type, domain or
-// operator) moves out of auth or excalibase_cdc into excalibase_quarantine_<schema>,
-// its customer still the owner, so it gains nothing and loses nothing. Triggers
-// and rules on the platform's own tables that the platform did not put there are
-// dropped first, since they would run as the table's owner. A platform table with
-// a policy, default, CHECK or index calling a routine the platform does not own
-// is not touched: the repair raises, and the project is left for an operator.
-// Every grant a customer role holds on these schemas is revoked, and PUBLIC loses
-// EXECUTE on their functions. The excalibase schema is the rebuild's.
-func platformSchemaRepairSQL() string {
-	return platformSchemaFragments().Replace(schemaScoped("schema_oid").Replace(platformSchemaRepairTemplate))
+// The repair of the platform's schemas runs as three scripts, each its own
+// transaction, so a step that refuses or collides cannot undo the ones before
+// it (EXC-821): the lockdown, which cannot refuse; the quarantine of routines,
+// types and operators; and the refusal for what only an operator can fix.
+// It never adopts what a customer role made.
+
+func platformSchemaScripts() (lockdown, quarantine, refusal string) {
+	fill := func(template string) string {
+		return platformSchemaFragments().Replace(schemaScoped("schema_oid").Replace(template))
+	}
+	return fill(platformSchemaLockdownTemplate), fill(platformSchemaQuarantineTemplate), fill(platformSchemaRefusalTemplate)
 }
 
 // schemaScoped fills the fragments that depend on which schema is read.
 func schemaScoped(namespace string) *strings.Replacer {
-	owned := strings.NewReplacer("{{NS}}", namespace).Replace(customerOwnedObjects)
-	return strings.NewReplacer("{{OWNED}}", owned, "{{TAINTED_TABLES}}", taintedTables)
+	scoped := strings.NewReplacer("{{NS}}", namespace, "{{QNS}}", "to_regnamespace(quarantine)")
+	return strings.NewReplacer("{{OWNED}}", scoped.Replace(customerOwnedObjects), "{{TAINTED_TABLES}}", taintedTables,
+		"{{MOVABLE}}", scoped.Replace(movableObjects), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargets))
 }
 
-const platformSchemaRepairTemplate = `
-DO $excalibase_schema_repair$
+// The lockdown takes the schema back, reclaims the platform's own tables a
+// customer role owns (the known set, never moved), drops triggers and rules the
+// platform did not put on its tables, and revokes every grant a customer role
+// holds and PUBLIC's EXECUTE. Nothing in it can refuse or collide.
+const platformSchemaLockdownTemplate = `
+DO $excalibase_schema_lockdown$
 DECLARE
   entry record;
   item record;
   holder record;
-  quarantine text;
   schema_oid oid;
 BEGIN
-  FOR entry IN SELECT * FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role) LOOP
+  FOR entry IN SELECT * FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role, known_tables) LOOP
     schema_oid := to_regnamespace(entry.schema_name);
     IF schema_oid IS NULL OR to_regrole(entry.service_role) IS NULL THEN
       CONTINUE;
     END IF;
-    quarantine := 'excalibase_quarantine_' || entry.schema_name;
 
     IF EXISTS (SELECT 1 FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner
                WHERE n.oid = schema_oid AND {{CUSTOMER_R}}) THEN
       EXECUTE format('ALTER SCHEMA %I OWNER TO CURRENT_USER', entry.schema_name);
     END IF;
 
-    -- Triggers first: a routine moved out from under one would keep it running.
+    FOR item IN
+      SELECT c.oid::regclass::text AS name FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
+      WHERE c.relnamespace = schema_oid AND c.relkind IN ('r', 'p') AND c.relname = ANY (entry.known_tables) AND {{CUSTOMER_R}}
+    LOOP
+      EXECUTE format('ALTER TABLE %s OWNER TO %I', item.name, entry.service_role);
+    END LOOP;
+
     FOR item IN
       SELECT t.tgname, t.tgrelid::regclass::text AS relation FROM pg_trigger t
       JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_roles r ON r.oid = c.relowner
@@ -61,54 +68,6 @@ BEGIN
       EXECUTE format('DROP RULE %I ON %s', item.rulename, item.relation);
     END LOOP;
 
-    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
-               WHERE c.relnamespace = schema_oid AND NOT {{CUSTOMER_R}} AND c.oid IN {{TAINTED_TABLES}}) THEN
-      RAISE EXCEPTION 'a table in schema % has a policy, default, check or index calling a routine the platform does not own; it is left for an operator', entry.schema_name
-        USING ERRCODE = 'insufficient_privilege';
-    END IF;
-
-    IF EXISTS (SELECT 1 FROM {{OWNED}} o JOIN pg_roles r ON r.oid = o.owner WHERE {{CUSTOMER_R}}) THEN
-      EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', quarantine);
-      EXECUTE format('REVOKE ALL ON SCHEMA %I FROM PUBLIC', quarantine);
-      FOR item IN
-        SELECT c.oid::regclass::text AS name, c.relkind, r.rolname AS owner_name FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
-        WHERE c.relnamespace = schema_oid AND c.relkind IN ('r', 'p', 'f', 'v', 'm', 'c') AND {{CUSTOMER_R}}
-      LOOP
-        EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', quarantine, item.owner_name);
-        EXECUTE format('ALTER %s %s SET SCHEMA %I',
-          CASE item.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'c' THEN 'TYPE' ELSE 'TABLE' END, item.name, quarantine);
-      END LOOP;
-      FOR item IN
-        SELECT c.oid::regclass::text AS name, r.rolname AS owner_name FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
-        WHERE c.relnamespace = schema_oid AND c.relkind = 'S' AND {{CUSTOMER_R}}
-      LOOP
-        EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', quarantine, item.owner_name);
-        EXECUTE format('ALTER SEQUENCE %s SET SCHEMA %I', item.name, quarantine);
-      END LOOP;
-      FOR item IN
-        SELECT p.oid::regprocedure::text AS name, r.rolname AS owner_name FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
-        WHERE p.pronamespace = schema_oid AND {{CUSTOMER_R}}
-      LOOP
-        EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', quarantine, item.owner_name);
-        EXECUTE format('ALTER ROUTINE %s SET SCHEMA %I', item.name, quarantine);
-      END LOOP;
-      FOR item IN
-        SELECT t.oid::regtype::text AS name, t.typtype, r.rolname AS owner_name FROM pg_type t JOIN pg_roles r ON r.oid = t.typowner
-        WHERE t.typnamespace = schema_oid AND t.typrelid = 0 AND t.typcategory <> 'A' AND {{CUSTOMER_R}}
-      LOOP
-        EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', quarantine, item.owner_name);
-        EXECUTE format('ALTER %s %s SET SCHEMA %I', CASE item.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END, item.name, quarantine);
-      END LOOP;
-      FOR item IN
-        SELECT op.oprname, op.oprleft, op.oprright, r.rolname AS owner_name FROM pg_operator op JOIN pg_roles r ON r.oid = op.oprowner
-        WHERE op.oprnamespace = schema_oid AND {{CUSTOMER_R}}
-      LOOP
-        EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', quarantine, item.owner_name);
-        EXECUTE format('ALTER OPERATOR %I.%s (%s, %s) SET SCHEMA %I', entry.schema_name, item.oprname,
-          coalesce(item.oprleft::regtype::text, 'NONE'), coalesce(item.oprright::regtype::text, 'NONE'), quarantine);
-      END LOOP;
-    END IF;
-
     FOR holder IN SELECT r.rolname FROM pg_roles r WHERE {{CUSTOMER_R}} LOOP
       EXECUTE format('REVOKE ALL ON SCHEMA %I FROM %I', entry.schema_name, holder.rolname);
       EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM %I', entry.schema_name, holder.rolname);
@@ -121,7 +80,86 @@ BEGIN
     EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC', entry.schema_name);
   END LOOP;
 END
-$excalibase_schema_repair$;
+$excalibase_schema_lockdown$;
+`
+
+// The quarantine moves a customer's routines, types, domains and operators out
+// of the platform's schema, their owner unchanged. The quarantine schema is
+// taken over when it exists (owner to the superuser, CREATE revoked from
+// PUBLIC and every customer role); an object whose name is taken there goes to
+// a schema of its own that did not exist.
+const platformSchemaQuarantineTemplate = `
+DO $excalibase_schema_quarantine$
+DECLARE
+  entry record;
+  item record;
+  holder record;
+  quarantine text;
+  target text;
+  schema_oid oid;
+BEGIN
+  FOR entry IN SELECT * FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role, known_tables) LOOP
+    schema_oid := to_regnamespace(entry.schema_name);
+    IF schema_oid IS NULL OR to_regrole(entry.service_role) IS NULL THEN
+      CONTINUE;
+    END IF;
+    quarantine := 'excalibase_quarantine_' || entry.schema_name;
+    IF NOT EXISTS (SELECT 1 FROM {{MOVABLE}} o JOIN pg_roles r ON r.oid = o.owner WHERE {{CUSTOMER_R}}) THEN
+      CONTINUE;
+    END IF;
+
+    EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', quarantine);
+    EXECUTE format('ALTER SCHEMA %I OWNER TO CURRENT_USER', quarantine);
+    EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM PUBLIC', quarantine);
+    FOR holder IN SELECT r.rolname FROM pg_roles r WHERE {{CUSTOMER_R}} LOOP
+      EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM %I', quarantine, holder.rolname);
+    END LOOP;
+
+    FOR item IN
+      SELECT o.kind, o.ident, o.object_oid, o.collides, r.rolname AS owner_name
+      FROM {{MOVABLE_IN_QUARANTINE}} o JOIN pg_roles r ON r.oid = o.owner WHERE {{CUSTOMER_R}}
+    LOOP
+      target := quarantine;
+      IF item.collides THEN
+        target := quarantine || '_' || item.object_oid;
+        WHILE to_regnamespace(target) IS NOT NULL LOOP
+          target := target || 'x';
+        END LOOP;
+        EXECUTE format('CREATE SCHEMA %I', target);
+      END IF;
+      EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', target, item.owner_name);
+      EXECUTE format('ALTER %s %s SET SCHEMA %I', item.kind, item.ident, target);
+    END LOOP;
+  END LOOP;
+END
+$excalibase_schema_quarantine$;
+`
+
+// The refusal is the last script: a relation a customer role owns that is not
+// one of the platform's, or a platform table with a policy, default, CHECK or
+// index calling a routine the platform does not own, is left for an operator,
+// and the project is reported rather than passed as clean.
+const platformSchemaRefusalTemplate = `
+DO $excalibase_schema_refusal$
+DECLARE
+  entry record;
+  schema_oid oid;
+BEGIN
+  FOR entry IN SELECT * FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role, known_tables) LOOP
+    schema_oid := to_regnamespace(entry.schema_name);
+    IF schema_oid IS NULL OR to_regrole(entry.service_role) IS NULL THEN
+      CONTINUE;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
+               WHERE c.relnamespace = schema_oid AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND {{CUSTOMER_R}})
+       OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
+                  WHERE c.relnamespace = schema_oid AND NOT {{CUSTOMER_R}} AND c.oid IN {{TAINTED_TABLES}}) THEN
+      RAISE EXCEPTION 'schema % holds a relation or a table that is ` + platformSchemaLeftMarker + `', entry.schema_name
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+  END LOOP;
+END
+$excalibase_schema_refusal$;
 `
 
 // platformSchemaDriftProbeSQL answers t while the platform's schemas are not as
@@ -136,7 +174,7 @@ func platformSchemaDriftProbeSQL() string {
 const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
   (to_regnamespace('excalibase') IS NOT NULL AND {{TAINTED}})
   OR EXISTS (
-    SELECT 1 FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role)
+    SELECT 1 FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role, known_tables)
     WHERE to_regnamespace(v.schema_name) IS NOT NULL AND (
       EXISTS (SELECT 1 FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner
               WHERE n.oid = to_regnamespace(v.schema_name) AND {{CUSTOMER_R}})

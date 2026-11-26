@@ -458,7 +458,7 @@ func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec proje
 	if err != nil {
 		return err
 	}
-	return runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL)
+	return runSuperuserRoleSQL(ctx, exec, spec.databaseName, registrationScripts(roleSQL, "")...)
 }
 
 // projectRoleSQL pins the search_path and refuses platform role names a
@@ -477,7 +477,6 @@ func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicat
 		realtimeIdentitySQL(publicationName) +
 		pgroles.CustomerRoleSQL(spec.adminUsername) +
 		pgroles.OwnerAccessSQL(spec.adminUsername) +
-		platformSchemaRepairSQL() +
 		readerSQL(spec.adminUsername, verifiers.reader) +
 		runtimeSQL(spec.adminUsername, verifiers.runtime)
 	if spec.resetPasswords {

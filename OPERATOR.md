@@ -1224,7 +1224,7 @@ Registration enforces this. If anything in the schema belongs to a role that
 is not a superuser, or the schema itself does, or any trigger sits on a table
 there, registration drops the schema with everything in it and recreates the
 platform's objects. It logs a WARNING when it does. A clean schema is left
-alone, so the scheduler's rows survive. On a project registered before
+alone, so the scheduler's rows survive. Unlike `auth` and `excalibase_cdc` (section 6.10), which quarantine customer objects and never drop them, this rebuild drops the schema with CASCADE, which also drops anything in another schema that depends on it. On a project registered before
 EXC-623 the scheduler tables belonged to `excalibase_app`, so that rebuild
 drops pending scheduled tasks. Cron rows come back on each function's next
 deploy. An event trigger also refuses a non-superuser's `CREATE EXTENSION` /
@@ -1293,8 +1293,13 @@ Customer SQL (`excalibase_app`), the owner's login and every role the owner
 creates cannot create in them, rename, drop or take ownership of them, or grant
 themselves anything there; integration tests pin each statement
 (`platform_schema_drift_integration_test.go`). A customer role is any role that
-is not a superuser and not one the platform holds; `excalibase_app` is the one
-platform-named role that counts as a customer. `excalibase` is the superuser's,
+is not a superuser, not a predefined `pg_` role and not on an exact list of the
+roles the platform creates (`auth_admin`, `cdc_watcher`, `excalibase_scheduler`,
+`postgres`, `streaming_replica` and the DocumentDB roles); never a name prefix,
+since the owner can create `excalibase_helper`. A listed role that a customer
+administers or granted membership in is a customer too. `excalibase_app`,
+`excalibase_runtime` and `excalibase_reader` are customers for schema rights,
+because customers hold their passwords. `excalibase` is the superuser's,
 and registration rebuilds it if anything in it is not (section 6.9).
 The `nosql` schema is not platform-managed: the function deploy still creates it
 as `excalibase_app` (`edgefn/migrator.go`), so it is the customer's.
@@ -1306,22 +1311,30 @@ a customer role owns the schema; a customer role holds any privilege on the sche
 or its tables, or PUBLIC can execute a function; a customer role owns a table,
 view, sequence, composite type, function, procedure, type, domain or operator; a
 trigger on a platform table is not the platform's; or a platform table has a rule.
-The registration SQL then:
+Registration runs the repair as separate scripts, each its own transaction, so a
+step that refuses cannot undo an earlier one. In order: the lockdown (reclaims
+the platform's own tables a customer came to own, drops triggers and rules the
+platform did not put on its tables, revokes every grant customer roles hold and
+PUBLIC's EXECUTE; it cannot refuse), the password repair, the registration SQL
+(whose guards can refuse), the quarantine, and the refusal.
 
-- drops triggers and rules on the platform's own tables that the platform did not
-  put there, whoever owns their function, before anything is moved;
-- moves every customer-owned object out to `excalibase_quarantine_<schema>`, the
-  customer still its owner, so it gains nothing and loses nothing (the schema's
-  owner may use it there); nothing is dropped with CASCADE;
-- revokes every grant customer roles hold on the schemas and their objects, and
-  EXECUTE on their functions from PUBLIC.
+- A platform table (the known list in `platformServiceSchemas`: `auth.users`,
+  `refresh_tokens`, `password_reset_tokens`, `email_verification_tokens`,
+  `email_otps`, `auth_codes`, `flow_states`, `api_keys`) that a customer role owns
+  goes back to `auth_admin` in place and is never moved. A table the auth
+  service adds later belongs in that list.
+- Customer-owned routines, types, domains and operators move to
+  `excalibase_quarantine_<schema>`, the customer still the owner. The schema is
+  taken over if it exists (owner to the superuser, CREATE revoked); an object whose
+  name is taken there goes to a schema of its own. Nothing is dropped with CASCADE.
+- Any other relation a customer role owns, and a platform table whose policy,
+  default, CHECK or index calls a routine or operator the platform does not own,
+  is not touched: registration refuses ("left for an operator") after the
+  revokes have committed, and the reconcile raises a CRITICAL project alert
+  (`project.platform-schema`, in the alerts table) that resolves when a pass finds
+  the schemas clean. An operator reviews the object.
 
-A platform table whose policy, column default, CHECK or index calls a routine or
-operator the platform does not own is not repaired: registration refuses
-("left for an operator"), the reconcile reports the project every pass, and the
-table is left as it is until someone reviews it. That is the chosen alternative to
-rewriting such definitions. The `excalibase` schema still uses its existing
-rebuild (section 6.9), which drops the schema with CASCADE.
+The `excalibase` schema still uses its existing rebuild (section 6.9).
 
 **What is not prevented.** Postgres lets any role change its own password with
 `ALTER ROLE ... PASSWORD`, and has no event trigger for it, so customer SQL can do

@@ -223,3 +223,19 @@ func serviceRoleArray() string {
 func reservedSchemaFirstSQL() string {
 	return reservedSchemaRebuildSQL + reservedSchemaLockdownSQL(roleApp) + reservedSchemaGuardSQL + pgroles.SquatWarningSQL()
 }
+
+// registrationScripts are the scripts one registration or reconcile runs, each
+// its own transaction, in order.
+//
+// The lockdown, the password repair and the trigger and rule drops commit
+// before the registration SQL, whose guards can refuse, and before the
+// quarantine and the refusal, so nothing they do is undone by a later step that
+// refuses (EXC-821). The password repair is its own script for the same reason.
+func registrationScripts(roleSQL, passwordRepair string) []string {
+	lockdown, quarantine, refusal := platformSchemaScripts()
+	scripts := []string{reservedSchemaFirstSQL(), lockdown}
+	if passwordRepair != "" {
+		scripts = append(scripts, passwordRepair)
+	}
+	return append(scripts, roleSQL, quarantine, refusal)
+}
