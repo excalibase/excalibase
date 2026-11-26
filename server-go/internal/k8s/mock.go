@@ -828,13 +828,6 @@ func (m *MockClient) ListCRDs(ctx context.Context, gvr schema.GroupVersionResour
 	return listed, nil
 }
 
-func (m *MockClient) ApplyManifestURL(ctx context.Context, url string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.Calls = append(m.Calls, "ApplyManifestURL:"+url)
-	return nil
-}
-
 func (m *MockClient) GetDeployment(ctx context.Context, namespace, name string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

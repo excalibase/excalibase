@@ -73,9 +73,6 @@ func TestMockClient_HelmAndDenoAndCapacity(t *testing.T) {
 	if exists, err := m.GetDeployment(ctx, "ns", "dep"); err != nil || !exists {
 		t.Errorf("GetDeployment mock should report exists, got %v/%v", exists, err)
 	}
-	if err := m.ApplyManifestURL(ctx, "https://example/manifest.yaml"); err != nil {
-		t.Errorf("ApplyManifestURL: %v", err)
-	}
 
 	m.Capacity = ClusterCapacity{AllocatableCPUMilli: 4000}
 	cap, err := m.GetClusterCapacity(ctx)

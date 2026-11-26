@@ -848,17 +848,6 @@ func TestPerformanceTopQueriesNotFound_Returns500(t *testing.T) {
 
 // --- Setup handler: Create (Install valid DB type) ---
 
-func TestSetupInstallPostgreSQL_Success(t *testing.T) {
-	r, _, _ := fullRouter(t)
-
-	// POSTGRESQL might fail (CNPG not installed) but Install handler should
-	// either return 200 or 500 — never panic.
-	w := doRequest(r, "POST", "/api/setup/install/POSTGRESQL", "")
-	if w.Code != 200 && w.Code != 500 {
-		t.Errorf("install POSTGRESQL: got %d", w.Code)
-	}
-}
-
 // --- ProvisioningHandler Routes helper --- additional coverage
 
 func TestProvisioningHandlerRoutes_NewMethodsWired(t *testing.T) {
@@ -1140,15 +1129,6 @@ func TestParameterGroupUpdate_UpdatesName(t *testing.T) {
 }
 
 // --- setup.go: SetupHandler.Create with valid MySQL type (exercises status != 200 path) ---
-
-func TestSetupInstallMySQL(t *testing.T) {
-	r, _, _ := fullRouter(t)
-	w := doRequest(r, "POST", "/api/setup/install/MYSQL", "")
-	// May succeed or fail depending on operator availability — just verify no panic
-	if w.Code != 200 && w.Code != 500 {
-		t.Errorf("install MYSQL: got %d", w.Code)
-	}
-}
 
 // --- Provision: invalid JSON body via direct handler test ---
 

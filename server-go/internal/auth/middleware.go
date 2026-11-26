@@ -195,7 +195,7 @@ func TokenHasScope(t *domain.AccessToken, scope string) bool {
 // The scope check lives here, not at each call site, because it is an
 // absence that no diff review surfaces: RequireProjectAccess used to be the
 // only place that ran it, so every route without a {projectId} — platform
-// users, service accounts, tier configs, parameter groups, operator install —
+// users, service accounts, tier configs, parameter groups —
 // let a read-only PAT write (EXC-396). Every authenticated subtree mounts
 // RequireAuth, so mounting the check here covers routes added later too.
 //

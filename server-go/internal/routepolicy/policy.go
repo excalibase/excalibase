@@ -40,7 +40,7 @@
 //
 // Org-scoped routes read on membership and write on the org admin rung.
 // Platform-wide routes (users, service accounts, tier configs, parameter
-// groups, operator install, vault) carry a platform permission instead of an
+// groups, vault) carry a platform permission instead of an
 // org role, and the credential-minting and key-material routes additionally
 // refuse any narrowed PAT.
 package routepolicy

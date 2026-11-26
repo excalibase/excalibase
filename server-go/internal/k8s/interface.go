@@ -69,7 +69,6 @@ type KubeClient interface {
 	GetPodMetrics(ctx context.Context, namespace string) ([]PodResourceMetrics, error)
 	ListNamespaces(ctx context.Context, prefix string) ([]string, error)
 	ListCRDs(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
-	ApplyManifestURL(ctx context.Context, url string) error
 	GetDeployment(ctx context.Context, namespace, name string) (bool, error)
 	InstallHelmChart(ctx context.Context, namespace, releaseName, chartPath string, values map[string]interface{}) error
 	UninstallHelmChart(ctx context.Context, namespace, releaseName string) error

@@ -17,7 +17,7 @@ Project-scoped routes sit on one of three rungs, decided by what the call can de
 | **admin** | Project lifecycle and credentials — what a tenant cannot author their way back out of: delete the project, read or rotate its database credentials, deletion protection, pause and resume, backups and restores, backup purge, and full-database snapshots. |
 | **owner** | Deleting the org. Everything else admin covers. |
 
-Org-scoped routes read on membership and write on the org **admin** rung. Platform-wide routes (users, service accounts, tier configs, parameter groups, operator install, vault) carry a platform permission instead of an org role; the routes that hand out or destroy platform-wide authority — minting and deleting service accounts, and vault init / unseal / seal / rekey / secret writes — additionally refuse any narrowed PAT, so a project-bound credential can never reach them even when its owner is a platform admin.
+Org-scoped routes read on membership and write on the org **admin** rung. Platform-wide routes (users, service accounts, tier configs, parameter groups, vault) carry a platform permission instead of an org role; the routes that hand out or destroy platform-wide authority — minting and deleting service accounts, and vault init / unseal / seal / rekey / secret writes — additionally refuse any narrowed PAT, so a project-bound credential can never reach them even when its owner is a platform admin.
 
 Anything a caller may not see answers **404**, never 403: a 403 would confirm the project exists.
 

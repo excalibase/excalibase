@@ -398,7 +398,6 @@ var permissionRoutes = []permissionRoute{
 	{group: "service accounts create", method: http.MethodPost, path: "/api/admin/service-accounts/", unrestrictedOnly: true},
 	{group: "tier config read", method: http.MethodGet, path: "/api/admin/tiers/"},
 	{group: "tier config update", method: http.MethodPut, path: "/api/admin/tiers/STANDARD", unrestrictedOnly: true},
-	{group: "operator install", method: http.MethodPost, path: "/api/setup/install/postgres", unrestrictedOnly: true},
 	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a", unrestrictedOnly: true},
 	{group: "admin console users", method: http.MethodGet, path: "/api/admin/console/users", unrestrictedOnly: true},
 	{group: "admin console suspend", method: http.MethodPost, path: "/api/admin/console/users/u-1/suspend", unrestrictedOnly: true},

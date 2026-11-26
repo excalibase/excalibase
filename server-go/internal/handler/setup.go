@@ -26,23 +26,12 @@ func (h *SetupHandler) Routes(r chi.Router, statusLimits ...func(http.Handler) h
 	// installed, and in what version, is cluster topology an anonymous caller
 	// has no business learning (EXC-418).
 	r.With(statusLimits...).Get("/status", h.GetStatus)
-	// Installing a DB operator applies a remote YAML cluster-wide — restrict to
-	// platform_admin (manage_setup), not any authenticated user (SEC-H5).
-	r.With(auth.RequireAuth, auth.RequireUnrestrictedCredential, auth.RequirePermission(auth.PermManageSetup)).
-		Post("/install/{databaseType}", h.Install)
+	// There is no install route: operators are installed by the chart or
+	// setup-k8s.sh, and the platform's cluster role cannot apply them (EXC-520).
 }
 
 func (h *SetupHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, domain.SetupStatusResponse{Complete: h.svc.SetupComplete(r.Context())})
-}
-
-func (h *SetupHandler) Install(w http.ResponseWriter, r *http.Request) {
-	dbType := domain.DatabaseType(chi.URLParam(r, "databaseType"))
-	if err := h.svc.InstallOperator(r.Context(), dbType); err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]string{"status": "installed", "type": string(dbType)})
 }
 
 type ParameterGroupHandler struct {
@@ -70,7 +59,7 @@ const errInvalidParamGroupName = "invalid parameter group name"
 func (h *ParameterGroupHandler) Routes(r chi.Router) {
 	// Parameter groups are global, cluster-wide configuration: reading one is
 	// a platform-operator act like reading tier configs, and writing one is
-	// the same tier as installing an operator above.
+	// the same tier as the other platform-wide settings.
 	operator := auth.RequirePermission(auth.PermViewAny)
 	admin := auth.RequirePermission(auth.PermManageSetup)
 	r.With(operator).Get("/", h.List)

@@ -15,8 +15,7 @@ import (
 )
 
 const (
-	testApplyManifestPrefix = "ApplyManifestURL:"
-	testSetRealtime         = "SELECT excalibase.set_realtime_table"
+	testSetRealtime = "SELECT excalibase.set_realtime_table"
 )
 
 // --- OperatorSetupService ---
@@ -25,53 +24,6 @@ const (
 // so IsOperatorInstalled lights up the happy paths. waitForOperator
 // returns immediately when the operator looks installed, which keeps these
 // tests fast (no fake clock needed).
-
-func TestOperatorSetup_InstallOperator_PostgreSQL(t *testing.T) {
-	mock := k8s.NewMockClient()
-	svc := NewOperatorSetupService(mock)
-
-	if err := svc.InstallOperator(context.Background(), domain.PostgreSQL); err != nil {
-		t.Fatalf("InstallOperator: %v", err)
-	}
-	// ApplyManifestURL was recorded — proves the URL lookup table was hit.
-	var sawApply bool
-	for _, c := range mock.Calls {
-		if len(c) >= len(testApplyManifestPrefix) && c[:len(testApplyManifestPrefix)] == testApplyManifestPrefix {
-			sawApply = true
-			break
-		}
-	}
-	if !sawApply {
-		t.Errorf("expected ApplyManifestURL call, got %v", mock.Calls)
-	}
-}
-
-func TestOperatorSetup_InstallOperator_UnsupportedType(t *testing.T) {
-	mock := k8s.NewMockClient()
-	svc := NewOperatorSetupService(mock)
-
-	err := svc.InstallOperator(context.Background(), domain.DatabaseType("not-a-real-type"))
-	if err == nil {
-		t.Error("expected error for unsupported db type")
-	}
-}
-
-// MongoDB-compatible projects are DocumentDB on Postgres; a separate MongoDB
-// operator is nothing the platform provisions, so installing one is refused
-// before anything is applied to the cluster.
-func TestOperatorSetup_InstallOperator_RefusesMongoDB(t *testing.T) {
-	mock := k8s.NewMockClient()
-	svc := NewOperatorSetupService(mock)
-
-	if err := svc.InstallOperator(context.Background(), domain.DatabaseType("MONGODB")); err == nil {
-		t.Fatal("expected MONGODB to be refused")
-	}
-	for _, call := range mock.Calls {
-		if strings.HasPrefix(call, testApplyManifestPrefix) {
-			t.Errorf("nothing may be applied for MONGODB, got %v", mock.Calls)
-		}
-	}
-}
 
 func TestOperatorSetup_IsOperatorInstalled_AllTypes(t *testing.T) {
 	mock := k8s.NewMockClient()
@@ -504,23 +456,6 @@ func TestOperatorSetup_SetupCompleteDoesNotAskTheClusterEveryTime(t *testing.T) 
 	}
 	if n := countMockCalls(mock, "GetDeployment"); n != 1 {
 		t.Fatalf("asked the cluster %d times, want 1", n)
-	}
-}
-
-// Installing an operator is exactly the event the cached answer must not
-// outlive, so it drops the cache.
-func TestOperatorSetup_InstallRefreshesTheCachedAnswer(t *testing.T) {
-	mock := k8s.NewMockClient()
-	svc := NewOperatorSetupService(mock)
-
-	svc.SetupComplete(context.Background())
-	before := countMockCalls(mock, "GetDeployment")
-	if err := svc.InstallOperator(context.Background(), domain.PostgreSQL); err != nil {
-		t.Fatalf("install: %v", err)
-	}
-	svc.SetupComplete(context.Background())
-	if countMockCalls(mock, "GetDeployment") <= before {
-		t.Fatal("the cached answer survived an install")
 	}
 }
 

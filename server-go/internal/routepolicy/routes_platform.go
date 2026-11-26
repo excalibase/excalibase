@@ -76,7 +76,6 @@ var platformRows = []Row{
 	{Methods: get, Pattern: "/api/mysql/catalog", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "the MySQL versions a project may be created on (ADR 0041); dark until the mysql feature is on"},
 	{Methods: get, Pattern: "/api/alerts/", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "the handler scopes the list to the caller's own projects; PermViewAny sees every tenant's"},
 	{Methods: get, Pattern: "/api/alerts/history", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "scoped like the active list"},
-	{Methods: post, Pattern: "/api/setup/install/{databaseType}", Trust: trustNone, Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole, Unrestricted: true, Note: "applies a remote YAML cluster-wide"},
 
 	{Methods: get, Pattern: "/api/parameter-groups/", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole, Discloses: NoSecret, Note: "cluster-wide configuration no tenant-facing surface reads"},
 	{Methods: get, Pattern: parameterGroupRoute, Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole, Discloses: NoSecret},
