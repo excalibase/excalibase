@@ -4,6 +4,7 @@ package k8s
 
 import (
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"maps"
 	"strings"
@@ -155,7 +156,7 @@ func (lab *egressLab) startClusterWith(t *testing.T, extra ...testcontainers.Con
 	if err := imagepull.EnsureLocal(lab.ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
 		t.Fatal(err)
 	}
-	container, err := k3s.Run(lab.ctx, "rancher/k3s:v1.31.6-k3s1", extra...)
+	container, err := k3s.Run(lab.ctx, "rancher/k3s:v1.31.6-k3s1", append(extra, k3smirror.Option())...)
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)
 	}

@@ -117,6 +117,8 @@ func TestEnsure_DoesNotRetryARefusalThatWillNotChange(t *testing.T) {
 
 func TestEnsureLocal_PullsThroughTheDaemonTheEnvironmentNames(t *testing.T) {
 	ryukOnce = sync.Once{}
+	// CI sets a mirror prefix; this test is about the names as given.
+	t.Setenv(hubPrefixEnv, "")
 	t.Setenv("HOME", t.TempDir())
 	var pulled []string
 	mux := http.NewServeMux()
@@ -244,5 +246,67 @@ func TestRyukDisabled_ReadsEnvironmentAndPropertiesLikeTestcontainers(t *testing
 		if got := ryukDisabled(env(tc.env), tc.home); got != tc.want {
 			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestMirrored_PointsDockerHubImagesAtThePrefix(t *testing.T) {
+	const prefix = "ghcr.io/excalibase/mirror/"
+	cases := []struct{ name, prefix, ref, want string }{
+		{"no prefix keeps the reference", "", "postgres:16", "postgres:16"},
+		{"library image", prefix, "postgres:16", prefix + "postgres:16"},
+		{"explicit docker.io library image", prefix, "docker.io/library/postgres:16", prefix + "postgres:16"},
+		{"user image with a digest", prefix, "grafana/loki:3.7.8@sha256:aa", prefix + "grafana/loki:3.7.8@sha256:aa"},
+		{"explicit docker.io user image", prefix, "docker.io/valkey/valkey@sha256:aa", prefix + "valkey/valkey@sha256:aa"},
+		{"other registries stay", prefix, "ghcr.io/project-zot/zot:v2", "ghcr.io/project-zot/zot:v2"},
+		{"a registry with a port stays", prefix, "localhost:5000/app:1", "localhost:5000/app:1"},
+		{"a prefix without the slash", "ghcr.io/m", "nats:2.10", "ghcr.io/m/nats:2.10"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX", tc.prefix)
+			if got := Mirrored(tc.ref); got != tc.want {
+				t.Fatalf("Mirrored(%q) = %q, want %q", tc.ref, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnsureLocal_PullsFromTheMirrorAndKeepsTheOriginalName(t *testing.T) {
+	ryukOnce = sync.Once{}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX", "ghcr.io/excalibase/mirror/")
+	var pulled, tagged []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_ping", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/json"):
+			http.Error(w, `{"message":"No such image"}`, http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			pulled = append(pulled, r.URL.Query().Get("fromImage")+":"+r.URL.Query().Get("tag"))
+			_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
+		case strings.HasSuffix(r.URL.Path, "/tag"):
+			tagged = append(tagged, r.URL.Query().Get("repo")+":"+r.URL.Query().Get("tag"))
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(server.URL, "http://"))
+	if err := EnsureLocal(context.Background(), "postgres:16"); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range pulled {
+		if !strings.HasPrefix(ref, "ghcr.io/excalibase/mirror/") {
+			t.Fatalf("pulled %q, want every pull from the mirror (all pulls: %v)", ref, pulled)
+		}
+	}
+	if len(pulled) != 2 {
+		t.Fatalf("pulled %v, want the reaper image and postgres", pulled)
+	}
+	if len(tagged) == 0 || !strings.HasSuffix(tagged[len(tagged)-1], "/postgres:16") {
+		t.Fatalf("tagged %v, want the original name (docker.io/library/postgres:16) last so code naming it finds it", tagged)
 	}
 }

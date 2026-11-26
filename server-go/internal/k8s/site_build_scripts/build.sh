@@ -15,6 +15,14 @@ refuse() {
   exit 13
 }
 
+# build_failed leaves with 11 (or the code given second), except for a command the kernel killed (bash reports 137): that stays 137, because
+# on a single host the engine's out-of-memory flag can lag the exit and the code is what still names the limit.
+build_failed() {
+  local status=$1 fallback=${2:-11}
+  [[ "$status" == 137 ]] && exit 137
+  exit "$fallback"
+}
+
 package_manager() {
   if [[ -f pnpm-lock.yaml ]]; then echo pnpm
   elif [[ -f yarn.lock ]]; then echo yarn
@@ -180,18 +188,18 @@ CONFIG
   local opennext_args=(build)
   if [[ -n "${BUILD_COMMAND:-}" ]]; then
     echo "\$ $BUILD_COMMAND"
-    bash -c "$BUILD_COMMAND" || exit 11
+    bash -c "$BUILD_COMMAND" || build_failed $?
     opennext_args+=(--skipNextBuild)
   fi
   echo "\$ opennextjs-cloudflare ${opennext_args[*]}"
-  node_modules/.bin/opennextjs-cloudflare "${opennext_args[@]}" || exit 11
+  node_modules/.bin/opennextjs-cloudflare "${opennext_args[@]}" || build_failed $?
   check_with built || exit $?
   echo "\$ opennextjs-cloudflare populateCache local"
-  node_modules/.bin/opennextjs-cloudflare populateCache local || exit 11
+  node_modules/.bin/opennextjs-cloudflare populateCache local || build_failed $?
   # The OpenNext worker imports its siblings; only wrangler's bundle is one uploadable module.
   rm -rf "$work/bundle"
   echo "\$ wrangler deploy --dry-run --minify --outdir $work/bundle"
-  node_modules/.bin/wrangler deploy --dry-run --minify --outdir "$work/bundle" --config "$own" || exit 11
+  node_modules/.bin/wrangler deploy --dry-run --minify --outdir "$work/bundle" --config "$own" || build_failed $?
   printf '{"kind":"server","main":"worker.js","compatibilityDate":"%s","compatibilityFlags":[%s],"framework":"nextjs"}' \
     "$COMPAT_DATE" "$COMPAT_FLAGS" > "$work/site.json"
 }
@@ -233,7 +241,7 @@ worker_preset() {
   [[ "$framework" == "nuxt" ]] && export NITRO_PRESET=cloudflare_module
   local build=${BUILD_COMMAND:-npm run build}
   echo "\$ $build"
-  bash -c "$build" || exit 11
+  bash -c "$build" || build_failed $?
   if [[ ! -f "$entry" || ! -d "$assets" ]]; then
     refuse "the $framework build wrote no worker at $entry (and files at $assets)"
   fi
@@ -252,7 +260,7 @@ worker_preset() {
 CONFIG
   rm -rf "$work/bundle"
   echo "\$ wrangler deploy --dry-run --minify --outdir $work/bundle"
-  node_modules/.bin/wrangler deploy --dry-run --minify --outdir "$work/bundle" --config "$own" || exit 11
+  node_modules/.bin/wrangler deploy --dry-run --minify --outdir "$work/bundle" --config "$own" || build_failed $?
   local modules
   modules=$(cd "$work/bundle" && ls | grep -E '\.m?js$' || true)
   if [[ "$(echo "$modules" | grep -c .)" != "1" ]]; then
@@ -276,7 +284,7 @@ if [[ -z "$install" ]]; then
   fi
 fi
 echo "\$ $install"
-bash -c "$install" || exit 10
+bash -c "$install" || build_failed $? 10
 case "${FRAMEWORK:-}" in
   nextjs) nextjs_preset; exit $? ;;
   nuxt|sveltekit|astro) worker_preset "$FRAMEWORK"; exit $? ;;
@@ -284,4 +292,4 @@ case "${FRAMEWORK:-}" in
 esac
 build=${BUILD_COMMAND:-npm run build}
 echo "\$ $build"
-bash -c "$build" || exit 11
+bash -c "$build" || build_failed $?

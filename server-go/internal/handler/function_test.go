@@ -1444,3 +1444,19 @@ func TestFunctionHandler_BuiltinEnv_UnwiredFlagsFailClosed(t *testing.T) {
 		t.Fatalf("an unwired handler gave a function %q", url)
 	}
 }
+
+// EXC-703: EXCALIBASE_URL is the platform's base URL, which is what the SDK's
+// createClient takes as `url`; it rejects a /functions/v1 path. The invoke path
+// moves to EXCALIBASE_FUNCTIONS_URL.
+func TestFunctionHandler_BuiltinEnv_URLIsBaseURL(t *testing.T) {
+	h := NewFunctionHandler(edgefn.NewFunctionStore(t.TempDir()), edgefn.NewSecretsStore(newFakeVault()), nil,
+		&inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{"proj_p1": {ProjectID: "proj_p1", OrgID: "default"}}},
+		nil, testAPIBase+"/")
+	env := h.builtinEnv(context.Background(), "proj_p1")
+	if got := env["EXCALIBASE_URL"]; got != testAPIBase {
+		t.Errorf("EXCALIBASE_URL = %q, want the base URL %q", got, testAPIBase)
+	}
+	if got, want := env["EXCALIBASE_FUNCTIONS_URL"], testAPIBase+"/functions/v1/proj_p1"; got != want {
+		t.Errorf("EXCALIBASE_FUNCTIONS_URL = %q, want %q", got, want)
+	}
+}

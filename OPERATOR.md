@@ -1059,15 +1059,22 @@ production router: every registered `{projectId}` route outside the public
 prefixes must refuse an anonymous caller (401) and a member of another org
 (404).
 
-## 6.5. NATS subject authorization (auth callout)
+## 6.5. NATS access (network policy, no auth callout)
 
-The message bus is not shared-secret. NATS runs with `auth_callout`, and
-provisioning is the callout responder: it subscribes to `$SYS.REQ.USER.AUTH`,
-verifies the presented username/password against the `nats_credentials` table
-and signs a short user JWT whose subject permissions come from
-`internal/natsauth.PermissionsFor`. An unknown user, a wrong password or an
-unreachable responder means the connection is refused — there is no open
-fallback.
+The message bus is internal and is protected by network isolation, not by an
+auth callout (EXC-507). The chart's `nats` NetworkPolicy admits port 4222 only
+from the platform's own provisioning, graphql and stream-init pods and from
+pods labelled `excalibase.io/component: cdc-watcher` in a namespace labelled
+`excalibase.io/type: project`; provisioning sets both labels, tenants cannot.
+Every other pod, including customer apps, is refused. NATS is never exposed
+outside the cluster. A customer-facing queue, if one is ever built, is a
+separate system with its own auth. On a single host the same isolation comes
+from the `excalibase-cdc` network plus the proxy's `PROXY_CDC_IMAGES` allow-list.
+
+Each principal still presents a scoped credential (EXC-324) and a per-principal
+inbox prefix. The server does not check them; they exist so a future bus that
+does enforce subjects needs no client change. `internal/natsauth.PermissionsFor`
+holds the matrix:
 
 | Principal | Publish | Subscribe |
 |---|---|---|
@@ -1075,36 +1082,16 @@ fallback.
 | `svc-provisioning` | `policies.>`, `$JS.API.INFO`, `$JS.API.STREAM.>` | `_INBOX_svc-provisioning.>` |
 | `tenant-watcher:<projectId>` | `cdc.<projectId>.>`, `$JS.API.INFO`, `$JS.API.STREAM.INFO.CDC` | `_INBOX_tw_<projectId>.>` |
 
-A per-tenant watcher therefore cannot subscribe to anything — not `cdc.>`,
-not even its own project's subjects — and cannot publish into another
-project's prefix. Each principal gets its own inbox prefix so request
-replies never land on a subject another tenant may read; the client must set
-the matching prefix (`WATCHER_NATS_INBOX_PREFIX`, `app.nats.inbox-prefix`)
-or every JetStream publish will time out.
-
 Environment on provisioning:
 
 | Variable | Meaning |
 |---|---|
-| `NATS_AUTH_CALLOUT_ISSUER_SEED` | account nkey seed (`SA…`) that signs user JWTs; **enables the responder** |
-| `NATS_AUTH_CALLOUT_USER` / `_PASSWORD` | the credential the responder itself connects with (in the `AUTH` account, exempt from the callout) |
-| `NATS_AUTH_CALLOUT_ACCOUNT` | account clients are placed into (default `APP`) |
 | `NATS_USER` / `NATS_PASSWORD` | provisioning's own bus credential (`svc-provisioning`) |
-| `NATS_GRAPHQL_PASSWORD` | graphql's password; provisioning hashes them into `nats_credentials` at every boot, so the Secret is the single source of truth and rotation is "change the Secret, restart" |
 | `NATS_CDC_STREAM` | shared JetStream stream name (default `CDC`) |
 
 Tenant credentials are minted at provision time, rotated on re-provision and
-deleted on deprovision, so a surviving watcher pod cannot reconnect after its
-project is gone. Only bcrypt hashes are stored; the plaintext exists once, in
-the watcher's Secret in the tenant namespace.
-
-**Runbook — a watcher stops publishing after a re-provision.** Its credential
-was rotated; the pod is holding the old one. `kubectl rollout restart
-deploy/<project>-excalibase-watcher-go -n <tenant-ns>` picks up the new
-Secret. If it still fails, check provisioning's log for
-`NATS auth callout disabled` (the issuer seed is missing, so *every*
-connection is being refused) and confirm the `platform-nats` Secret was
-seeded by the bootstrap Job.
+deleted on deprovision. Only bcrypt hashes are stored; the plaintext exists
+once, in the watcher's Secret in the tenant namespace.
 
 ## 6.5b. WAL archive guards (EXC-784)
 

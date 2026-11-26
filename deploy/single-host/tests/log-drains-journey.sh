@@ -28,7 +28,7 @@ drains_setup() {
   chmod 644 "$dir"/*
   $DOCKER network create --subnet 198.51.100.0/24 --gateway "$DRAIN_HOST_IP" "$DRAIN_NET" >/dev/null
   $DOCKER run -d --name "$DRAIN_SINK" --network "$DRAIN_NET" --ip "$DRAIN_SINK_IP" --tmpfs /data \
-    -v "$dir:/sink:ro" docker.io/library/python:3.12-alpine python /sink/drain_sink.py >/dev/null
+    -v "$dir:/sink:ro" "$(mirror_ref docker.io/library/python:3.12-alpine)" python /sink/drain_sink.py >/dev/null
   cat > "$W/drains.override.yml" <<YAML
 services:
   log-forwarder:

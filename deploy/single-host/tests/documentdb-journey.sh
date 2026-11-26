@@ -6,7 +6,7 @@
 # containers. Its two host ports and its CA stay the same throughout (EXC-594).
 # Needs from boot-smoke.sh: c ok ko DOCKER PORT T ORG W.
 
-MONGO_IMAGE=docker.io/library/mongo@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c
+MONGO_IMAGE=$(mirror_ref docker.io/library/mongo@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c)
 DAPI=https://studio.localhost:$PORT/api
 djson() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 dapi() { c --max-time 600 -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "$@"; }

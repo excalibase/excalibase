@@ -23,6 +23,8 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 )
 
 // EXC-681 on the real engine: a mount whose type is given twice, in two cases, is read by the
@@ -30,7 +32,8 @@ import (
 //
 // Run: go test -tags=integration ./internal/engineproxy/ -run TestRealEngine -v
 
-const itBusybox = "docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+// Mirrored: CI pulls Docker Hub images from its mirror (EXC-881); elsewhere the name is unchanged.
+var itBusybox = imagepull.Mirrored("docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e")
 
 func engineSocket() string {
 	if host := os.Getenv("DOCKER_HOST"); strings.HasPrefix(host, "unix://") {

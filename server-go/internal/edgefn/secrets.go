@@ -27,19 +27,27 @@ var secretKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 
 // reservedSecretKeys are injected automatically by the runtime and cannot be overridden.
 var reservedSecretKeys = map[string]bool{
-	"EXCALIBASE_URL":        true,
-	"EXCALIBASE_PROJECT_ID": true,
-	"EXCALIBASE_DB_URL":     true,
+	"EXCALIBASE_URL":           true,
+	"EXCALIBASE_FUNCTIONS_URL": true,
+	"EXCALIBASE_PROJECT_ID":    true,
+	"EXCALIBASE_DB_URL":        true,
 }
 
 // ValidateSecretKey returns nil if the key is a valid env var identifier
 // and not reserved by the platform.
 func ValidateSecretKey(key string) error {
-	if !secretKeyPattern.MatchString(key) {
-		return fmt.Errorf("invalid secret key: must match [A-Za-z_][A-Za-z0-9_]{0,63}")
+	if err := validateSecretKeyShape(key); err != nil {
+		return err
 	}
 	if reservedSecretKeys[key] {
 		return fmt.Errorf("secret key %q is reserved and cannot be set", key)
+	}
+	return nil
+}
+
+func validateSecretKeyShape(key string) error {
+	if !secretKeyPattern.MatchString(key) {
+		return fmt.Errorf("invalid secret key: must match [A-Za-z_][A-Za-z0-9_]{0,63}")
 	}
 	return nil
 }
@@ -124,12 +132,13 @@ func (s *SecretsStore) Set(projectID, key, value string) error {
 }
 
 // Delete removes a single key from the project's secret map. Missing key is not
-// an error (idempotent).
+// an error (idempotent). A key that is now reserved can still be deleted, so a
+// secret saved before the name was reserved can be cleaned up.
 func (s *SecretsStore) Delete(projectID, key string) error {
 	if s.vault == nil {
 		return fmt.Errorf("vault not configured")
 	}
-	if err := ValidateSecretKey(key); err != nil {
+	if err := validateSecretKeyShape(key); err != nil {
 		return err
 	}
 	all, err := s.GetAll(projectID)

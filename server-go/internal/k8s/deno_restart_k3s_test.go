@@ -5,6 +5,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"os"
 	"strings"
@@ -131,7 +132,7 @@ func startRestartCluster(ctx context.Context, t *testing.T, image string) *Clien
 	if err := imagepull.EnsureLocal(ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
 		t.Fatal(err)
 	}
-	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
+	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1", k3smirror.Option())
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)
 	}

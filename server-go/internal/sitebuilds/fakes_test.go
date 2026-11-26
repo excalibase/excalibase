@@ -46,6 +46,9 @@ type memoryStore struct {
 	appPushErr      error
 	leaseRenewals   int
 	retryDelays     []time.Duration
+	// sweep counts dispatcher sweeps; heldUntil keeps a build sent back with a delay out of the sweep that sent it back, as the real queue's delay does.
+	sweep     int
+	heldUntil map[string]int
 }
 
 func newMemoryStore() *memoryStore {
@@ -209,7 +212,7 @@ func (m *memoryStore) ClaimNext(_ context.Context, _ int, _ string, _ time.Time,
 	defer m.mu.Unlock()
 	m.claimedKinds = append(m.claimedKinds, kinds)
 	for _, build := range m.builds {
-		if build.Status == StatusQueued && slices.Contains(kinds, build.Kind) {
+		if build.Status == StatusQueued && slices.Contains(kinds, build.Kind) && m.heldUntil[build.ID] <= m.sweep {
 			build.Status = StatusRunning
 			copied := *build
 			return &copied, nil
@@ -237,6 +240,10 @@ func (m *memoryStore) RetryBuildLater(_ context.Context, buildID, _ string, dela
 		if build.ID == buildID && build.Status == StatusRunning {
 			build.Status, build.WaitReason = StatusQueued, reason
 			build.Requeues++
+			if m.heldUntil == nil {
+				m.heldUntil = map[string]int{}
+			}
+			m.heldUntil[build.ID] = m.sweep + 1
 		}
 	}
 	return nil
@@ -724,6 +731,14 @@ func (b *testBed) connectSite() {
 }
 
 func (b *testBed) runAll() {
+	b.store.startSweep()
 	b.dispatcher.Tick(context.Background())
 	b.dispatcher.Wait()
+}
+
+// startSweep opens a new dispatcher sweep, which releases the builds an earlier one held back.
+func (m *memoryStore) startSweep() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sweep++
 }

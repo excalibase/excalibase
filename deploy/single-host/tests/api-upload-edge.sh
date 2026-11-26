@@ -9,11 +9,16 @@
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# EXC-881: CI pulls Docker Hub images from its mirror (IMAGE_MIRROR); unset, the names are unchanged.
+# shellcheck disable=SC1091
+. "$DIR/../../ci/mirror-images.sh"
 ENGINE=${1:-docker}
 CADDY_IMAGE=$(sed -n 's/^ *image: \(docker.io\/library\/caddy:.*\)$/\1/p' "$DIR/../compose.yaml")
 [ -n "$CADDY_IMAGE" ] || { echo "no Caddy image in compose.yaml" >&2; exit 1; }
-NGINX_IMAGE=$(sed -n 's/^FROM \(nginx:.*\)$/\1/p' "$DIR/../../../frontend/Dockerfile")
+CADDY_IMAGE=$(mirror_ref "$CADDY_IMAGE")
+NGINX_IMAGE=$(sed -n 's/^FROM \(${HUB_MIRROR}\)\{0,1\}\(nginx:.*\)$/\2/p' "$DIR/../../../frontend/Dockerfile")
 [ -n "$NGINX_IMAGE" ] || { echo "no nginx image in frontend/Dockerfile" >&2; exit 1; }
+NGINX_IMAGE=$(mirror_ref "$NGINX_IMAGE")
 NET=api-upload-edge-test-$$
 FAILURES=0
 
@@ -32,7 +37,7 @@ class Stub(http.server.BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers(); self.wfile.write(b"provisioning")
 http.server.ThreadingHTTPServer(("", 24006), Stub).serve_forever()'
 $ENGINE run -d --name "$NET-provisioning" --network "$NET" --network-alias provisioning \
-  docker.io/library/python:3.13-alpine python -c "$STUB" >/dev/null
+  "$(mirror_ref docker.io/library/python:3.13-alpine)" python -c "$STUB" >/dev/null
 # The real nginx.conf and resolver script, as the Studio image runs them.
 # (copied in, not mounted: the entrypoint script edits the file in place)
 # STORAGE_PUBLIC_ORIGIN is what compose gives Studio: the origin file links are signed for.

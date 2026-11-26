@@ -5,7 +5,7 @@
 # reaches neither this app nor this project's database.
 # Needs from boot-smoke.sh: c ok ko DOCKER PORT T ORG PID W.
 
-APP_IMAGE=docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+APP_IMAGE=$(mirror_ref docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e)
 API=https://studio.localhost:$PORT/api
 json() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 # Lifecycle calls answer once the containers have moved: a stop waits out the app's grace period.
@@ -82,7 +82,7 @@ grep -qixF "access-control-allow-origin: $MURL" <<< "$pre" && ok "a browser pref
 [ -n "$MID" ] && api -X DELETE "$API/projects/$PID/apps/$MID/" -d '{}' -o /dev/null
 
 echo "== apps: an app's server calls the platform by its public name, and MCP's probes reach it (EXC-608)"
-NODE_IMAGE=docker.io/library/node@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+NODE_IMAGE=$(mirror_ref docker.io/library/node@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402)
 N=$(api -X POST "$API/projects/$PID/apps/" -d '{"name":"caller","image":"'"$NODE_IMAGE"'","port":8080,"healthCheckPath":"/","replicas":1,"args":["node","-e","require(\"http\").createServer((q,s)=>s.end(\"ok\")).listen(8080)"]}')
 NID=$(echo "$N" | json 'd["id"]')
 api -X POST "$API/projects/$PID/apps/$NID/deploy" >/dev/null
@@ -115,7 +115,7 @@ echo "== apps: a custom domain, once its CNAME verifies"
 printf 'example.test:53 {\n  template IN CNAME shop.example.test {\n    answer "{{ .Name }} 60 IN CNAME %s."\n  }\n}\n' "$HOST" > "$W/Corefile"
 chmod 644 "$W/Corefile"
 $DOCKER rm -f "$SMOKE_DNS" >/dev/null 2>&1
-$DOCKER run -d --name "$SMOKE_DNS" --network excalibase-tenants -v "$W/Corefile:/Corefile:ro,z" docker.io/coredns/coredns:1.11.3 -conf /Corefile >/dev/null
+$DOCKER run -d --name "$SMOKE_DNS" --network excalibase-tenants -v "$W/Corefile:/Corefile:ro,z" "$(mirror_ref docker.io/coredns/coredns:1.11.3)" -conf /Corefile >/dev/null
 DOM=$(api -X POST "$API/projects/$PID/apps/$AID/domains/" -d '{"hostname":"shop.example.test"}')
 DID=$(echo "$DOM" | json 'd["id"]')
 [ -n "$DID" ] || ko "add domain: ${DOM:0:300}"
@@ -185,7 +185,7 @@ AC=$(app_container "$AID")
 grep -q '^DATABASE_URL=postgresql://postgres:' "$W/app-db.env" && ko "DATABASE_URL carries the postgres superuser" || ok "DATABASE_URL is not the superuser"
 # as_app <sql>: psql with the app's DATABASE_URL, on the app's own network.
 as_app() {
-  $DOCKER run --rm --network "excalibase-net-$PID" --env-file "$W/app-db.env" docker.io/library/postgres:17-alpine \
+  $DOCKER run --rm --network "excalibase-net-$PID" --env-file "$W/app-db.env" "$(mirror_ref docker.io/library/postgres:17-alpine)" \
     sh -c 'psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -tAc "$0"' "$1" 2>&1
 }
 [ "$(as_app "SELECT rolsuper OR rolbypassrls OR rolreplication FROM pg_roles WHERE rolname = current_user")" = f ] && ok "the app login is no superuser" || ko "the app login: $(as_app 'SELECT current_user')"
