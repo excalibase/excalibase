@@ -191,6 +191,12 @@ func (h *VaultHandler) refuseSecretOfUnservableProject(ctx context.Context, w ht
 		httpError(w, domain.ErrNoDatabase.Error(), http.StatusConflict)
 		return true
 	}
+	// A paused project's database is shut down. 423 tells the engine to say so
+	// rather than fail to connect (EXC-832).
+	if inst.Status == string(domain.StatusPaused) && isDatabaseLogin(path, projectID) {
+		httpError(w, "project is paused", http.StatusLocked)
+		return true
+	}
 	return false
 }
 
