@@ -23,37 +23,41 @@ type analyticsPerson struct {
 func analyticsFixture(t *testing.T, people []analyticsPerson) (*Store, *AdminConsole) {
 	t.Helper()
 	store := testStore(t)
-	ctx := context.Background()
 	for _, person := range people {
-		user := domain.User{ID: person.id, Username: person.id, Email: person.email, Role: person.role, Active: true, Kind: person.kind}
-		if person.verified {
-			verifiedAt := time.Now()
-			user.EmailVerifiedAt = &verifiedAt
-		}
-		user.PasswordHash = testutil.FixturePasswordHash()
-		if err := store.CreateUser(ctx, &user); err != nil {
-			t.Fatalf("create %s: %v", person.id, err)
-		}
-		if _, err := store.db.ExecContext(ctx, `UPDATE users SET created_at = $2 WHERE id = $1`, person.id, time.Now().Add(-person.signedUp)); err != nil {
-			t.Fatal(err)
-		}
-		if person.suspended {
-			if _, err := store.db.ExecContext(ctx, `INSERT INTO abuse_suspensions (user_id, email, reason) VALUES ($1, $2, 'proxy')`, person.id, person.email); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if person.project {
-			if _, err := store.db.ExecContext(ctx, `INSERT INTO orgs (id, name, slug, owner_id) VALUES ($1, $1, $1, $1)`, person.id); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := store.db.ExecContext(ctx,
-				`INSERT INTO database_instances (project_id, org_id, owner_id, status, project_name, namespace, storage_size, no_database, created_at)
-				 VALUES ('p-'||$1, $1, '', 'ACTIVE', $1, 'ns-'||$1, '1Gi', FALSE, NOW())`, person.id); err != nil {
-				t.Fatal(err)
-			}
-		}
+		seedAnalyticsPerson(t, store, person)
 	}
 	return store, store.AdminConsole()
+}
+
+func seedAnalyticsPerson(t *testing.T, store *Store, person analyticsPerson) {
+	t.Helper()
+	ctx := context.Background()
+	user := domain.User{ID: person.id, Username: person.id, Email: person.email, Role: person.role, Active: true, Kind: person.kind}
+	if person.verified {
+		verifiedAt := time.Now()
+		user.EmailVerifiedAt = &verifiedAt
+	}
+	user.PasswordHash = testutil.FixturePasswordHash()
+	if err := store.CreateUser(ctx, &user); err != nil {
+		t.Fatalf("create %s: %v", person.id, err)
+	}
+	mustExec(t, store, `UPDATE users SET created_at = $2 WHERE id = $1`, person.id, time.Now().Add(-person.signedUp))
+	if person.suspended {
+		mustExec(t, store, `INSERT INTO abuse_suspensions (user_id, email, reason) VALUES ($1, $2, 'proxy')`, person.id, person.email)
+	}
+	if person.project {
+		mustExec(t, store, `INSERT INTO orgs (id, name, slug, owner_id) VALUES ($1, $1, $1, $1)`, person.id)
+		mustExec(t, store,
+			`INSERT INTO database_instances (project_id, org_id, owner_id, status, project_name, namespace, storage_size, no_database, created_at)
+			 VALUES ('p-'||$1, $1, '', 'ACTIVE', $1, 'ns-'||$1, '1Gi', FALSE, NOW())`, person.id)
+	}
+}
+
+func mustExec(t *testing.T, store *Store, query string, args ...any) {
+	t.Helper()
+	if _, err := store.db.ExecContext(context.Background(), query, args...); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func logRefusal(t *testing.T, store *Store, userID, action string, ago time.Duration) {
