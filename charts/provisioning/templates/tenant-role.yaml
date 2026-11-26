@@ -1,0 +1,132 @@
+# Provisioning's tenant role: what it manages inside one project namespace —
+# CNPG clusters, the watcher Helm release, the Deno runtime, apps, isolation
+# policies, and SQL setup through pods/exec. Bound only by the RoleBinding
+# provisioning creates in each project namespace (excalibase-provisioning).
+# No RBAC objects, CRDs, webhooks or service-account tokens.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: excalibase-provisioning-project
+rules:
+  # Deleting the project's own namespace (a RoleBinding in a namespace covers the namespace object).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets", "services", "configmaps", "serviceaccounts", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["resourcequotas", "limitranges"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Status, the app log proxy, SQL setup through exec, and force-deleting a
+  # deleted cluster's instance pods.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # The kubelet's probe events: an app whose health check path answers 4xx
+  # fails its deploy with that answer instead of after the deadline (EXC-651).
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+  # The database's CPU and memory in Studio, from metrics-server.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters", "backups", "scheduledbackups", "poolers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["barmancloud.cnpg.io"]
+    resources: ["objectstores"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cilium.io"]
+    resources: ["ciliumnetworkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+# The rolebinding grant in clusterrole.yaml is cluster-wide because a project namespace does
+# not exist until provisioning creates it. This keeps provisioning's bindings
+# inside namespaces labelled as projects (which it cannot relabel: it has no
+# namespace update) and to its tenant role only.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: excalibase-provisioning-project-bindings
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings"]
+  matchConditions:
+    - name: provisioning
+      expression: request.userInfo.username == "system:serviceaccount:{{ .Values.namespace }}:{{ .Values.serviceAccount.name }}"
+  validations:
+    - expression: >-
+        namespaceObject != null &&
+        has(namespaceObject.metadata.labels) &&
+        namespaceObject.metadata.labels[?'excalibase.io/type'].orValue('') == 'project' &&
+        object.roleRef.kind == 'ClusterRole' &&
+        object.roleRef.name == 'excalibase-provisioning-project' &&
+        object.subjects.size() == 1 &&
+        object.subjects[0].kind == 'ServiceAccount' &&
+        object.subjects[0].name == '{{ .Values.serviceAccount.name }}' &&
+        object.subjects[0].namespace == '{{ .Values.namespace }}'
+      message: provisioning may bind only its tenant role to itself, and only in a project namespace
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: excalibase-provisioning-project-bindings
+spec:
+  policyName: excalibase-provisioning-project-bindings
+  validationActions: ["Deny"]
+---
+# A project namespace made by provisioning is fenced by pod security: baseline
+# admits gVisor apps, and nothing it creates may enforce less. A namespace
+# without the label would fall back to the cluster default, which may be privileged.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: excalibase-provisioning-namespace-pod-security
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["namespaces"]
+  matchConditions:
+    - name: provisioning
+      expression: request.userInfo.username == "system:serviceaccount:{{ .Values.namespace }}:{{ .Values.serviceAccount.name }}"
+  validations:
+    - expression: >-
+        object.metadata.?labels['pod-security.kubernetes.io/enforce'].orValue('') in ['baseline', 'restricted']
+      message: provisioning may create only namespaces that enforce the baseline or restricted pod security standard
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: excalibase-provisioning-namespace-pod-security
+spec:
+  policyName: excalibase-provisioning-namespace-pod-security
+  validationActions: ["Deny"]

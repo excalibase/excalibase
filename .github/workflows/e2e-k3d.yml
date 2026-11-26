@@ -156,6 +156,10 @@ jobs:
             labels:
               excalibase.io/type: project
           EOF
+          # Provisioning holds its tenant role only through the RoleBinding it makes
+          # in a project namespace; this one is hand-made, so make it the same way.
+          kubectl -n org-smoke-proj create rolebinding excalibase-provisioning \
+            --clusterrole=excalibase-provisioning-project --serviceaccount="$NS:provisioning-sa"
           # MySQL is off: neither MOCO nor its CRD is installed here.
           if kubectl get crd mysqlclusters.moco.cybozu.com >/dev/null 2>&1; then
             echo "MOCO must not be installed for this check"; exit 1
@@ -175,6 +179,9 @@ jobs:
 
       - name: Chart lets provisioning read the sandbox RuntimeClass
         run: sh charts/provisioning/tests/runtimeclass-rbac.sh
+
+      - name: Chart keeps provisioning cluster access to namespaces and capacity
+        run: sh charts/provisioning/tests/scoped-rbac.sh
 
       - name: Chart requires the first-admin setup token
         run: sh charts/provisioning/tests/setup-token.sh
@@ -203,6 +210,9 @@ jobs:
             --set-string env.STORAGE_NODE_CAPACITY=20Gi \
             --set-string env.APP_DISK_TOOLS_IMAGE='busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e' \
             --set-string platformDB.url='postgres://platform:platform@platform-db.excalibase-platform:5432/platform?sslmode=disable'
+
+      - name: Admission keeps provisioning's bindings and namespaces in bounds
+        run: sh charts/provisioning/tests/admission.sh "$NS"
 
       - name: Wait for provisioning rollout
         run: |

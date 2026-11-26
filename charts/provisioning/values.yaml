@@ -135,6 +135,13 @@ pdb:
 # kube-root-ca.crt is the cluster CA Kubernetes publishes to every namespace;
 # on RKE2 and k3s it is the one that signs the kubelet. Name another ConfigMap
 # holding ca.crt where it is not (kind and kubeadm self-sign the kubelet).
+# The setup status reads the CloudNativePG operator's Deployment. The namespace
+# must exist when the chart is installed; turn this off only if the operator is
+# not used.
+operatorCheck:
+  enabled: true
+  namespace: cnpg-system
+
 netmeter:
   enabled: false
   kubeletCAConfigMap: kube-root-ca.crt

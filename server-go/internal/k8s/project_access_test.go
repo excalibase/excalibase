@@ -157,3 +157,73 @@ func TestNamespaceDeleting(t *testing.T) {
 		}
 	}
 }
+
+func namespaceWithLabels(name string, labels map[string]string) *corev1.Namespace {
+	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+}
+
+// A namespace made before the tenant role existed has no binding, and only
+// creating a namespace makes one; boot adds the missing ones.
+func TestBackfillProjectAccess_BindsEveryProjectNamespaceThatLacksIt(t *testing.T) {
+	client, clientset, _ := newAccessClient(t, 1)
+	ctx := context.Background()
+	project := map[string]string{"excalibase.io/type": "project", "excalibase.io/org": "org"}
+	terminating := namespaceWithLabels("org-gone", project)
+	now := metav1.Now()
+	terminating.DeletionTimestamp = &now
+	for _, ns := range []*corev1.Namespace{
+		namespaceWithLabels("org-old-a", project), namespaceWithLabels("org-old-b", project),
+		namespaceWithLabels("kube-system", nil), namespaceWithLabels("shared", map[string]string{"excalibase.io/type": "platform"}),
+		terminating,
+	} {
+		if _, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := client.BackfillProjectAccess(ctx); err != nil {
+		t.Fatalf("BackfillProjectAccess: %v", err)
+	}
+	for ns, want := range map[string]bool{"org-old-a": true, "org-old-b": true, "kube-system": false, "shared": false, "org-gone": false} {
+		_, err := clientset.RbacV1().RoleBindings(ns).Get(ctx, ProjectRoleBindingName, metav1.GetOptions{})
+		if got := err == nil; got != want {
+			t.Errorf("%s: bound = %v, want %v", ns, got, want)
+		}
+	}
+	// A second run changes nothing and does not fail on what exists.
+	if err := client.BackfillProjectAccess(ctx); err != nil {
+		t.Fatalf("second BackfillProjectAccess: %v", err)
+	}
+}
+
+// One namespace that cannot be bound does not leave the rest unbound.
+func TestBackfillProjectAccess_ReportsAForeignBindingAndKeepsGoing(t *testing.T) {
+	client, clientset, _ := newAccessClient(t, 1)
+	ctx := context.Background()
+	project := map[string]string{"excalibase.io/type": "project", "excalibase.io/org": "org"}
+	for _, name := range []string{"org-a", "org-b"} {
+		if _, err := clientset.CoreV1().Namespaces().Create(ctx, namespaceWithLabels(name, project), metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	foreign := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: ProjectRoleBindingName, Namespace: "org-a"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-admin"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "intruder", Namespace: "x"}},
+	}
+	if _, err := clientset.RbacV1().RoleBindings("org-a").Create(ctx, foreign, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.BackfillProjectAccess(ctx); !errors.Is(err, ErrForeignProjectBinding) {
+		t.Fatalf("err = %v, want ErrForeignProjectBinding", err)
+	}
+	if _, err := clientset.RbacV1().RoleBindings("org-b").Get(ctx, ProjectRoleBindingName, metav1.GetOptions{}); err != nil {
+		t.Errorf("org-b was left unbound: %v", err)
+	}
+}
+
+func TestBackfillProjectAccess_NeedsConfiguredAccess(t *testing.T) {
+	client := NewClientFromInterfaces(fake.NewSimpleClientset(), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()))
+	if err := client.BackfillProjectAccess(context.Background()); !errors.Is(err, ErrProjectAccessUnset) {
+		t.Fatalf("err = %v, want ErrProjectAccessUnset", err)
+	}
+}
