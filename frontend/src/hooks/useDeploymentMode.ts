@@ -33,6 +33,8 @@ export type Feature =
   | 'onetimecredentials'
   // Analytics tabs in the admin console (EXC-898); staff only, off until turned on.
   | 'adminanalytics'
+  // The credit ledger: the sign-up credit, the balance and the statement (EXC-866).
+  | 'credits'
   // The cloud-console layout of Studio (EXC-762); off until the owner turns it on.
   | 'studio_v2';
 

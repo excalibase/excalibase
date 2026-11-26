@@ -342,6 +342,8 @@ type AppConfig struct {
 	SelfHealAlertAfter int
 	// Trust is the limited trial's settings (EXC-899).
 	Trust TrustConfig
+	// Credits is the sign-up credit's settings (EXC-866).
+	Credits CreditsConfig
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -500,6 +502,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateTrust(); err != nil {
 		return err
 	}
+	if err := c.validateCredits(); err != nil {
+		return err
+	}
 	if err := c.validateSiteGit(); err != nil {
 		return err
 	}
@@ -532,6 +537,7 @@ func Load() AppConfig {
 	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
 	cfg.SelfHealAlertAfter = envInt("EXCALIBASE_SELFHEAL_ALERT_AFTER", 5)
 	cfg.Trust = loadTrust()
+	cfg.Credits = loadCredits()
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"

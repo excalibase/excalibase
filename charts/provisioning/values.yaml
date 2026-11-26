@@ -109,6 +109,10 @@ env:
   TENANT_STORAGE_CLASS: ""
   # Comma-separated further classes a create request may name; empty = only the default.
   TENANT_STORAGE_CLASSES: ""
+  # Credit ledger, the sign-up credit and admin grants (EXC-866); off until "true".
+  # CREDITS_TRIAL_DOLLARS, CREDITS_TRIAL_DAYS, CREDITS_TRIAL_CAP, CREDITS_ADMIN_GRANT_CAP_DOLLARS,
+  # CREDITS_TERMS_VERSION and CREDITS_TERMS_URL set its numbers; the defaults are 300, 90, 40, 1000, v1.
+  FEATURE_CREDITS: "false"
 
 platformDB:
   enabled: true

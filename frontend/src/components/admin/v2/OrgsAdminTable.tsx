@@ -9,6 +9,8 @@ import { revokeOrgCascade, useRevokeOrg, useSetOrgTier } from '../../../hooks/us
 import type { ConsoleOrg } from '../../../api/adminConsole';
 import { AccountStatusBadge } from '../AccountStatusBadge';
 import { ReasonDialog } from '../ReasonDialog';
+import { GrantCreditDialog } from './GrantCreditDialog';
+import { useFeatureEnabled } from '../../../hooks/useDeploymentMode';
 import { BulkDialog, BulkOutcomeNotice, type BulkOutcome, type BulkRequest } from './BulkAction';
 import { refreshAdmin } from './adminRows';
 import { ORG_SORTS } from './listQuery';
@@ -56,10 +58,11 @@ function orgBulkActions(offer: (selected: ConsoleOrg[], clear: () => void) => vo
   );
 }
 
-function orgRowActions(canMutate: boolean, on: { changePlan: (org: ConsoleOrg) => void; revoke: (org: ConsoleOrg) => void }) {
+function orgRowActions(canMutate: boolean, on: { changePlan: (org: ConsoleOrg) => void; revoke: (org: ConsoleOrg) => void; credit?: (org: ConsoleOrg) => void }) {
   return (org: ConsoleOrg) => (
     <span className="inline-flex gap-2">
       <Button size="sm" variant="secondary" disabled={!canMutate} onClick={() => on.changePlan(org)}>Change plan</Button>
+      {on.credit && <Button size="sm" variant="secondary" disabled={!canMutate} onClick={() => on.credit?.(org)}>Credit…</Button>}
       <Button size="sm" variant="danger" disabled={!canMutate} onClick={() => on.revoke(org)}>
         <ShieldAlert className="w-3.5 h-3.5 mr-1" aria-hidden="true" />Revoke
       </Button>
@@ -86,6 +89,8 @@ export function OrgsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
   const [planFor, setPlanFor] = useState<ConsoleOrg | null>(null);
   const [chosenTier, setChosenTier] = useState('FREE');
   const [revoking, setRevoking] = useState<ConsoleOrg | null>(null);
+  const creditsOn = useFeatureEnabled('credits').enabled;
+  const [creditFor, setCreditFor] = useState<ConsoleOrg | null>(null);
   const [bulk, setBulk] = useState<BulkRequest<ConsoleOrg> | null>(null);
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
   const columns = useMemo(orgColumns, []);
@@ -140,6 +145,7 @@ export function OrgsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
         rowActions={orgRowActions(canMutate, {
           changePlan: (org) => { setTier.reset(); setChosenTier(org.tier.toUpperCase()); setPlanFor(org); },
           revoke: (org) => { revoke.reset(); setRevoking(org); },
+          credit: creditsOn ? setCreditFor : undefined,
         })}
         emptyState="No organizations yet."
       />
@@ -173,6 +179,7 @@ export function OrgsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
           onCancel={() => setRevoking(null)}
         />
       )}
+      {creditFor && <GrantCreditDialog orgId={creditFor.id} orgSlug={creditFor.slug} onDone={() => setCreditFor(null)} onCancel={() => setCreditFor(null)} />}
       {bulk && <BulkDialog request={bulk} onFinished={(done) => { setBulk(null); setOutcome(done); }} onCancel={() => setBulk(null)} />}
     </div>
   );

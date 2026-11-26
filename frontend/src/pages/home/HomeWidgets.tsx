@@ -6,6 +6,8 @@ import type { Visit } from './recentlyVisited';
 import { planLabel } from '../../hooks/useMemberOrgs';
 import type { OrgUsage } from '../usage/usageModel';
 import { projectsValue } from '../usage/UsageParts';
+import type { CreditOverview } from '../../api/credits';
+import { dollars, daysLeft } from '../usage/creditsFormat';
 
 export function Widget({ title, children }: { readonly title: string; readonly children: ReactNode }) {
   return (
@@ -62,17 +64,45 @@ export function HealthWidget({ counts, failingApps }: { readonly counts: HealthC
   );
 }
 
-export function CreditsWidget({ planName, projects, limitsKnown }: { readonly planName?: string; readonly projects?: OrgUsage['projects']; readonly limitsKnown: boolean }) {
+const LOW_CREDIT_SHARE = 0.2;
+
+// What the Credits widget says beyond the balance: how long it lasts, and a warning when it runs low or out.
+function creditNotes(credit: CreditOverview, now: Date): { expires?: string; warning?: string; offer?: string } {
+  const left = daysLeft(credit.nextExpiry, now);
+  const granted = credit.lots.reduce((sum, lot) => sum + lot.originalMicros, 0);
+  let warning: string | undefined;
+  if (credit.balanceMicros === 0 && credit.entries.length > 0) warning = 'Your credit is used up.';
+  else if (granted > 0 && credit.balanceMicros < granted * LOW_CREDIT_SHARE) warning = 'Your credit is running low.';
+  const offer = credit.trial.state === 'needs_terms' ? `Accept the credit terms to get ${dollars(credit.trial.amountMicros)}.` : undefined;
+  return { expires: left === null ? undefined : `${left} day${left === 1 ? '' : 's'}`, warning, offer };
+}
+
+interface CreditsWidgetProps {
+  readonly planName?: string;
+  readonly projects?: OrgUsage['projects'];
+  readonly limitsKnown: boolean;
+  // Present only while the credits feature is on and the balance was read.
+  readonly credit?: CreditOverview;
+  readonly creditFailed?: boolean;
+}
+
+export function CreditsWidget({ planName, projects, limitsKnown, credit, creditFailed }: CreditsWidgetProps) {
+  const notes = credit ? creditNotes(credit, new Date()) : undefined;
   return (
     <Widget title="Credits & usage">
       {planName && projects ? (
         <div>
+          {credit && <Row label="Credit balance" value={dollars(credit.balanceMicros)} warn={Boolean(notes?.warning)} />}
+          {notes?.expires && <Row label="Credit lasts another" value={notes.expires} />}
           <Row label="Plan" value={planLabel(planName)} />
           <Row label="Projects" value={projectsValue(projects, limitsKnown)} />
         </div>
       ) : (
         <p className="text-text-secondary">Your plan and usage appear once you have an organization.</p>
       )}
+      {notes?.warning && <p role="status" className="text-amber-400">{notes.warning}</p>}
+      {notes?.offer && <p className="text-text-secondary">{notes.offer}</p>}
+      {creditFailed && <p role="alert" className="text-red-400">Could not read your credit.</p>}
       <Link to="/usage" className={MORE}>Usage details →</Link>
     </Widget>
   );

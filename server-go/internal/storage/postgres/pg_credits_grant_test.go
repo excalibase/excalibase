@@ -1,0 +1,249 @@
+//go:build integration
+
+package postgres
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/credits"
+)
+
+func grant(t *testing.T, store *Store, userID string, cap int) credits.GrantResult {
+	t.Helper()
+	result, err := store.GrantCreditTrial(context.Background(), userID, trialRules(cap), creditsNow)
+	if err != nil {
+		t.Fatalf("grant %s: %v", userID, err)
+	}
+	return result
+}
+
+func TestTrialGrantLandsOnTheFreeOrgForNinetyDays(t *testing.T) {
+	store := testStore(t)
+	orgID := creditPerson(t, store, "ann")
+	result := grant(t, store, "ann", 40)
+	if result.Outcome != credits.OutcomeGranted || result.OrgID != orgID {
+		t.Fatalf("%+v", result)
+	}
+	account, _ := store.CreditAccount(context.Background(), orgID)
+	if account.Balance != credits.FromDollars(300) || len(account.Lots) != 1 {
+		t.Fatalf("%+v", account)
+	}
+	want := creditsNow.Add(90 * 24 * time.Hour)
+	if got := account.Lots[0].ExpiresAt; got == nil || !got.Equal(want) {
+		t.Fatalf("expires %v, want %v", got, want)
+	}
+	var kind, terms string
+	if err := store.db.QueryRow(`SELECT e.kind, c.terms_version FROM credit_grant_claims c JOIN credit_entries e ON e.id = c.entry_id WHERE c.claim_kind = 'user' AND c.claim_value = 'ann'`).Scan(&kind, &terms); err != nil || kind != "grant_trial" || terms != creditsTerms {
+		t.Fatalf("claim: %s %s %v", kind, terms, err)
+	}
+	creditInvariant(t, store, orgID)
+}
+
+func TestTenConcurrentGrantsForOnePersonGiveOneEntry(t *testing.T) {
+	store := testStore(t)
+	orgID := creditPerson(t, store, "bob")
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := store.GrantCreditTrial(context.Background(), "bob", trialRules(40), creditsNow); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	var entries int
+	_ = store.db.QueryRow(`SELECT count(*) FROM credit_entries WHERE org_id = $1`, orgID).Scan(&entries)
+	if entries != 1 {
+		t.Fatalf("%d entries, want 1", entries)
+	}
+	if again := grant(t, store, "bob", 40); again.Outcome != credits.OutcomeAlreadyGranted {
+		t.Fatalf("a replay: %+v", again)
+	}
+}
+
+func TestGrantNeedsVerifiedTermsActiveAndAFreeOrg(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	creditPerson(t, store, "cat")
+
+	if err := store.CreateUser(ctx, userNamed("dan", "dan")); err != nil {
+		t.Fatal(err)
+	}
+	if got := grant(t, store, "dan", 40).Outcome; got != credits.OutcomeNotEligible {
+		t.Errorf("unverified: %s", got)
+	}
+	_ = store.MarkEmailVerified(ctx, "dan", creditsNow)
+	if got := grant(t, store, "dan", 40).Outcome; got != credits.OutcomeNeedsTerms {
+		t.Errorf("terms not accepted: %s", got)
+	}
+	_ = store.AcceptCreditTerms(ctx, "dan", "an-old-version", creditsNow)
+	if got := grant(t, store, "dan", 40).Outcome; got != credits.OutcomeNeedsTerms {
+		t.Errorf("an old terms version: %s", got)
+	}
+	_ = store.AcceptCreditTerms(ctx, "dan", creditsTerms, creditsNow)
+	if got := grant(t, store, "dan", 40).Outcome; got != credits.OutcomeNoFreeOrg {
+		t.Errorf("no free org: %s", got)
+	}
+
+	if _, err := store.db.Exec(`UPDATE users SET active = false WHERE id = 'cat'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := grant(t, store, "cat", 40).Outcome; got != credits.OutcomeNotEligible {
+		t.Errorf("suspended: %s", got)
+	}
+	_, _ = store.db.Exec(`UPDATE users SET active = true WHERE id = 'cat'`)
+	if _, err := store.db.Exec(`INSERT INTO abuse_suspensions (user_id) VALUES ('cat')`); err != nil {
+		t.Fatal(err)
+	}
+	if got := grant(t, store, "cat", 40).Outcome; got != credits.OutcomeNotEligible {
+		t.Errorf("abuse suspension: %s", got)
+	}
+}
+
+func TestAnIdentityLinkedAfterAGrantBlocksASecondAccount(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	creditPerson(t, store, "eve")
+	creditPerson(t, store, "fay")
+	grant(t, store, "eve", 40)
+
+	if err := store.LinkStudioIdentity(ctx, "github", "gh-42", "eve", "eve@x.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LinkStudioIdentity(ctx, "google", "g-7", "eve", "eve@x.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LinkStudioIdentity(ctx, "github", "gh-42", "fay", "fay@x.example.com"); err == nil {
+		t.Fatal("a subject already linked cannot be linked twice")
+	}
+	if err := store.LinkStudioIdentity(ctx, "google", "g-8", "fay", "fay@x.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	var claims int
+	_ = store.db.QueryRow(`SELECT count(*) FROM credit_grant_claims WHERE user_id = 'eve'`).Scan(&claims)
+	if claims != 3 {
+		t.Fatalf("eve holds %d claims, want user + github + google", claims)
+	}
+}
+
+func TestASubjectClaimedByAnotherPersonGivesNoGrantAndDoesNotBlockTheLink(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	creditPerson(t, store, "gil")
+	creditPerson(t, store, "hal")
+	if err := store.LinkStudioIdentity(ctx, "github", "gh-9", "gil", "gil@x.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	grant(t, store, "gil", 40)
+	if _, err := store.db.Exec(`DELETE FROM studio_identities WHERE user_id = 'gil'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LinkStudioIdentity(ctx, "github", "gh-9", "hal", "hal@x.example.com"); err != nil {
+		t.Fatalf("a claimed subject must not block the link: %v", err)
+	}
+	if got := grant(t, store, "hal", 40); got.Outcome != credits.OutcomeIdentityClaimed {
+		t.Fatalf("the second account got %+v", got)
+	}
+	var entries int
+	_ = store.db.QueryRow(`SELECT count(*) FROM credit_entries WHERE org_id = 'org-hal'`).Scan(&entries)
+	if entries != 0 {
+		t.Fatal("a refused grant wrote an entry")
+	}
+	if got := grant(t, store, "hal", 40); got.Outcome != credits.OutcomeIdentityClaimed {
+		t.Fatalf("a second attempt: %+v", got)
+	}
+}
+
+func TestTrialCapWaitlistsAndGrantsFirstComeWhenATrialEnds(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"k1", "k2", "k3", "k4"} {
+		creditPerson(t, store, id)
+	}
+	if grant(t, store, "k1", 2).Outcome != credits.OutcomeGranted || grant(t, store, "k2", 2).Outcome != credits.OutcomeGranted {
+		t.Fatal("the first two fit under the cap")
+	}
+	if grant(t, store, "k3", 2).Outcome != credits.OutcomeWaitlisted || grant(t, store, "k4", 2).Outcome != credits.OutcomeWaitlisted {
+		t.Fatal("past the cap people wait")
+	}
+	if grant(t, store, "k3", 2).Outcome != credits.OutcomeWaitlisted {
+		t.Fatal("asking again keeps the place")
+	}
+	queue, _ := store.CreditWaitlist(ctx, 10)
+	if len(queue) != 2 || queue[0] != "k3" || queue[1] != "k4" {
+		t.Fatalf("queue %v, first come first served", queue)
+	}
+	if state, _ := store.CreditTrialState(ctx, "k4"); state.State != "waitlisted" || state.Position != 2 {
+		t.Fatalf("%+v", state)
+	}
+	if grant(t, store, "k3", 2).Outcome != credits.OutcomeWaitlisted {
+		t.Fatal("still full")
+	}
+
+	if n, err := store.ExpireCreditLots(ctx, creditsNow.Add(91*24*time.Hour)); err != nil || n != 2 {
+		t.Fatalf("both trials end: %d %v", n, err)
+	}
+	if got := grant(t, store, "k3", 2); got.Outcome != credits.OutcomeGranted {
+		t.Fatalf("k3: %+v", got)
+	}
+	queue, _ = store.CreditWaitlist(ctx, 10)
+	if len(queue) != 1 || queue[0] != "k4" {
+		t.Fatalf("a granted person leaves the queue: %v", queue)
+	}
+}
+
+func TestPendingTrialUsersAreVerifiedAcceptedAndNotYetClaimed(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	creditPerson(t, store, "p1")
+	creditPerson(t, store, "p2")
+	creditPerson(t, store, "p3")
+	grant(t, store, "p1", 40)
+	_ = store.CreateUser(ctx, userNamed("p4", "p4"))
+	pending, err := store.PendingCreditTrialUsers(ctx, creditsTerms, 10)
+	if err != nil || len(pending) != 2 || pending[0] != "p2" || pending[1] != "p3" {
+		t.Fatalf("%v %v", pending, err)
+	}
+	grant(t, store, "p2", 1)
+	grant(t, store, "p3", 1)
+	pending, _ = store.PendingCreditTrialUsers(ctx, creditsTerms, 10)
+	if len(pending) != 0 {
+		t.Fatalf("a waitlisted person is not asked again by the sweeper: %v", pending)
+	}
+}
+
+func TestANewcomerCannotJumpTheQueueWhenAPlaceOpens(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"q1", "q2", "q3", "q4"} {
+		creditPerson(t, store, id)
+	}
+	creditPerson(t, store, "q5")
+	rules := trialRules(2)
+	at := func(person string, when time.Time) credits.GrantOutcome {
+		result, err := store.GrantCreditTrial(ctx, person, rules, when)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Outcome
+	}
+	at("q1", creditsNow)
+	at("q2", creditsNow.Add(48*time.Hour))
+	at("q3", creditsNow.Add(49*time.Hour))
+	// q1's credit ends before q2's: one place is free now.
+	later := creditsNow.Add(90*24*time.Hour + time.Hour)
+	if n, err := store.ExpireCreditLots(ctx, later); err != nil || n != 1 {
+		t.Fatalf("one trial ends: %d %v", n, err)
+	}
+	if got := at("q5", later); got != credits.OutcomeWaitlisted {
+		t.Fatalf("q3 asked first and waits for the free place, so q5 must queue behind: %s", got)
+	}
+	if got := at("q3", later); got != credits.OutcomeGranted {
+		t.Fatalf("q3 takes the free place: %s", got)
+	}
+}

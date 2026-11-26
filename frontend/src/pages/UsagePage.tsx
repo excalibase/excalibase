@@ -2,6 +2,9 @@ import { Link } from 'react-router-dom';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { planLabel } from '../hooks/useMemberOrgs';
 import { useOrgUsage } from './usage/useOrgUsage';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { useCurrentOrg } from '../hooks/useMemberOrgs';
+import { CreditsSection } from './usage/CreditsSection';
 import { appsValue, gib, Line, projectsValue, Section } from './usage/UsageParts';
 
 const CELL = 'px-3 py-2 text-left';
@@ -10,12 +13,15 @@ const CELL = 'px-3 py-2 text-left';
 export function UsagePage() {
   useDocumentTitle('Usage & credits');
   const { orgName, tierName, tier, usage, isLoading, failed } = useOrgUsage();
+  const credits = useFeatureEnabled('credits').enabled;
+  const { org } = useCurrentOrg();
   return (
     <div className="mx-auto max-w-3xl space-y-4" data-testid="usage-page">
       <h1 className="text-xl font-semibold text-text-primary">Usage &amp; credits</h1>
       {failed && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">Could not load your usage. Reload the page to try again.</p>}
       {isLoading && <p className="text-sm text-text-secondary">Loading usage…</p>}
       {!failed && !isLoading && !tierName && <p className="text-sm text-text-secondary">You are not in an organization yet. <Link to="/instances" className="text-purple-400 hover:underline">See your projects</Link></p>}
+      {credits && org && <CreditsSection orgId={org.id} />}
       {tierName && (
         <Section title="Plan">
           <Line label={orgName ?? 'Organization'} value={planLabel(tierName)} />
