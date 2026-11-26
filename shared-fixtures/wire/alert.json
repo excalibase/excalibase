@@ -1,0 +1,11 @@
+{
+  "id": "alert-1",
+  "projectId": "proj-1",
+  "severity": "CRITICAL",
+  "message": "Connections are at 95% of the limit",
+  "metric": "connections",
+  "value": 95,
+  "threshold": 90,
+  "timestamp": "2026-11-20T10:15:30Z",
+  "resolved": false
+}

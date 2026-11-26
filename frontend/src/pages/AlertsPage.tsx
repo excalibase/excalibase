@@ -3,19 +3,7 @@ import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { api } from '../api/client';
 import { Bell, AlertTriangle, Info, XCircle } from 'lucide-react';
 import { formatInstant } from '../utils/instant';
-
-interface Alert {
-  id: string;
-  projectId: string;
-  metricName: string;
-  severity: 'WARNING' | 'CRITICAL';
-  status: 'FIRING' | 'RESOLVED';
-  message: string;
-  currentValue: number;
-  threshold: number;
-  firedAt: string;
-  resolvedAt?: string;
-}
+import type { Alert } from '../api/alerts';
 
 function useProjectAlerts(projectId: string) {
   return useQuery({
@@ -87,12 +75,12 @@ function renderAlertsBody(isLoading: boolean, alerts: Alert[] | undefined): Reac
               </span>
             </td>
             <td className="px-6 py-4 text-text-secondary font-medium">{a.projectId}</td>
-            <td className="px-6 py-4 text-text-tertiary text-xs font-mono">{a.metricName?.replaceAll('_', ' ')}</td>
+            <td className="px-6 py-4 text-text-tertiary text-xs font-mono">{a.metric?.replaceAll('_', ' ')}</td>
             <td className="px-6 py-4 text-text-primary">{a.message}</td>
-            <td className="px-6 py-4 text-text-tertiary">{a.firedAt ? formatInstant(a.firedAt) : '—'}</td>
+            <td className="px-6 py-4 text-text-tertiary">{a.timestamp ? formatInstant(a.timestamp) : '—'}</td>
             <td className="px-6 py-4">
-              <span className={`px-2 py-0.5 rounded text-xs border ${a.status === 'RESOLVED' ? 'bg-green-900/20 text-color-success border-color-success/30' : 'bg-red-900/10 text-color-error border-color-error/30'}`}>
-                {a.status === 'RESOLVED' ? 'Resolved' : 'Firing'}
+              <span className={`px-2 py-0.5 rounded text-xs border ${a.resolved ? 'bg-green-900/20 text-color-success border-color-success/30' : 'bg-red-900/10 text-color-error border-color-error/30'}`}>
+                {a.resolved ? 'Resolved' : 'Firing'}
               </span>
             </td>
           </tr>
