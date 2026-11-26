@@ -138,6 +138,23 @@ func TestSecretsStore_DeleteMissingIdempotent(t *testing.T) {
 	}
 }
 
+// A secret saved before a name became reserved must stay deletable.
+func TestSecretsStore_DeleteRemovesNowReservedKey(t *testing.T) {
+	v := newFakeVault()
+	v.data[NewSecretsStore(v).vaultPath("proj_p1")] = map[string]string{"EXCALIBASE_FUNCTIONS_URL": "old", "KEEP": "k"}
+	s := NewSecretsStore(v)
+	if err := s.Delete("proj_p1", "EXCALIBASE_FUNCTIONS_URL"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	got, _ := s.GetAll("proj_p1")
+	if _, ok := got["EXCALIBASE_FUNCTIONS_URL"]; ok {
+		t.Error("reserved key should be gone")
+	}
+	if got["KEEP"] != "k" {
+		t.Errorf("KEEP should remain: %q", got["KEEP"])
+	}
+}
+
 func TestSecretsStore_RejectsInvalidKey(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
@@ -152,7 +169,7 @@ func TestSecretsStore_RejectsInvalidKey(t *testing.T) {
 func TestSecretsStore_RejectsReservedKeys(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
-	reserved := []string{"EXCALIBASE_URL", "EXCALIBASE_PROJECT_ID", "EXCALIBASE_DB_URL"}
+	reserved := []string{"EXCALIBASE_URL", "EXCALIBASE_FUNCTIONS_URL", "EXCALIBASE_PROJECT_ID", "EXCALIBASE_DB_URL"}
 	for _, k := range reserved {
 		if err := s.Set("proj_p1", k, "malicious"); err == nil {
 			t.Errorf("reserved key %q should be rejected", k)

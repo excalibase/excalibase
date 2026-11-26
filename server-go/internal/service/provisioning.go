@@ -194,7 +194,7 @@ func (s *ProvisioningService) SetVault(v vaultclient.VaultClient) {
 }
 
 // SetNatsCredentialMinter enables project-scoped NATS credentials. Nil keeps
-// watchers unauthenticated, which only works without auth_callout.
+// watchers unauthenticated, which the bus accepts because it does not check credentials.
 func (s *ProvisioningService) SetNatsCredentialMinter(m *NatsCredentialMinter) {
 	s.natsCreds = m
 }

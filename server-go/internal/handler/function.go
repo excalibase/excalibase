@@ -509,7 +509,10 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) (str
 // These override any user secret with the same key.
 //
 // Injected vars (all prefixed EXCALIBASE_):
-//   - URL          — function's public invoke base (for calling sibling fns)
+//   - URL          — the platform's base URL, no path: the `url` the SDK's
+//     createClient takes
+//   - FUNCTIONS_URL — the project's function invoke base, {URL}/functions/v1/{projectId}
+//     (for calling sibling fns)
 //   - PROJECT_ID   — the opaque project ref
 //   - ORG_SLUG     — the owning org's slug, omitted if not resolvable
 //   - DB_URL       — postgres DSN for the project's database as its runtime
@@ -526,13 +529,14 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) (str
 // No API key is injected: SDK keys are minted by auth and shown once, so a
 // function that calls its project's API stores its own key as a secret.
 func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[string]string {
-	base := h.publicBaseURL
+	base := strings.TrimRight(h.publicBaseURL, "/")
 	if base == "" {
 		base = "https://api.excalibase.io"
 	}
 	env := map[string]string{
-		"EXCALIBASE_URL":        fmt.Sprintf("%s/functions/v1/%s", base, projectID),
-		"EXCALIBASE_PROJECT_ID": projectID,
+		"EXCALIBASE_URL":           base,
+		"EXCALIBASE_FUNCTIONS_URL": fmt.Sprintf("%s/functions/v1/%s", base, projectID),
+		"EXCALIBASE_PROJECT_ID":    projectID,
 	}
 	if slug, ok := h.orgSlugFor(ctx, projectID); ok {
 		env["EXCALIBASE_ORG_SLUG"] = slug

@@ -35,7 +35,7 @@ func TestClientOptionsRejectsUnknownPrincipal(t *testing.T) {
 }
 
 // TestBaseOptionsKeepReconnectingThroughAuthFailures is the EXC-414 client
-// half: a callout that times out once must not take a service off the bus
+// half: a refused or late connection must not take a service off the bus
 // for the life of the process.
 func TestBaseOptionsKeepReconnectingThroughAuthFailures(t *testing.T) {
 	var applied nats.Options
@@ -51,7 +51,7 @@ func TestBaseOptionsKeepReconnectingThroughAuthFailures(t *testing.T) {
 		t.Errorf("MaxReconnect = %d, want -1 (retry forever)", applied.MaxReconnect)
 	}
 	if !applied.IgnoreAuthErrorAbort {
-		t.Error("IgnoreAuthErrorAbort is off: two consecutive callout timeouts would abort reconnecting for good")
+		t.Error("IgnoreAuthErrorAbort is off: two consecutive auth errors would abort reconnecting for good")
 	}
 	if applied.DisconnectedErrCB == nil || applied.ReconnectedCB == nil || applied.AsyncErrorCB == nil {
 		t.Error("bus state changes are unobserved: no disconnect, reconnect or error handler")

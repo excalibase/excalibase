@@ -5,6 +5,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"os"
@@ -61,7 +62,7 @@ func startGVisorK3s(t *testing.T, platform string) *gvisorCluster {
 	if err := imagepull.EnsureLocal(ctx, gvisorK3sImage); err != nil {
 		t.Fatal(err)
 	}
-	container, err := k3s.Run(ctx, gvisorK3sImage, testcontainers.WithFiles(gvisorFiles(t, platform)...))
+	container, err := k3s.Run(ctx, gvisorK3sImage, testcontainers.WithFiles(gvisorFiles(t, platform)...), k3smirror.Option())
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)

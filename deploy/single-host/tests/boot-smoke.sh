@@ -50,16 +50,31 @@ BOOT_SMOKE_DEADLINE=${BOOT_SMOKE_DEADLINE:-4500}
 trap 'echo "FAIL boot-smoke passed its ${BOOT_SMOKE_DEADLINE}s deadline"; exit 1' USR1
 ( sleep "$BOOT_SMOKE_DEADLINE"; kill -USR1 $$ 2>/dev/null ) >/dev/null 2>&1 &
 WATCHDOG=$!
-trap 'kill $WATCHDOG 2>/dev/null' EXIT
+trap 'kill $WATCHDOG 2>/dev/null; rm -f "$BUNDLE/.compose.mirror.yaml"' EXIT
 ENGINE=${1:-docker}
 BUNDLE=$(cd "$(dirname "$0")/.." && pwd)
 TESTS=$BUNDLE/tests
+# EXC-881: CI pulls Docker Hub images from its mirror (IMAGE_MIRROR); unset, the names are unchanged.
+# shellcheck disable=SC1091
+. "$BUNDLE/../ci/mirror-images.sh"
 W=$(mktemp -d)
 cp "$(dirname "$0")/boot-smoke.override.yml" "$W/override.yml"
+# With a mirror the bundle's compose file is read through a copy that names it: beside the original,
+# so its relative paths still hold. Nothing changes in the checked-in file.
+COMPOSE_YAML=$BUNDLE/compose.yaml
+if [ -n "${IMAGE_MIRROR:-}" ]; then
+  COMPOSE_YAML=$BUNDLE/.compose.mirror.yaml
+  MIRROR_LIST_FILE=$BUNDLE/../ci/mirror-images.txt
+  rewrite_stream < "$BUNDLE/compose.yaml" > "$COMPOSE_YAML"
+  rewrite_stream < "$W/override.yml" > "$W/override.mirror.yml" && mv "$W/override.mirror.yml" "$W/override.yml"
+fi
+# The engine images a shard names run from the mirror too.
+[ -z "${GRAPHQL_IMAGE:-}" ] || GRAPHQL_IMAGE=$(mirror_ref "$GRAPHQL_IMAGE")
+[ -z "${AUTH_IMAGE:-}" ] || AUTH_IMAGE=$(mirror_ref "$AUTH_IMAGE")
 PORT=${EDGE_PORT:-28443}
 COMPOSE=${COMPOSE:-"docker compose"}
 DOCKER=${DOCKER:-docker}
-P="-p excalibase-smoke --env-file $W/.env -f $BUNDLE/compose.yaml -f $W/override.yml"
+P="-p excalibase-smoke --env-file $W/.env -f $COMPOSE_YAML -f $W/override.yml"
 pass=0; fail=0
 ok() { echo "PASS $*"; pass=$((pass+1)); }
 ko() { echo "FAIL $*"; fail=$((fail+1)); }
@@ -162,7 +177,7 @@ EOF
   printf 'services:\n  provisioning:\n    volumes:\n      - %s:/run/excalibase-github/app.pem:ro\n' "$W/github-app.pem" > "$W/sitebuilds.yml"
   P="$P -f $W/sitebuilds.yml"
   # The stand-ins install git (and git-daemon, which holds http-backend on Alpine) first, then join the platform and build egress networks.
-  $DOCKER run -d --name "$SITE_FAKES" -v "$TESTS/sitebuild_fakes.py:/fakes.py:ro" docker.io/library/python:3.13-alpine \
+  $DOCKER run -d --name "$SITE_FAKES" -v "$TESTS/sitebuild_fakes.py:/fakes.py:ro" "$(mirror_ref docker.io/library/python:3.13-alpine)" \
     sh -c 'apk add --no-cache git git-daemon >/dev/null && exec python3 /fakes.py 8080 /repos' >/dev/null
   $DOCKER network create --label excalibase.managed=true --label excalibase.component=site-build excalibase-net-build-egress >/dev/null
   $DOCKER network connect excalibase-net-build-egress "$SITE_FAKES"

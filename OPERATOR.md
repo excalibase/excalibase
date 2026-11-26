@@ -1059,15 +1059,22 @@ production router: every registered `{projectId}` route outside the public
 prefixes must refuse an anonymous caller (401) and a member of another org
 (404).
 
-## 6.5. NATS subject authorization (auth callout)
+## 6.5. NATS access (network policy, no auth callout)
 
-The message bus is not shared-secret. NATS runs with `auth_callout`, and
-provisioning is the callout responder: it subscribes to `$SYS.REQ.USER.AUTH`,
-verifies the presented username/password against the `nats_credentials` table
-and signs a short user JWT whose subject permissions come from
-`internal/natsauth.PermissionsFor`. An unknown user, a wrong password or an
-unreachable responder means the connection is refused — there is no open
-fallback.
+The message bus is internal and is protected by network isolation, not by an
+auth callout (EXC-507). The chart's `nats` NetworkPolicy admits port 4222 only
+from the platform's own provisioning, graphql and stream-init pods and from
+pods labelled `excalibase.io/component: cdc-watcher` in a namespace labelled
+`excalibase.io/type: project`; provisioning sets both labels, tenants cannot.
+Every other pod, including customer apps, is refused. NATS is never exposed
+outside the cluster. A customer-facing queue, if one is ever built, is a
+separate system with its own auth. On a single host the same isolation comes
+from the `excalibase-cdc` network plus the proxy's `PROXY_CDC_IMAGES` allow-list.
+
+Each principal still presents a scoped credential (EXC-324) and a per-principal
+inbox prefix. The server does not check them; they exist so a future bus that
+does enforce subjects needs no client change. `internal/natsauth.PermissionsFor`
+holds the matrix:
 
 | Principal | Publish | Subscribe |
 |---|---|---|
@@ -1075,36 +1082,16 @@ fallback.
 | `svc-provisioning` | `policies.>`, `$JS.API.INFO`, `$JS.API.STREAM.>` | `_INBOX_svc-provisioning.>` |
 | `tenant-watcher:<projectId>` | `cdc.<projectId>.>`, `$JS.API.INFO`, `$JS.API.STREAM.INFO.CDC` | `_INBOX_tw_<projectId>.>` |
 
-A per-tenant watcher therefore cannot subscribe to anything — not `cdc.>`,
-not even its own project's subjects — and cannot publish into another
-project's prefix. Each principal gets its own inbox prefix so request
-replies never land on a subject another tenant may read; the client must set
-the matching prefix (`WATCHER_NATS_INBOX_PREFIX`, `app.nats.inbox-prefix`)
-or every JetStream publish will time out.
-
 Environment on provisioning:
 
 | Variable | Meaning |
 |---|---|
-| `NATS_AUTH_CALLOUT_ISSUER_SEED` | account nkey seed (`SA…`) that signs user JWTs; **enables the responder** |
-| `NATS_AUTH_CALLOUT_USER` / `_PASSWORD` | the credential the responder itself connects with (in the `AUTH` account, exempt from the callout) |
-| `NATS_AUTH_CALLOUT_ACCOUNT` | account clients are placed into (default `APP`) |
 | `NATS_USER` / `NATS_PASSWORD` | provisioning's own bus credential (`svc-provisioning`) |
-| `NATS_GRAPHQL_PASSWORD` | graphql's password; provisioning hashes them into `nats_credentials` at every boot, so the Secret is the single source of truth and rotation is "change the Secret, restart" |
 | `NATS_CDC_STREAM` | shared JetStream stream name (default `CDC`) |
 
 Tenant credentials are minted at provision time, rotated on re-provision and
-deleted on deprovision, so a surviving watcher pod cannot reconnect after its
-project is gone. Only bcrypt hashes are stored; the plaintext exists once, in
-the watcher's Secret in the tenant namespace.
-
-**Runbook — a watcher stops publishing after a re-provision.** Its credential
-was rotated; the pod is holding the old one. `kubectl rollout restart
-deploy/<project>-excalibase-watcher-go -n <tenant-ns>` picks up the new
-Secret. If it still fails, check provisioning's log for
-`NATS auth callout disabled` (the issuer seed is missing, so *every*
-connection is being refused) and confirm the `platform-nats` Secret was
-seeded by the bootstrap Job.
+deleted on deprovision. Only bcrypt hashes are stored; the plaintext exists
+once, in the watcher's Secret in the tenant namespace.
 
 ## 6.5b. WAL archive guards (EXC-784)
 
@@ -1458,6 +1445,37 @@ EXC-843's start rule still applies to starting compute: resuming an idle-paused
 project and the background app start refuse a project created by a suspended
 member, so an org in good standing cannot resume such a project until that
 member is unsuspended or the project is recreated.
+
+## Limited trial until verified (EXC-899, in progress)
+
+Off until `FEATURE_LIMITEDTRIAL=true` (Helm `env.FEATURE_LIMITEDTRIAL`, or `.env` on a single host; same on both). With it off every account behaves as it does today and nothing is read.
+
+The model: a new account is **limited** and becomes **full** once verified. Verification will be the linked GitHub account's age and activity; a card may become a second route once billing exists. What is shipped so far is the foundation only:
+
+- A `user_trust` table (one decision per account: state, method, a reason code, time, rule version) and an append-only `trust_audit` table. No GitHub data is stored, only the result.
+- One resolver answers "is this owner limited or full". The owner is the org's immutable `OwnerID`, so a limited member of a full owner's org runs at full. With the flag on, an owner with no decision, an unknown state or any read error is **limited** (fail closed); with the flag off it is full and the tables are not read.
+- Because a missing decision means limited, switching the flag on before the grandfather backfill has run would limit every existing account. So with `FEATURE_LIMITEDTRIAL=true` the server refuses to start until the `trust_backfill_runs` table holds a marker (when the backfill finished and the cutoff it used), and refuses again if that cutoff differs from `TRUST_GRANDFATHER_BEFORE` (a backfill run with another cutoff made a different set of accounts full). The boot read gives up after 30 seconds. The backfill command, the verify flow, the banner and the edge limits come in later changes, so the flag cannot be turned on yet.
+- `trust_audit` has no foreign key to users: the trail of who was limited, verified or overridden is kept when an account is deleted. `user_trust` goes with the account.
+- `TRUST_GRANDFATHER_BEFORE` may not be in the future.
+
+Settings (all read at boot; a mistyped value stops the boot instead of falling back):
+
+| Variable | Default | What it does |
+|---|---|---|
+| `TRUST_GH_MIN_AGE_DAYS` | 90 | How old the linked GitHub account must be |
+| `TRUST_GH_MIN_PUBLIC_EVENTS` | 5 | Public events needed inside the activity window |
+| `TRUST_GH_ACTIVITY_WINDOW_DAYS` | 90 | The window those events are counted in |
+| `TRUST_GH_MIN_REPOS` | 3 | Alternative to events: this many public repositories... |
+| `TRUST_GH_REPO_MIN_AGE_DAYS` | 30 | ...one of which is at least this old |
+| `TRUST_GH_RECHECK_DAYS` | 0 | Re-check a verified account this often; 0 verifies once |
+| `TRUST_VERIFY_RETRY_MINUTES` | 10 | Wait between two verify attempts of one account |
+| `TRUST_GRANDFATHER_BEFORE` | 2026-11-01 | Accounts created before this date are made full by the backfill; later ones must verify |
+| `TRUST_CLAIM_COOLDOWN_DAYS` | 30 | How long a released GitHub claim stays unusable by another account |
+| `EDGE_LIMITED_MBPS` | 1 | Outbound rate at the edge for a limited account's hosts |
+| `EDGE_LIMITED_ALLOW_WS` | false | Let a limited account's hosts upgrade to WebSocket |
+| `POD_LIMITED_EGRESS_MBPS` | 1 | Cap on a limited account's app pods' own outbound traffic |
+
+The last three, the repository thresholds and the claim cooldown are read and checked now but used by later changes.
 
 ## Self-healing failed operations
 

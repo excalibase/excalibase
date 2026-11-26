@@ -129,7 +129,25 @@ const (
 
 // Row is one route's authorization contract. Reads and writes on the same
 // pattern are separate rows whenever their requirements differ.
+// TrustClass is how a route relates to the owner's trust.
+type TrustClass string
+
+const (
+	// trustResolves: the route resolves the owner's trust before it renders or changes anything.
+	trustResolves TrustClass = "resolves"
+	// trustExempt: the route is never refused for trust.
+	trustExempt TrustClass = "exempt"
+	// trustNone: the route has nothing to do with what an owner's workloads may do.
+	trustNone TrustClass = "none"
+)
+
 type Row struct {
+	// Trust says how a write route relates to the limited trial (EXC-899):
+	// trustResolves, trustExempt or trustNone. Every row with a method other
+	// than GET must set it.
+	Trust TrustClass
+	// TrustWhy is why a route resolves or is exempt; empty for trustNone.
+	TrustWhy string
 	// Methods are the HTTP methods this contract covers. MethodAll expands to
 	// every method chi registers for a catch-all mount.
 	Methods []string

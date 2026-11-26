@@ -17,6 +17,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/imageref"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
+	"github.com/excalibase/provisioning-poc/internal/scheduler"
 )
 
 var errDockerCloudUnsupported = errors.New(
@@ -28,19 +29,12 @@ type AppConfig struct {
 	LogLevel      string
 	PlatformDBURL string
 	NatsURL       string
-	// NATS bus identity (EXC-324). NatsUser/NatsPassword are this service's
-	// own credential; the callout fields let it answer the NATS server's
-	// auth_callout requests for every other principal.
-	NatsUser              string
-	NatsPassword          string
-	NatsGraphQLPassword   string
-	NatsCDCStream         string
-	NatsCalloutAccount    string
-	NatsCalloutUser       string
-	NatsCalloutPassword   string
-	NatsCalloutIssuerSeed string
-	CORSOrigins           []string
-	WatcherChartPath      string
+	// NATS bus identity (EXC-324): this service's own credential.
+	NatsUser         string
+	NatsPassword     string
+	NatsCDCStream    string
+	CORSOrigins      []string
+	WatcherChartPath string
 	// WatcherImage is the pinned reference every tenant watcher runs,
 	// e.g. excalibase/excalibase-watcher-go:1.0.0@sha256:… (EXC-346).
 	WatcherImage string
@@ -337,6 +331,8 @@ type AppConfig struct {
 	// operation alert the platform admins (EXCALIBASE_SELFHEAL_ALERT_AFTER,
 	// default 5, EXC-873).
 	SelfHealAlertAfter int
+	// Trust is the limited trial's settings (EXC-899).
+	Trust TrustConfig
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -482,16 +478,40 @@ func (c AppConfig) Validate() error {
 	if err := c.validateSites(); err != nil {
 		return err
 	}
+	if err := c.validateTrust(); err != nil {
+		return err
+	}
 	if err := c.validateSiteGit(); err != nil {
 		return err
 	}
+	if err := c.validateScheduler(); err != nil {
+		return err
+	}
 	return c.validateAppRoute()
+}
+
+// validateScheduler refuses a claim lease that can expire while a healthy
+// task is still running or being recorded: the sweep would take the row back
+// and run it a second time. The floor is the longest one task can take, a
+// sweep deadline, an invocation and the write that records it.
+func (c AppConfig) validateScheduler() error {
+	if !c.SchedulerEnabled {
+		return nil
+	}
+	floor := c.SchedulerProjectTimeout + scheduler.InvokeTimeout + scheduler.OutcomeTimeout
+	if c.SchedulerClaimLease <= floor {
+		return fmt.Errorf(
+			"EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS %v must exceed %v: the project timeout, the invocation timeout and the outcome write",
+			c.SchedulerClaimLease, floor)
+	}
+	return nil
 }
 
 func Load() AppConfig {
 	cfg := load()
 	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
 	cfg.SelfHealAlertAfter = envInt("EXCALIBASE_SELFHEAL_ALERT_AFTER", 5)
+	cfg.Trust = loadTrust()
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"
@@ -514,12 +534,7 @@ func load() AppConfig {
 		NatsURL:                  envOr("NATS_URL", ""),
 		NatsUser:                 envOr("NATS_USER", natsauth.PrincipalProvisioning),
 		NatsPassword:             os.Getenv("NATS_PASSWORD"),
-		NatsGraphQLPassword:      os.Getenv("NATS_GRAPHQL_PASSWORD"),
 		NatsCDCStream:            envOr("NATS_CDC_STREAM", "CDC"),
-		NatsCalloutAccount:       envOr("NATS_AUTH_CALLOUT_ACCOUNT", "APP"),
-		NatsCalloutUser:          envOr("NATS_AUTH_CALLOUT_USER", "auth-callout"),
-		NatsCalloutPassword:      os.Getenv("NATS_AUTH_CALLOUT_PASSWORD"),
-		NatsCalloutIssuerSeed:    os.Getenv("NATS_AUTH_CALLOUT_ISSUER_SEED"),
 		RegistrationMode:         envOr("REGISTRATION_MODE", "open"),
 		PublicPort:               os.Getenv("PUBLIC_PORT"),
 		TrustedProxyCIDRs:        envTrustedProxyCIDRs("TRUSTED_PROXY_CIDRS"),

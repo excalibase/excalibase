@@ -842,7 +842,7 @@ type WatcherSpec struct {
 	Username string
 	// NatsUser/NatsPassword are the project-scoped bus credential minted by
 	// the control plane (EXC-324). Blank leaves the watcher unauthenticated,
-	// which only works on a NATS server without auth_callout.
+	// which is accepted because NATS does not check credentials.
 	NatsUser     string
 	NatsPassword string
 	// ClientCert is cdc_watcher's login; pg_hba refuses it a password.

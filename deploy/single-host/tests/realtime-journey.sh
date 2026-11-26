@@ -125,7 +125,7 @@ fi
 
 echo "== realtime: the bus is out of the tenant's reach"
 # The probes themselves work: a container on the bus reaches NATS, the tenant its own port.
-$DOCKER run --rm --network excalibase-cdc docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e nc -z -w 3 nats 4222 \
+$DOCKER run --rm --network excalibase-cdc "$(mirror_ref docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e)" nc -z -w 3 nats 4222 \
   && ok "NATS answers on the bus network" || ko "NATS does not answer on the bus network"
 $DOCKER exec "$TC" timeout 3 bash -c "</dev/tcp/127.0.0.1/5432" >/dev/null 2>&1 && ok "the tenant probe works ($TC)" || ko "the tenant probe cannot run in $TC"
 reach=

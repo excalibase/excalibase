@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 )
 
@@ -13,6 +15,10 @@ type fakeNatsCredStore struct {
 	projects   map[string]string
 	upsertErr  error
 	deletedFor []string
+}
+
+func hashMatches(store *fakeNatsCredStore, principal, password string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(store.hashes[principal]), []byte(password)) == nil
 }
 
 func newFakeNatsCredStore() *fakeNatsCredStore {
@@ -26,11 +32,6 @@ func (f *fakeNatsCredStore) UpsertNatsCredential(_ context.Context, principal, p
 	f.hashes[principal] = hash
 	f.projects[principal] = projectID
 	return nil
-}
-
-func (f *fakeNatsCredStore) LookupNatsCredentialHash(_ context.Context, principal string) (string, bool, error) {
-	hash, ok := f.hashes[principal]
-	return hash, ok, nil
 }
 
 func (f *fakeNatsCredStore) DeleteNatsCredential(_ context.Context, principal string) error {
@@ -63,8 +64,8 @@ func TestMintTenantWatcherStoresOnlyTheHash(t *testing.T) {
 	if store.projects[principal] != "proj-a" {
 		t.Errorf("project_id = %q, want proj-a", store.projects[principal])
 	}
-	if err := natsauth.Authenticate(context.Background(), store, principal, password); err != nil {
-		t.Errorf("minted credential does not authenticate: %v", err)
+	if !hashMatches(store, principal, password) {
+		t.Error("minted credential does not match its stored hash")
 	}
 }
 
@@ -79,11 +80,11 @@ func TestMintTenantWatcherRotates(t *testing.T) {
 	if first == second {
 		t.Error("re-provision reused the old password")
 	}
-	if natsauth.Authenticate(ctx, store, principal, first) == nil {
+	if hashMatches(store, principal, first) {
 		t.Error("old password still authenticates after rotation")
 	}
-	if err := natsauth.Authenticate(ctx, store, principal, second); err != nil {
-		t.Errorf("new password rejected: %v", err)
+	if !hashMatches(store, principal, second) {
+		t.Error("new password does not match the stored hash")
 	}
 }
 

@@ -38,3 +38,6 @@ func (s *Semaphore) Release() {
 		panic("scheduler: Semaphore.Release without a matching Acquire")
 	}
 }
+
+// InUse is how many slots are taken right now.
+func (s *Semaphore) InUse() int { return len(s.slots) }
