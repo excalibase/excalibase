@@ -510,6 +510,8 @@ func TestReconcileProjectRoles_AnyRepairScriptFailureIsAlerted(t *testing.T) {
 		"refusal":      {"exit code 3: NOTICE: excalibase-repair-stage:refusal ERROR: boom", true},
 		"registration": {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:registration ERROR: platform role(s) x were created outside the platform", false},
 		"deadline":     {"context deadline exceeded", true},
+		"no marker":    {"exit code 3: ERROR: 2BP01: dependent privileges exist", true},
+		"password":     {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:password ERROR: boom", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newRotationHarness(t)
@@ -522,8 +524,8 @@ func TestReconcileProjectRoles_AnyRepairScriptFailureIsAlerted(t *testing.T) {
 			}
 			h.kube.ExecAnswerStdin = func(string) (string, error) { return "", errors.New(tc.text) }
 			h.svc.ReconcileProjectRoles(context.Background())
-			if got := len(alerts.GetActiveAlertsForProject(rotProject)) == 1; got != tc.alert {
-				t.Fatalf("alert raised = %v, want %v", got, tc.alert)
+			if raised := len(alerts.GetActiveAlertsForProject(rotProject)) == 1; raised != tc.alert {
+				t.Fatalf("alert raised = %v, want %v", raised, tc.alert)
 			}
 		})
 	}
@@ -541,6 +543,15 @@ func TestPlatformSchemaScripts_EveryRevokeCascadesAndEachScriptNamesItself(t *te
 		}
 		if !strings.Contains(script, "excalibase-repair-stage:"+name) {
 			t.Errorf("the %s script does not name itself", name)
+		}
+	}
+}
+
+// The session pins what an owner could otherwise push with ALTER DATABASE.
+func TestPinnedSessionOptions_PinTheMessageLevelAndPlpgsqlNameResolution(t *testing.T) {
+	for _, want := range []string{"client_min_messages=notice", "plpgsql.variable_conflict=error"} {
+		if !slices.Contains(pinnedSessionOptions, want) {
+			t.Errorf("%s is not pinned", want)
 		}
 	}
 }

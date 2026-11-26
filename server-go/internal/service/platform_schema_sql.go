@@ -81,14 +81,16 @@ BEGIN
       PERFORM pg_temp.excalibase_revoke('ALL', item.kind, item.ident, item.roles);
     END LOOP;
     FOR item IN
-      SELECT d.defaclrole::regrole::text AS owner_role,
+      SELECT d.defaclrole::regrole::text AS owner_role, d.defaclnamespace = 0 AS schemaless,
              CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' ELSE 'TYPES' END AS kind,
              string_agg(quote_ident(r.rolname), ', ') AS roles
-      FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN pg_roles r ON r.oid = a.grantee
-      WHERE d.defaclnamespace = schema_oid AND d.defaclobjtype IN ('r', 'S', 'f', 'T') AND {{CUSTOMER_R}}
-      GROUP BY d.defaclrole, d.defaclobjtype
+      FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN pg_roles r ON r.oid = a.grantee JOIN pg_roles dr ON dr.oid = d.defaclrole
+      WHERE (d.defaclnamespace = schema_oid OR (d.defaclnamespace = 0 AND NOT {{CUSTOMER_D}}))
+        AND d.defaclobjtype IN ('r', 'S', 'f', 'T') AND {{CUSTOMER_R}}
+      GROUP BY d.defaclrole, d.defaclnamespace, d.defaclobjtype
     LOOP
-      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %I REVOKE ALL ON %s FROM %s CASCADE', item.owner_role, entry.schema_name, item.kind, item.roles);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %s %s REVOKE ALL ON %s FROM %s CASCADE', item.owner_role,
+        CASE WHEN item.schemaless THEN '' ELSE format('IN SCHEMA %I', entry.schema_name) END, item.kind, item.roles);
     END LOOP;
     EXECUTE format('REVOKE ALL ON SCHEMA %I FROM PUBLIC CASCADE', entry.schema_name);
     EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM PUBLIC CASCADE', entry.schema_name);
@@ -222,7 +224,9 @@ const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
       OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND NOT {{CUSTOMER_R}} AND c.oid IN {{TAINTED_TABLES}})
       OR EXISTS (SELECT 1 FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN pg_roles r ON r.oid = a.grantee
-                 WHERE d.defaclnamespace = to_regnamespace(v.schema_name) AND {{CUSTOMER_R}})
+                 JOIN pg_roles dr ON dr.oid = d.defaclrole
+                 WHERE (d.defaclnamespace = to_regnamespace(v.schema_name) OR (d.defaclnamespace = 0 AND NOT {{CUSTOMER_D}}))
+                   AND d.defaclobjtype IN ('r', 'S', 'f', 'T') AND {{CUSTOMER_R}})
       OR EXISTS (SELECT 1 FROM pg_type t CROSS JOIN LATERAL aclexplode(t.typacl) a JOIN pg_roles r ON r.oid = a.grantee
                  WHERE t.typnamespace = to_regnamespace(v.schema_name) AND t.typcategory <> 'A' AND {{CUSTOMER_R}})
     )

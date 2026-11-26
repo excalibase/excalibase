@@ -453,3 +453,43 @@ func TestPlatformSchemas_TypeAndDomainGrantsToACustomerAreRevoked(t *testing.T) 
 		t.Fatal("drift left behind")
 	}
 }
+
+// An owner who silences notices for the database cannot hide which repair
+// script failed: the session pins client_min_messages, so the error still names
+// the last script that ran.
+func TestPlatformSchemas_AnOwnersMessageLevelDoesNotHideTheFailingScript(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	mustExec(t, c.owner(t), `ALTER DATABASE app SET client_min_messages = 'error'`)
+	mustExec(t, c.owner(t), `ALTER ROLE `+customerOwner+` SET client_min_messages = 'error'`)
+	mustExec(t, c.admin, `CREATE TABLE auth.note (id int)`)
+	mustExec(t, c.admin, `ALTER TABLE auth.note OWNER TO excalibase_app`)
+	err := c.registerWith(t, "")
+	if err == nil || !strings.Contains(err.Error(), repairStageMarker+"refusal") {
+		t.Fatalf("the failing script is not named in the error: %v", err)
+	}
+}
+
+// A default privilege with no schema, for a platform role, would make every new
+// platform table readable to a customer role; it is seen and cleared.
+func TestPlatformSchemas_SchemalessDefaultPrivilegesForACustomerAreClearedAndSeen(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	mustExec(t, c.admin, `ALTER DEFAULT PRIVILEGES FOR ROLE auth_admin GRANT SELECT ON TABLES TO `+customerOwner)
+	mustExec(t, c.admin, `ALTER DEFAULT PRIVILEGES FOR ROLE cdc_watcher GRANT SELECT ON TABLES TO excalibase_app`)
+	if !c.probe(t) {
+		t.Fatal("the probe did not see a schemaless default privilege for a customer")
+	}
+	c.register(t)
+	if c.probe(t) {
+		t.Fatal("the schemaless default privileges survived")
+	}
+	mustExec(t, c.authAdmin, `CREATE TABLE auth.sessions (id int)`)
+	if scanBool(t, c.admin, `SELECT has_table_privilege($1, 'auth.sessions', 'SELECT')`, customerOwner) {
+		t.Fatal("a table created after the repair is readable by the owner")
+	}
+	if !scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_default_acl d, aclexplode(d.defaclacl) a
+		WHERE d.defaclnamespace = 'auth'::regnamespace AND a.grantee = 'auth_admin'::regrole)`) {
+		t.Fatal("the platform's own default privilege in auth was cleared")
+	}
+}

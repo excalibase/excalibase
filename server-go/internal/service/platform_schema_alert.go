@@ -32,8 +32,8 @@ func (s *ProvisioningService) SetSchemaAlerts(alerts *AlertingService) { s.schem
 // schemaLeftError marks a failed reconcile as a schema left for an operator
 // when its text carries the refusal's marker; as a repair cut off when a
 // statement or lock timeout, or the reconcile's deadline, stopped it; and as a
-// failed repair when the last script to announce itself was one of the repair's
-// own. Any other error is returned as it is.
+// failed repair unless the last script to announce itself provably held no
+// repair work. It fails closed: an error with no script named alerts.
 func schemaLeftError(err error) error {
 	switch {
 	case err == nil || errors.Is(err, errPlatformSchemaLeft) || errors.Is(err, errPlatformRepairCutOff) || errors.Is(err, errPlatformRepairFailed):
@@ -56,18 +56,20 @@ func isTimeoutError(text string) bool { return timeoutError.MatchString(text) }
 
 var repairStage = regexp.MustCompile(regexp.QuoteMeta(repairStageMarker) + `(\w+)`)
 
-// failedInRepairScript is true when the last script that printed its name
-// before the failure was the lockdown, the quarantine or the refusal.
+// failedInRepairScript is true unless the last script that printed its name
+// before the failure is one that cannot hold repair work: the password repair
+// or the registration SQL, both after the lockdown and before the quarantine. A
+// failure with no name at all is true too: the repair may not have run.
 func failedInRepairScript(text string) bool {
 	stages := repairStage.FindAllStringSubmatch(text, -1)
 	if len(stages) == 0 {
-		return false
-	}
-	switch stages[len(stages)-1][1] {
-	case "lockdown", "quarantine", "refusal":
 		return true
 	}
-	return false
+	switch stages[len(stages)-1][1] {
+	case "password", "registration":
+		return false
+	}
+	return true
 }
 
 // trackSchemaAlert opens the alert while left is true and resolves it when not.

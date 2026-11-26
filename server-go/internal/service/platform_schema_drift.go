@@ -77,6 +77,7 @@ func platformSchemaFragments() *strings.Replacer {
 		"{{SERVICE_ROLES}}", serviceRolesArray(),
 		"{{CUSTOMER_R}}", customerRolePredicate("r"),
 		"{{CUSTOMER_O}}", customerRolePredicate("o"),
+		"{{CUSTOMER_D}}", customerRolePredicate("dr"),
 		"{{FOREIGN_PROC}}", foreignRoutine("p", "proowner", "pronamespace"),
 		"{{FOREIGN_OP}}", foreignRoutine("op", "oprowner", "oprnamespace"),
 		"{{TAINTED}}", excalibaseSchemaTaintedCondition,
