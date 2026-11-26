@@ -477,6 +477,7 @@ func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicat
 		realtimeIdentitySQL(publicationName) +
 		pgroles.CustomerRoleSQL(spec.adminUsername) +
 		pgroles.OwnerAccessSQL(spec.adminUsername) +
+		platformSchemaRepairSQL(spec.adminUsername) +
 		readerSQL(spec.adminUsername, verifiers.reader) +
 		runtimeSQL(spec.adminUsername, verifiers.runtime)
 	if spec.resetPasswords {

@@ -108,7 +108,21 @@ func (s *ProvisioningService) rolesPending(ctx context.Context, inst *domain.Dat
 	if unfiled, err := s.missingRuntimeLogin(ctx, inst.ProjectID); err != nil || unfiled {
 		return unfiled, err
 	}
-	return appReachesAuth(ctx, s.roleSQLExecer(inst.Namespace, inst.ProjectID+primaryPodSuffix), inst.DatabaseName)
+	exec := s.roleSQLExecer(inst.Namespace, inst.ProjectID+primaryPodSuffix)
+	if reaches, err := appReachesAuth(ctx, exec, inst.DatabaseName); err != nil || reaches {
+		return reaches, err
+	}
+	return s.platformDriftPending(ctx, exec, inst)
+}
+
+// platformDriftPending reports a platform schema a customer role holds or
+// owns, or a password changed in SQL (EXC-821).
+func (s *ProvisioningService) platformDriftPending(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance) (bool, error) {
+	if drifted, err := platformSchemasDrifted(ctx, exec, inst.DatabaseName, inst.Username); err != nil || drifted {
+		return drifted, err
+	}
+	passwords, err := s.driftedPasswords(ctx, exec, inst)
+	return len(passwords) > 0, err
 }
 
 // missingSchedulerLogin reports whether vault holds no excalibase_scheduler
@@ -166,6 +180,11 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	}
 	roleSQL += mintedSQL
 	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
+	driftSQL, err := s.passwordRepairFor(ctx, exec, inst)
+	if err != nil {
+		return err
+	}
+	roleSQL += driftSQL
 	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
 		return fmt.Errorf("re-run registration SQL: %w", err)
 	}
@@ -174,6 +193,12 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	if reaches, err := appReachesAuth(ctx, exec, spec.databaseName); err != nil || reaches {
 		if err == nil {
 			err = errors.New("excalibase_app still reaches auth after the registration SQL")
+		}
+		return err
+	}
+	if still, err := platformSchemasDrifted(ctx, exec, spec.databaseName, spec.adminUsername); err != nil || still {
+		if err == nil {
+			err = errors.New("a platform schema still holds customer changes after the registration SQL")
 		}
 		return err
 	}

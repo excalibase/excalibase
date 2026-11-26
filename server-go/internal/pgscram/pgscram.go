@@ -8,8 +8,11 @@ import (
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/xdg-go/stringprep"
 )
@@ -69,4 +72,44 @@ func hmacSHA256(key []byte, message string) []byte {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(message))
 	return mac.Sum(nil)
+}
+
+// Matches reports whether stored, a verifier in Postgres' format, was made
+// from password. Anything that is not such a verifier matches nothing.
+func Matches(stored, password string) bool {
+	rest, found := strings.CutPrefix(stored, "SCRAM-SHA-256$")
+	if !found {
+		return false
+	}
+	params, keys, found := strings.Cut(rest, "$")
+	if !found {
+		return false
+	}
+	iterations, saltText, found := strings.Cut(params, ":")
+	if !found {
+		return false
+	}
+	count, err := strconv.Atoi(iterations)
+	if err != nil || count < 1 {
+		return false
+	}
+	storedKey, _, found := strings.Cut(keys, ":")
+	if !found {
+		return false
+	}
+	salt, err := base64.StdEncoding.DecodeString(saltText)
+	if err != nil {
+		return false
+	}
+	want, err := base64.StdEncoding.DecodeString(storedKey)
+	if err != nil {
+		return false
+	}
+	salted, err := pbkdf2.Key(sha256.New, prepare(password), salt, count, sha256.Size)
+	if err != nil {
+		return false
+	}
+	clientKey := hmacSHA256(salted, "Client Key")
+	got := sha256.Sum256(clientKey)
+	return subtle.ConstantTimeCompare(got[:], want) == 1
 }

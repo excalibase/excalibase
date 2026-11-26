@@ -85,3 +85,26 @@ func TestVerifierKeepsAPasswordSASLprepEmpties(t *testing.T) {
 		t.Fatal("a password of invisible characters became the empty password")
 	}
 }
+
+// Matches tells whether a stored verifier belongs to a password, which is how
+// the reconcile notices a role whose password was changed in SQL (EXC-821).
+func TestMatchesTellsTheRightPasswordFromAnother(t *testing.T) {
+	verifier, err := VerifierWithSalt("right-password", fixedSalt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !Matches(verifier, "right-password") {
+		t.Error("the password the verifier was made from did not match")
+	}
+	if Matches(verifier, "other-password") {
+		t.Error("another password matched")
+	}
+}
+
+func TestMatchesRefusesWhatIsNotAScramVerifier(t *testing.T) {
+	for _, stored := range []string{"", "md5abc", "SCRAM-SHA-256$x:y$z", "SCRAM-SHA-256$4096:@@@$a:b", "SCRAM-SHA-256$0:AAEC$a:b"} {
+		if Matches(stored, "right-password") {
+			t.Errorf("%q matched", stored)
+		}
+	}
+}

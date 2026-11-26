@@ -1281,6 +1281,42 @@ so both are terminated when they block the rebuild. The lockdown also takes
 USAGE on the excalibase schema's own types from PUBLIC, so a customer cannot
 type an object elsewhere on one and make it a new dependent.
 
+## 6.10. Platform-managed schemas and database passwords (EXC-821)
+
+**Rotate a database password only through Studio** (or `POST .../credentials/rotate`,
+section 6.6). That path records the new password in the vault first, applies it,
+proves it, and only then promotes it. A password changed any other way is not
+what the platform holds.
+
+**Schemas.** `excalibase`, `auth` and `excalibase_cdc` belong to the platform.
+Customer SQL (`excalibase_app`) and the owner's own login cannot create in them,
+rename, drop or take ownership of them, or grant themselves anything there;
+integration tests pin each statement (`platform_schema_drift_integration_test.go`).
+`excalibase` is the superuser's, and registration rebuilds it if anything in it
+is not (section 6.9). `auth` belongs to `auth_admin`'s service and
+`excalibase_cdc` to `cdc_watcher`'s; the schema owner is the superuser.
+The `nosql` schema is not platform-managed: the removed NoSQL surface created it
+as `excalibase_app`, so it is the customer's.
+
+**Drift is repaired.** Every reconcile pass (10 minutes, leading replica, ACTIVE
+Postgres projects) probes each project. A schema owned by a customer role, a
+customer role holding CREATE or USAGE on `auth` or `excalibase_cdc`, an object or
+function in them owned by a customer role, or a trigger there that runs a customer
+role's function counts as drift. The registration SQL then returns ownership to
+the superuser, revokes the customer roles' privileges, moves their objects to the
+schema's service role and drops those triggers.
+
+**What is not prevented.** Postgres lets any role change its own password with
+`ALTER ROLE ... PASSWORD`, and has no event trigger for it, so customer SQL can do
+it for `excalibase_app`, and the owner for its own login. The platform does not stop
+this. It finds it: each pass compares the verifier Postgres stores for the owner,
+`excalibase_app`, `excalibase_reader` and `excalibase_runtime` with the password the
+vault holds, and sets the database back to the vault's password. A role with a
+rotation in flight (a `pending/<role>` entry) is skipped. So a password changed in
+SQL stops working within one reconcile interval, and until then the vault's copy
+and the database disagree, so a platform call made as that role can fail. Projects
+that are paused, busy or failing at a pass are repaired at a later one.
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:

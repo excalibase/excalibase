@@ -33,10 +33,10 @@ func (h *rotationHarness) seedPreSchedulerCluster(t *testing.T) {
 	h.kube.CRDs[rotNamespace+"/"+rotProject+postgresClusterSuffix] = cluster
 	// The database answers the auth probe "f" (EXC-628) and runs all else.
 	h.kube.ExecAnswer = func(cmd []string) (string, error) {
-		if strings.Contains(strings.Join(cmd, " "), "has_schema_privilege") {
+		if strings.Contains(strings.Join(cmd, " "), authProbeMarker) {
 			return "f\n", nil
 		}
-		return "ALTER ROLE", nil
+		return otherProbeAnswer(cmd, "ALTER ROLE"), nil
 	}
 }
 
@@ -61,12 +61,15 @@ func TestReconcileProjectRoles_BringsAnOlderProjectUpToDate(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 	// The reconcile probes the server version, runs the registration SQL, then
-	// checks excalibase_app reaches nothing in auth.
-	if len(h.kube.ExecCommands) != 3 || !strings.Contains(h.kube.ExecCommands[2], "has_schema_privilege") {
-		t.Fatalf("exec calls = %d, want a version probe, the registration SQL and the auth probe", len(h.kube.ExecCommands))
+	// checks excalibase_app reaches nothing in auth and the platform schemas hold
+	// nothing of a customer's (EXC-821).
+	if len(h.kube.ExecCommands) != 5 || !strings.Contains(h.kube.ExecCommands[0], "FROM pg_authid") ||
+		!strings.Contains(h.kube.ExecCommands[3], authProbeMarker) ||
+		!strings.Contains(h.kube.ExecCommands[4], "to_regnamespace('excalibase') IS NOT NULL") {
+		t.Fatalf("exec calls = %d, want the verifier probe, a version probe, the registration SQL, the auth probe and the schema probe", len(h.kube.ExecCommands))
 	}
-	if !strings.Contains(h.kube.ExecCommands[0], "server_version_num") {
-		t.Fatalf("first exec is not the version probe: %q", h.kube.ExecCommands[0])
+	if !strings.Contains(h.kube.ExecCommands[1], "server_version_num") {
+		t.Fatalf("second exec is not the version probe: %q", h.kube.ExecCommands[1])
 	}
 	if len(h.kube.ExecStdin) != 1 {
 		t.Fatalf("scripts on stdin = %d, want the registration SQL", len(h.kube.ExecStdin))
@@ -103,8 +106,9 @@ func TestReconcileProjectRoles_LeavesAReconciledProjectAlone(t *testing.T) {
 	if report.Reconciled != 0 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(h.kube.ExecCommands) != execsAfterFirst+1 || !strings.Contains(h.kube.ExecCommands[execsAfterFirst], "has_schema_privilege") {
-		t.Fatalf("a second pass ran more than the auth probe: %q", h.kube.ExecCommands[execsAfterFirst:])
+	if len(h.kube.ExecCommands) != execsAfterFirst+3 || !strings.Contains(h.kube.ExecCommands[execsAfterFirst], authProbeMarker) ||
+		!strings.Contains(h.kube.ExecCommands[execsAfterFirst+1], "to_regnamespace('excalibase') IS NOT NULL") {
+		t.Fatalf("a second pass ran more than the auth and schema probes: %d commands", len(h.kube.ExecCommands)-execsAfterFirst)
 	}
 	if got := h.vault.data[rotSchedulerCurrent]["password"]; got != filed {
 		t.Fatal("a second pass minted a new scheduler password")
@@ -129,9 +133,9 @@ func TestReconcileProjectRoles_RevokesAuthFromAProjectWhoseAppRoleStillReadsIt(t
 	if report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(h.kube.ExecCommands) != 4 || !strings.Contains(h.kube.ExecCommands[0], "has_schema_privilege") ||
-		!strings.Contains(h.kube.ExecCommands[3], "has_schema_privilege") {
-		t.Fatalf("exec calls = %q, want the auth probe, the version probe, the registration SQL and the probe again", h.kube.ExecCommands)
+	if len(h.kube.ExecCommands) != 6 || !strings.Contains(h.kube.ExecCommands[0], authProbeMarker) ||
+		!strings.Contains(h.kube.ExecCommands[4], authProbeMarker) {
+		t.Fatalf("exec calls = %d, want the auth probe, the verifier probe, the version probe, the registration SQL, the auth probe again and the schema probe", len(h.kube.ExecCommands))
 	}
 	if len(h.kube.ExecStdin) != 1 || !strings.Contains(h.kube.ExecStdin[0], `REVOKE ALL ON SCHEMA auth FROM "excalibase_app", PUBLIC`) {
 		t.Fatal("the registration SQL that ran does not revoke auth")
@@ -155,12 +159,28 @@ func TestReconcileProjectRoles_ReportsAuthAccessTheSQLDidNotRemove(t *testing.T)
 	}
 }
 
+// authProbeMarker is the text only the auth probe holds.
+const authProbeMarker = "has_schema_privilege('excalibase_app', 'auth'"
+
+// otherProbeAnswer answers the platform-schema drift probe "f" and the stored
+// verifier probe with no rows (EXC-821); any other command gets fallback.
+func otherProbeAnswer(cmd []string, fallback string) string {
+	text := strings.Join(cmd, " ")
+	switch {
+	case strings.Contains(text, "to_regnamespace('excalibase') IS NOT NULL"):
+		return "f\n"
+	case strings.Contains(text, "FROM pg_authid"):
+		return ""
+	}
+	return fallback
+}
+
 // authProbeAnswers answers the auth probe with each answer in turn and every
 // other command with nothing.
 func authProbeAnswers(answers ...string) func(cmd []string) (string, error) {
 	return func(cmd []string) (string, error) {
-		if !strings.Contains(strings.Join(cmd, " "), "has_schema_privilege") {
-			return "", nil
+		if !strings.Contains(strings.Join(cmd, " "), authProbeMarker) {
+			return otherProbeAnswer(cmd, ""), nil
 		}
 		if len(answers) == 0 {
 			return "", errors.New("no probe answer left")
@@ -305,11 +325,11 @@ func TestReconcileProjectRoles_SingleHostFilesAPasswordLogin(t *testing.T) {
 	if report := h.svc.ReconcileProjectRoles(context.Background()); report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(docker.execs) != 3 || !strings.Contains(docker.stdins[1], "excalibase_scheduler_role") {
+	if len(docker.execs) != 5 || !strings.Contains(docker.stdins[2], "excalibase_scheduler_role") {
 		t.Fatalf("container execs = %d", len(docker.execs))
 	}
-	if !strings.Contains(strings.Join(docker.execs[0], " "), "server_version_num") {
-		t.Fatalf("first container exec is not the version probe: %v", docker.execs[0])
+	if !strings.Contains(strings.Join(docker.execs[1], " "), "server_version_num") {
+		t.Fatalf("second container exec is not the version probe: %v", docker.execs[1])
 	}
 	record := h.vault.data[rotSchedulerCurrent]
 	if record["username"] != roleScheduler || record["password"] == "" {
