@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -113,6 +114,7 @@ type harness struct {
 func newHarness(t *testing.T, c destructiveCase, on ...features.Feature) *harness {
 	t.Helper()
 	routes := newFakeRoutes()
+	routes.on(http.MethodGet, projectsA+"/access/", 200, rightsOf(true, true))
 	c.setup(routes)
 	audit := &recordingAudit{}
 	settings := testSettings
@@ -488,5 +490,48 @@ func TestEveryGuardedToolStaysAWriteTool(t *testing.T) {
 				t.Errorf("%s is offered on a read-only connection", c.tool)
 			}
 		}
+	}
+}
+
+func rightsOf(canDelete, canAdminister bool) string {
+	return fmt.Sprintf(`{"role":"x","canDelete":%t,"canAdminister":%t}`, canDelete, canAdminister)
+}
+
+// EXC-824: a caller without the right to delete is refused on the first call, before any token is issued.
+func TestACallerWithoutDeleteRightsIsRefusedOnTheFirstCall(t *testing.T) {
+	for _, c := range destructiveCases() {
+		t.Run(c.tool, func(t *testing.T) {
+			h := newHarness(t, c, features.MCPConfirm)
+			h.routes.on(http.MethodGet, projectsA+"/access/", 200, rightsOf(false, false))
+			res := callTool(t, h.connect(writeCaller()), c.tool, c.args)
+			if !res.IsError || strings.Contains(resultText(res), "confirmationToken") {
+				t.Fatalf("a caller who cannot delete was not refused: %s", resultText(res))
+			}
+			if h.anyDelete() {
+				t.Fatal("something was deleted")
+			}
+		})
+	}
+}
+
+func TestOnlyTheS3KeyToolNeedsTheAdminRung(t *testing.T) {
+	for _, c := range destructiveCases() {
+		t.Run(c.tool, func(t *testing.T) {
+			h := newHarness(t, c, features.MCPConfirm)
+			h.routes.on(http.MethodGet, projectsA+"/access/", 200, rightsOf(true, false))
+			res := callTool(t, h.connect(writeCaller()), c.tool, c.args)
+			if refused := res.IsError; refused != (c.tool == "revoke_s3_key") {
+				t.Fatalf("a developer: refused = %v: %s", refused, resultText(res))
+			}
+		})
+	}
+}
+
+func TestAnUnreadableAccessAnswerRefusesTheCall(t *testing.T) {
+	c := destructiveCases()[0]
+	h := newHarness(t, c, features.MCPConfirm)
+	h.routes.on(http.MethodGet, projectsA+"/access/", 404, `{"error":"project not found"}`)
+	if res := callTool(t, h.connect(writeCaller()), c.tool, c.args); !res.IsError {
+		t.Fatalf("asked for confirmation without knowing the caller's rights: %s", resultText(res))
 	}
 }
