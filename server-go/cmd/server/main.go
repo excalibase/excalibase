@@ -651,16 +651,20 @@ const (
 // wireMetricsHistory keeps alerts in the platform DB and, on Kubernetes or a
 // single host with hostmetrics on, samples every running database, and with
 // requestmetrics on every graphql and auth pod, into it once a minute on the
-// leading replica.
-func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient, metrics *service.MetricsService, alerts *service.AlertingService, requests *service.RequestMetricsService, mail email.Sender) {
+// leading replica. The returned stop ends the sampler; with no loop it does nothing.
+func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient, metrics *service.MetricsService, alerts *service.AlertingService, requests *service.RequestMetricsService, mail email.Sender) (stop func()) {
 	table, ok := sqlStore.(metricsTable)
 	if !ok {
-		return
+		return func() {
+			// no sampler was started, so there is nothing to stop
+		}
 	}
 	alerts.SetStore(table)
 	sampler := requestSampling(cfg, requests)
 	if !metricsLoopRuns(cfg, k8sClient, sampler) {
-		return
+		return func() {
+			// no sampler was started, so there is nothing to stop
+		}
 	}
 	metrics.SetHistory(table, alerts)
 	notifier := adminAlertNotifier(cfg, sqlStore, mail, alerts)
@@ -688,7 +692,7 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 	if cfg.IsCloud() {
 		lock = standingLock(sqlStore, metricsSampleLockID)
 	}
-	metrics.StartSampler(context.Background(), service.NewLeadership(lock), metricsSampleInterval)
+	return metrics.StartSampler(context.Background(), service.NewLeadership(lock), metricsSampleInterval)
 }
 
 // metricsLoopRuns is Kubernetes, or a single host with host monitoring or
