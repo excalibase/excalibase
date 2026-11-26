@@ -1459,6 +1459,35 @@ project and the background app start refuse a project created by a suspended
 member, so an org in good standing cannot resume such a project until that
 member is unsuspended or the project is recreated.
 
+## Limited trial until verified (EXC-899, in progress)
+
+Off until `FEATURE_LIMITEDTRIAL=true` (Helm `env.FEATURE_LIMITEDTRIAL`, or `.env` on a single host; same on both). With it off every account behaves as it does today and nothing is read.
+
+The model: a new account is **limited** and becomes **full** once verified. Verification will be the linked GitHub account's age and activity; a card may become a second route once billing exists. What is shipped so far is the foundation only:
+
+- A `user_trust` table (one decision per account: state, method, a reason code, time, rule version) and an append-only `trust_audit` table. No GitHub data is stored, only the result.
+- One resolver answers "is this owner limited or full". The owner is the org's immutable `OwnerID`, so a limited member of a full owner's org runs at full. With the flag on, an owner with no decision, an unknown state or any read error is **limited** (fail closed); with the flag off it is full and the tables are not read.
+- Because a missing decision means limited, switching the flag on before the grandfather backfill exists would limit every existing account. The backfill, the verify flow, the banner and the edge limits come in later changes; do not turn the flag on in prod before then.
+
+Settings (all read at boot; a mistyped value stops the boot instead of falling back):
+
+| Variable | Default | What it does |
+|---|---|---|
+| `TRUST_GH_MIN_AGE_DAYS` | 90 | How old the linked GitHub account must be |
+| `TRUST_GH_MIN_PUBLIC_EVENTS` | 5 | Public events needed inside the activity window |
+| `TRUST_GH_ACTIVITY_WINDOW_DAYS` | 90 | The window those events are counted in |
+| `TRUST_GH_MIN_REPOS` | 3 | Alternative to events: this many public repositories... |
+| `TRUST_GH_REPO_MIN_AGE_DAYS` | 30 | ...one of which is at least this old |
+| `TRUST_GH_RECHECK_DAYS` | 0 | Re-check a verified account this often; 0 verifies once |
+| `TRUST_VERIFY_RETRY_MINUTES` | 10 | Wait between two verify attempts of one account |
+| `TRUST_GRANDFATHER_BEFORE` | 2026-11-01 | Accounts created before this date are made full by the backfill; later ones must verify |
+| `TRUST_CLAIM_COOLDOWN_DAYS` | 30 | How long a released GitHub claim stays unusable by another account |
+| `EDGE_LIMITED_MBPS` | 1 | Outbound rate at the edge for a limited account's hosts |
+| `EDGE_LIMITED_ALLOW_WS` | false | Let a limited account's hosts upgrade to WebSocket |
+| `POD_LIMITED_EGRESS_MBPS` | 1 | Cap on a limited account's app pods' own outbound traffic |
+
+The last three, the repository thresholds and the claim cooldown are read and checked now but used by later changes.
+
 ## Self-healing failed operations
 
 Off until `FEATURE_SELFHEAL=true` (Helm `env.FEATURE_SELFHEAL`, or `.env` on a single host; same on both). On, a failed operation retries itself and staff are told when it cannot:
