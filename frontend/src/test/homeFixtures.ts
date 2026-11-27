@@ -27,6 +27,8 @@ export interface Backend {
   features?: Record<string, boolean>;
   // The answer of GET /orgs/{id}/credits/; absent answers 500.
   credits?: unknown;
+  // The answer of GET /orgs/{id}/plan-budget; absent answers 500.
+  budget?: unknown;
   config?: Record<string, unknown>;
   failApps?: string[];
   failAllowed?: string[];
@@ -62,6 +64,7 @@ function answer(backend: Backend, url: string) {
   if (url === '/orgs') return reply(ORGS);
   if (url === '/provision') return provisionReply(backend);
   if (/^\/orgs\/[^/]+\/credits\/$/.test(url)) return backend.credits ? reply(backend.credits) : fail(500, 'boom');
+  if (/^\/orgs\/[^/]+\/plan-budget$/.test(url)) return backend.budget ? reply(backend.budget) : fail(500, 'boom');
   if (url === '/tiers') return reply(backend.tiers ?? []);
   if (url === '/auth/tokens') return reply(backend.tokens ?? []);
   const scoped = /^\/projects\/([^/]+)\/(.*?)\/?$/.exec(url);
@@ -81,5 +84,21 @@ export function creditOverview(extra: object = {}) {
     orgId: 'org-1', balanceMicros: 300_000_000, lots: [{ id: 1, kind: 'grant_trial', originalMicros: 300_000_000, remainingMicros: 300_000_000, expiresAt: '2027-02-25T00:00:00Z', createdAt: '2026-11-27T00:00:00Z' }],
     entries: [{ id: 1, kind: 'grant_trial', amountMicros: 300_000_000, actor: 'system', reason: 'sign-up credit', createdAt: '2026-11-27T00:00:00Z' }],
     nextExpiry: '2027-02-25T00:00:00Z', trial: { state: 'granted', amountMicros: 300_000_000, days: 90 }, billedIn: 'UTC', termsVersion: 'v1', termsUrl: 'https://example.test/terms', ...extra,
+  };
+}
+
+const GIB = 1024 ** 3;
+
+export function planBudget(extra: object = {}) {
+  return {
+    enabled: true, plan: 'FREE',
+    budget: { cpuMilli: 2000, memoryBytes: 4 * GIB, diskBytes: 20 * GIB, services: 6 },
+    used: { cpuMilli: 500, memoryBytes: GIB, diskBytes: 5 * GIB, services: 2 },
+    left: { cpuMilli: 1500, memoryBytes: 3 * GIB, diskBytes: 15 * GIB, services: 4 },
+    services: [
+      { kind: 'database', name: 'shop', projectId: 'p1', size: { cpuMilli: 500, memoryBytes: GIB, diskBytes: 5 * GIB, services: 1 } },
+      { kind: 'app', name: 'web', projectId: 'p1', size: { cpuMilli: 0, memoryBytes: 0, diskBytes: 0, services: 1 } },
+    ],
+    ...extra,
   };
 }

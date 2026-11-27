@@ -120,8 +120,8 @@ func openScript(t *testing.T, answers ...answer) (*sql.DB, *script) {
 }
 
 var (
-	databaseCols = []string{"project_id", "tier", "status", "no_database", "storage_size", "cpu", "mem", "disk", "copies", "has_runtime"}
-	appCols      = []string{"doc", "deploying"}
+	databaseCols = []string{"project_id", "project_name", "tier", "status", "no_database", "storage_size", "cpu", "mem", "disk", "copies", "has_runtime"}
+	appCols      = []string{"project_id", "doc", "deploying"}
 	okLock       = answer{match: "pg_advisory_xact_lock"}
 )
 
@@ -139,7 +139,7 @@ func apps(rows ...[]driver.Value) answer {
 
 // a running one-copy database of 500m, 512 MiB and 1 GiB.
 func runningDatabase(id string) []driver.Value {
-	return []driver.Value{id, "FREE", "ACTIVE", false, "", int64(500), int64(512 << 20), int64(1 << 30), int64(1), false}
+	return []driver.Value{id, "name-of-" + id, "FREE", "ACTIVE", false, "", int64(500), int64(512 << 20), int64(1 << 30), int64(1), false}
 }
 
 var tinyPlans = config.PlanBudgetConfig{
@@ -234,7 +234,7 @@ func TestEveryStoreErrorReachesTheCaller(t *testing.T) {
 		"apps":       {okLock, tierIs("FREE"), databases(), {match: "FROM apps a", err: boom}},
 		"scan":       {okLock, tierIs("FREE"), {match: "FROM database_instances", cols: databaseCols, rows: [][]driver.Value{{"p", "FREE", "ACTIVE", "not a bool", "", int64(0), int64(0), int64(0), int64(1), false}}}},
 		"app scan":   {okLock, tierIs("FREE"), databases(), {match: "FROM apps a", cols: appCols, rows: [][]driver.Value{{[]byte(`{}`), "not a bool"}}}},
-		"unreadable": {okLock, tierIs("FREE"), databases(), apps([]driver.Value{[]byte(`not json`), false})},
+		"unreadable": {okLock, tierIs("FREE"), databases(), apps([]driver.Value{"p1", []byte(`not json`), false})},
 	}
 	for name, answers := range cases {
 		db, _ := openScript(t, answers...)
@@ -256,7 +256,7 @@ func TestEveryStoreErrorReachesTheCaller(t *testing.T) {
 }
 
 func TestADatabaseWhoseSizeWasNeverRecordedBlocksGrowthForItsOrg(t *testing.T) {
-	unrecorded := []driver.Value{"p-unread", "FREE", "ACTIVE", false, "", int64(0), int64(0), int64(0), int64(0), false}
+	unrecorded := []driver.Value{"p-unread", "name-p-unread", "FREE", "ACTIVE", false, "", int64(0), int64(0), int64(0), int64(0), false}
 	db, _ := openScript(t, okLock, tierIs("FREE"), databases(runningDatabase("p1"), unrecorded), apps())
 	err := gateOn().Admit(context.Background(), db, "org-1", grows(Size{CPUMilli: 1}))
 	if !errors.Is(err, ErrUnrecordedSize) || !strings.Contains(err.Error(), "p-unread") {
@@ -265,8 +265,8 @@ func TestADatabaseWhoseSizeWasNeverRecordedBlocksGrowthForItsOrg(t *testing.T) {
 }
 
 func TestDatabasesThatHoldNothingNeverBlockGrowth(t *testing.T) {
-	deleting := []driver.Value{"p-gone", "FREE", "DELETING", false, "", int64(0), int64(0), int64(0), int64(0), false}
-	noDatabase := []driver.Value{"p-none", "FREE", "ACTIVE", true, "", int64(0), int64(0), int64(0), int64(0), false}
+	deleting := []driver.Value{"p-gone", "name-p-gone", "FREE", "DELETING", false, "", int64(0), int64(0), int64(0), int64(0), false}
+	noDatabase := []driver.Value{"p-none", "name-p-none", "FREE", "ACTIVE", true, "", int64(0), int64(0), int64(0), int64(0), false}
 	db, _ := openScript(t, okLock, tierIs("FREE"), databases(deleting, noDatabase), apps())
 	if err := gateOn().Admit(context.Background(), db, "org-1", grows(Size{CPUMilli: 1000})); err != nil {
 		t.Fatalf("a deleting database and a project with no database hold nothing: %v", err)
@@ -274,9 +274,9 @@ func TestDatabasesThatHoldNothingNeverBlockGrowth(t *testing.T) {
 }
 
 func TestUsageAddsTheDatabaseItsDiskItsFunctionsRuntimeAndItsApps(t *testing.T) {
-	withRuntime := []driver.Value{"p1", "STANDARD", "ACTIVE", false, "2Gi", int64(100), int64(64 << 20), int64(1 << 30), int64(2), true}
+	withRuntime := []driver.Value{"p1", "name-p1", "STANDARD", "ACTIVE", false, "2Gi", int64(100), int64(64 << 20), int64(1 << 30), int64(2), true}
 	app := []byte(`{"tier":"FREE","replicas":1,"status":"ACTIVE","disk":{"size":"1Gi"}}`)
-	db, _ := openScript(t, databases(withRuntime), apps([]driver.Value{app, false}, []driver.Value{app, true}))
+	db, _ := openScript(t, databases(withRuntime), apps([]driver.Value{"p1", app, false}, []driver.Value{"p1", app, true}))
 	got, err := OrgUsage(context.Background(), db, "org-1")
 	if err != nil {
 		t.Fatal(err)
@@ -292,12 +292,12 @@ func TestUsageAddsTheDatabaseItsDiskItsFunctionsRuntimeAndItsApps(t *testing.T) 
 
 func TestAnAppWithADeployInFlightIsCountedAsRunning(t *testing.T) {
 	stopped := []byte(`{"tier":"FREE","replicas":1,"status":"PAUSED"}`)
-	db, _ := openScript(t, databases(), apps([]driver.Value{stopped, true}))
+	db, _ := openScript(t, databases(), apps([]driver.Value{"p1", stopped, true}))
 	got, err := OrgUsage(context.Background(), db, "org-1")
 	if err != nil || got.CPUMilli != 250 {
 		t.Fatalf("a deploy of a stopped app holds what it will run at: %+v %v", got, err)
 	}
-	idle, _ := openScript(t, databases(), apps([]driver.Value{stopped, false}))
+	idle, _ := openScript(t, databases(), apps([]driver.Value{"p1", stopped, false}))
 	if got, _ := OrgUsage(context.Background(), idle, "org-1"); got.CPUMilli != 0 {
 		t.Fatalf("a stopped app with no deploy holds no CPU: %+v", got)
 	}
@@ -314,5 +314,77 @@ func TestCeilingReadsTheTierCaseInsensitively(t *testing.T) {
 	}
 	if _, ok := gate.Ceiling("ENTERPRISE"); ok {
 		t.Fatal("enterprise has no budget")
+	}
+}
+
+func TestOrgServicesNamesEachServiceByKindAndProject(t *testing.T) {
+	withRuntime := []driver.Value{"p1", "shop", "STANDARD", "ACTIVE", false, "", int64(100), int64(64 << 20), int64(1 << 30), int64(1), true}
+	unrecorded := []driver.Value{"p2", "blog", "FREE", "ACTIVE", false, "", int64(0), int64(0), int64(0), int64(0), false}
+	app := []byte(`{"name":"web","tier":"FREE","replicas":1,"status":"ACTIVE"}`)
+	db, _ := openScript(t, databases(withRuntime, unrecorded), apps([]driver.Value{"p1", app, false}, []driver.Value{"p1", []byte(`{"tier":"FREE","replicas":0,"status":"ACTIVE"}`), false}))
+	got, err := OrgServices(context.Background(), db, "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := make([]string, len(got))
+	for i, service := range got {
+		kinds[i] = service.Kind + ":" + service.Name + ":" + service.ProjectID
+	}
+	want := []string{"database:shop:p1", "functions:shop:p1", "database:blog:p2", "app:web:p1", "app::p1"}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("services %v, want %v", kinds, want)
+	}
+	if got[0].Unrecorded || !got[2].Unrecorded {
+		t.Fatalf("only the database with no recorded size is marked unrecorded: %+v", got)
+	}
+	if got[1].Size != ReservedFunctions("STANDARD") {
+		t.Fatalf("the functions runtime holds its plan's pod: %+v", got[1].Size)
+	}
+}
+
+func TestAnAppRecordThatIsNotJSONHasNoNameButStillCounts(t *testing.T) {
+	if appName([]byte("not json")) != "" || appName([]byte(`{"name":"web"}`)) != "web" {
+		t.Fatal("appName")
+	}
+}
+
+func TestTheReportShowsThePlanWhatIsUsedAndWhatIsLeft(t *testing.T) {
+	db, _ := openScript(t, tierIs("FREE"), databases(runningDatabase("p1")), apps())
+	report, err := gateOn().Report(context.Background(), db, "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Enabled || report.Plan != "FREE" || report.Used.CPUMilli != 500 || report.Left.CPUMilli != 500 || report.Budget.CPUMilli != 1000 || len(report.Services) != 1 {
+		t.Fatalf("%+v", report)
+	}
+}
+
+func TestTheReportOfAPlanWithNoCeilingHasUsageAndNoLimit(t *testing.T) {
+	db, _ := openScript(t, tierIs("ENTERPRISE"), databases(), apps())
+	report, err := gateOn().Report(context.Background(), db, "org-1")
+	if err != nil || !report.Budget.IsZero() || !report.Left.IsZero() || report.Services == nil || len(report.Services) != 0 {
+		t.Fatalf("%+v %v", report, err)
+	}
+}
+
+func TestTheReportIsEmptyWhileTheBudgetIsOff(t *testing.T) {
+	db, script := openScript(t)
+	off := NewGate(func(context.Context) bool { return false }, tinyPlans)
+	report, err := off.Report(context.Background(), db, "org-1")
+	if err != nil || report.Enabled || report.Services == nil || len(script.asked) != 0 {
+		t.Fatalf("%+v %v %v", report, err, script.asked)
+	}
+}
+
+func TestTheReportPassesOnEveryStoreError(t *testing.T) {
+	boom := errors.New("down")
+	for name, answers := range map[string][]answer{
+		"tier":      {{match: "SELECT tier FROM orgs", err: boom}},
+		"databases": {tierIs("FREE"), {match: "FROM database_instances", err: boom}},
+	} {
+		db, _ := openScript(t, answers...)
+		if _, err := gateOn().Report(context.Background(), db, "org-1"); !errors.Is(err, boom) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

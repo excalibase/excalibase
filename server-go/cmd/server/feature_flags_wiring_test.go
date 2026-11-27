@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,6 +41,9 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodGet, "/api/orgs/" + matrixOrgA + "/credits/statement"},
 		{http.MethodPost, "/api/credits/terms"},
 		{http.MethodPost, "/api/admin/console/orgs/" + matrixOrgA + "/credits"},
+	},
+	features.PlanBudget: {
+		{http.MethodGet, "/api/orgs/" + matrixOrgA + "/plan-budget"},
 	},
 	features.MCP: {
 		{http.MethodPost, "/mcp"},
@@ -142,7 +146,16 @@ var darkRoutes = map[features.Feature][]darkProbe{
 
 func darkFeatureRouter(t *testing.T, on ...features.Feature) (http.Handler, string) {
 	t.Helper()
-	cfg := config.AppConfig{DeploymentMode: "selfhosted", AppHostingEnabled: true}
+	mode := "selfhosted"
+	if slices.Contains(on, features.PlanBudget) {
+		mode = "cloud" // the plan budget applies only on the cloud
+	}
+	return darkFeatureRouterIn(t, mode, on...)
+}
+
+func darkFeatureRouterIn(t *testing.T, mode string, on ...features.Feature) (http.Handler, string) {
+	t.Helper()
+	cfg := config.AppConfig{DeploymentMode: mode, AppHostingEnabled: true}
 	router, who, _ := buildMatrixWith(t, cfg, func(deps *handlerDeps) {
 		deps.features = features.NewStatic(on...)
 		// Storage mounts only when the object store is configured.
@@ -321,5 +334,26 @@ func TestAuthSettingsWritesNeedAnAdminWhileAnySignInFlagIsOn(t *testing.T) {
 	router, developer := darkFeatureRouter(t)
 	if w := probeDark(router, put, developer); w.Code == http.StatusForbidden {
 		t.Errorf("both off: a Developer's write was refused (%s)", w.Body.String())
+	}
+}
+
+// The budget route shows a budget only where one is enforced: the flag on and the cloud.
+func TestThePlanBudgetRouteNeedsTheCloudAsWellAsTheFlag(t *testing.T) {
+	probe := darkProbe{method: http.MethodGet, path: "/api/orgs/" + matrixOrgA + "/plan-budget"}
+	for _, c := range []struct {
+		name    string
+		mode    string
+		on      []features.Feature
+		mounted bool
+	}{
+		{"cloud, flag on", "cloud", []features.Feature{features.PlanBudget}, true},
+		{"cloud, flag off", "cloud", nil, false},
+		{"self-hosted, flag on", "selfhosted", []features.Feature{features.PlanBudget}, false},
+	} {
+		router, token := darkFeatureRouterIn(t, c.mode, c.on...)
+		w := probeDark(router, probe, token)
+		if (w.Code == http.StatusNotFound && w.Body.String() == unmountedBody) == c.mounted {
+			t.Errorf("%s: answered %d %q, mounted should be %v", c.name, w.Code, w.Body.String(), c.mounted)
+		}
 	}
 }

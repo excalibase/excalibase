@@ -710,3 +710,130 @@ func TestAFunctionsRuntimeDeployedWhileTheFlagIsOffStillCountsWhenItComesOn(t *t
 		t.Fatalf("recorded %v %v", runtime, err)
 	}
 }
+
+// The report lists what each service holds, and what is left of the plan, in the org's own numbers.
+func TestTheReportListsEachServiceAndWhatIsLeft(t *testing.T) {
+	store, org := budgetOrg(t, 2000)
+	newDatabase(t, store, "proj-r-one", org)
+	if err := store.EnsureFunctionsRuntime(context.Background(), "proj-r-one"); err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.PlanBudgetReport(context.Background(), org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Enabled || report.Budget.CPUMilli != 2000 {
+		t.Fatalf("the plan allows 2 vCPU: %+v", report)
+	}
+	kinds := map[string]bool{}
+	var sum planbudget.Size
+	for _, service := range report.Services {
+		kinds[service.Kind] = true
+		sum = sum.Add(service.Size)
+		if service.ProjectID != "proj-r-one" {
+			t.Errorf("service %+v belongs to the one project", service)
+		}
+	}
+	if !kinds["database"] || !kinds["functions"] {
+		t.Fatalf("a database and its functions runtime: %+v", report.Services)
+	}
+	if sum != report.Used || report.Left != report.Budget.Sub(report.Used) {
+		t.Fatalf("used %+v must be the sum of the services %+v, left the rest of the budget %+v", report.Used, sum, report.Left)
+	}
+}
+
+func TestTheReportIsOffWhileTheFlagIsOff(t *testing.T) {
+	store := testStore(t)
+	store.SetPlanBudget(gateOf(1000, 1024, 10, 5, false))
+	org := orgOf(t, store, "reportoff")
+	report, err := store.PlanBudgetReport(context.Background(), org)
+	if err != nil || report.Enabled || len(report.Services) != 0 {
+		t.Fatalf("flag off reads nothing: %+v %v", report, err)
+	}
+}
+
+func dockerRow(project, org string) *domain.DatabaseInstance {
+	row := instanceRow(project, org)
+	row.DeploymentMode = domain.ModeDocker
+	return row
+}
+
+// A single Docker or Podman host is held to the same budget as a cluster: the admission is in the store, not in the runtime.
+func TestADockerHostIsAdmittedAndRefusedLikeACluster(t *testing.T) {
+	store, org := budgetOrg(t, 1000)
+	for _, project := range []string{"proj-d-one", "proj-d-two"} {
+		if err := store.Create(dockerRow(project, org)); err != nil {
+			t.Fatalf("%s: %v", project, err)
+		}
+	}
+	err := store.Create(dockerRow("proj-d-three", org))
+	var refusal *planbudget.Refusal
+	if !errors.As(err, &refusal) || refusal.Dimension != "CPU" {
+		t.Fatalf("a third 0.5 vCPU docker database on 1 vCPU: %v", err)
+	}
+	if _, err := store.ReserveDatabaseSize(context.Background(), "proj-d-one", planbudget.Reservation{PerCopy: planbudget.Size{CPUMilli: 900, MemoryBytes: 1 << 30, DiskBytes: freeDatabaseDisk}, Copies: 1}); !isRefusal(err) {
+		t.Fatalf("a docker resize past the budget: %v", err)
+	}
+}
+
+func TestADockerHostCountsAndShrinksLikeACluster(t *testing.T) {
+	store, org := budgetOrg(t, 1000)
+	if err := store.Create(dockerRow("proj-d-pause", org)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(dockerRow("proj-d-live", org)); err != nil {
+		t.Fatal(err)
+	}
+	paused := dockerRow("proj-d-pause", org)
+	paused.Status = string(domain.StatusPaused)
+	if err := store.UpdateIfStatus(paused, "ACTIVE"); err != nil {
+		t.Fatalf("a pause always passes: %v", err)
+	}
+	if err := store.Create(dockerRow("proj-d-new", org)); err != nil {
+		t.Fatalf("the paused docker database gave back its CPU: %v", err)
+	}
+}
+
+// Live usage: what the backfill recorded and what is really running can differ; the report names every org whose
+// recorded databases do not add up, so a drift is found before it is relied on.
+func TestUnrecordedDatabasesAreReportedByTheReport(t *testing.T) {
+	store, org := budgetOrg(t, 2000)
+	newDatabase(t, store, "proj-u-one", org)
+	if _, err := store.db.Exec(`UPDATE database_instances SET reserved_copies = 0 WHERE project_id = 'proj-u-one'`); err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.PlanBudgetReport(context.Background(), org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Services) != 1 || !report.Services[0].Unrecorded {
+		t.Fatalf("an unrecorded database is shown as such: %+v", report.Services)
+	}
+}
+
+func TestOrgsAlreadyOverTheirPlanAreNamed(t *testing.T) {
+	store, over := budgetOrg(t, 100000)
+	newDatabase(t, store, "proj-ov-one", over)
+	fine := orgOf(t, store, "overfine")
+	newDatabase(t, store, "proj-ov-fine", fine)
+	store.SetPlanBudget(gateOf(1, 64*1024, 500, 50, true))
+	found, err := store.OrgsOverBudget(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := map[string]bool{}
+	for _, org := range found {
+		named[org.OrgID] = true
+	}
+	if !named[over] || !named[fine] {
+		t.Fatalf("both orgs hold 0.5 vCPU against a plan of 1 mCPU: %+v", found)
+	}
+	store.SetPlanBudget(gateOf(100000, 64*1024, 500, 50, true))
+	if found, _ := store.OrgsOverBudget(context.Background()); len(found) != 0 {
+		t.Fatalf("with room nobody is named: %+v", found)
+	}
+	store.SetPlanBudget(gateOf(1, 1, 1, 1, false))
+	if found, _ := store.OrgsOverBudget(context.Background()); len(found) != 0 {
+		t.Fatal("flag off names nobody")
+	}
+}

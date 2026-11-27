@@ -254,6 +254,27 @@ describe('OrgsAdminTable', () => {
     expect(screen.queryByText('$42.00')).toBeNull();
   });
 
+  test('the budget column shows CPU and memory used against the plan, and only while the budget is on', async () => {
+    const budget = { cpuMilliUsed: 500, cpuMilliLimit: 2000, memoryBytesUsed: 1024 ** 3, memoryBytesLimit: 4 * 1024 ** 3 };
+    expect(orgColumns().map((c) => c.id)).not.toContain('budget');
+    const column = orgColumns(false, true).find((c) => c.id === 'budget');
+    render(<>{column?.cell({ budget } as never)}</>);
+    expect(screen.getByText('0.5 of 2 vCPU · 1 of 4 GiB')).toBeInTheDocument();
+    render(<>{column?.cell({} as never)}</>);
+    expect(screen.getByText('—')).toBeInTheDocument();
+    const reply = (planbudget: boolean) => (url: string) => Promise.resolve({
+      data: url === '/config' ? { deploymentMode: 'cloud', features: { planbudget } } : { items: [{ ...org, budget }], total: 1 },
+    } as never);
+    vi.mocked(api.get).mockImplementation(reply(true));
+    const on = renderWith(<OrgsAdminTable canMutate />);
+    expect(await screen.findByText('0.5 of 2 vCPU · 1 of 4 GiB', { selector: 'td *, td' })).toBeInTheDocument();
+    on.unmount();
+    vi.mocked(api.get).mockImplementation(reply(false));
+    renderWith(<OrgsAdminTable canMutate />);
+    await screen.findByText('Acme');
+    expect(screen.queryAllByText('0.5 of 2 vCPU · 1 of 4 GiB')).toHaveLength(1);
+  });
+
   test('revoking needs a reason and sends it with the cascade', async () => {
     vi.mocked(api.delete).mockResolvedValue({ data: {} } as never);
     renderWith(<OrgsAdminTable canMutate />);

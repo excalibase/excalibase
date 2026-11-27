@@ -3,6 +3,7 @@ package planbudget
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -111,62 +112,150 @@ func orgTier(ctx context.Context, tx Querier, orgID string) (string, error) {
 	return tier, nil
 }
 
+// ServiceUse is one service of an org and what it reserves.
+type ServiceUse struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	ProjectID string `json:"projectId"`
+	Size      Size   `json:"size"`
+	// Unrecorded marks a database whose size was never written down.
+	Unrecorded bool `json:"unrecorded,omitempty"`
+}
+
+// Kinds of service an org's budget is spent on.
+const (
+	KindDatabase  = "database"
+	KindApp       = "app"
+	KindFunctions = "functions"
+)
+
 // ErrUnrecordedSize refuses growth in an org that holds a database whose size
 // the budget could not read: fail closed for that org only.
 var ErrUnrecordedSize = errors.New("the plan budget could not read the size of one of this organization's databases, so it cannot grow until that is fixed")
 
 // OrgUsage sums what the org's databases, apps and functions runtimes reserve.
 func OrgUsage(ctx context.Context, q Querier, orgID string) (Size, error) {
+	services, err := OrgServices(ctx, q, orgID)
 	var total Size
-	databases, err := q.QueryContext(ctx, `
-		SELECT project_id, tier, status, no_database, COALESCE(storage_size, ''), reserved_cpu_milli, reserved_memory_bytes, reserved_disk_bytes, reserved_copies, has_functions_runtime
-		FROM database_instances WHERE org_id = $1`, orgID)
+	for _, service := range services {
+		if service.Unrecorded {
+			return total, fmt.Errorf("%w (project %s)", ErrUnrecordedSize, service.ProjectID)
+		}
+		total = total.Add(service.Size)
+	}
+	return total, err
+}
+
+// OrgServices lists what the org's databases, apps and functions runtimes each reserve.
+func OrgServices(ctx context.Context, q Querier, orgID string) ([]ServiceUse, error) {
+	services, err := databaseServices(ctx, q, orgID)
 	if err != nil {
-		return total, fmt.Errorf("read org databases: %w", err)
+		return nil, err
+	}
+	apps, err := appServices(ctx, q, orgID)
+	return append(services, apps...), err
+}
+
+func databaseServices(ctx context.Context, q Querier, orgID string) ([]ServiceUse, error) {
+	var services []ServiceUse
+	databases, err := q.QueryContext(ctx, `
+		SELECT project_id, project_name, tier, status, no_database, COALESCE(storage_size, ''), reserved_cpu_milli, reserved_memory_bytes, reserved_disk_bytes, reserved_copies, has_functions_runtime
+		FROM database_instances WHERE org_id = $1 ORDER BY project_id`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("read org databases: %w", err)
 	}
 	defer databases.Close()
 	for databases.Next() {
 		var db Database
-		var projectID, tier, storageSize string
+		var projectID, name, tier, storageSize string
 		var hasRuntime, noDatabase bool
-		if err := databases.Scan(&projectID, &tier, &db.Status, &noDatabase, &storageSize, &db.PerCopy.CPUMilli, &db.PerCopy.MemoryBytes, &db.PerCopy.DiskBytes, &db.Copies, &hasRuntime); err != nil {
-			return total, fmt.Errorf("scan org database: %w", err)
+		if err := databases.Scan(&projectID, &name, &tier, &db.Status, &noDatabase, &storageSize, &db.PerCopy.CPUMilli, &db.PerCopy.MemoryBytes, &db.PerCopy.DiskBytes, &db.Copies, &hasRuntime); err != nil {
+			return nil, fmt.Errorf("scan org database: %w", err)
 		}
 		if disk, err := ParseBytes(storageSize); err == nil && storageSize != "" {
 			db.PerCopy.DiskBytes = disk
 		}
-		if db.Copies == 0 && !noDatabase && db.Status != string(domain.StatusDeleting) {
-			return total, fmt.Errorf("%w (project %s)", ErrUnrecordedSize, projectID)
-		}
-		total = total.Add(ReservedDatabase(db))
+		unrecorded := db.Copies == 0 && !noDatabase && db.Status != string(domain.StatusDeleting)
+		services = append(services, ServiceUse{Kind: KindDatabase, Name: name, ProjectID: projectID, Size: ReservedDatabase(db), Unrecorded: unrecorded})
 		if hasRuntime {
-			total = total.Add(ReservedFunctions(tier))
+			services = append(services, ServiceUse{Kind: KindFunctions, Name: name, ProjectID: projectID, Size: ReservedFunctions(tier)})
 		}
 	}
-	if err := databases.Err(); err != nil {
-		return total, err
-	}
+	return services, databases.Err()
+}
+
+func appServices(ctx context.Context, q Querier, orgID string) ([]ServiceUse, error) {
+	var services []ServiceUse
 	apps, err := q.QueryContext(ctx, `
-		SELECT a.doc,
+		SELECT a.project_id, a.doc,
 		       EXISTS (SELECT 1 FROM app_deploys r WHERE r.project_id = a.project_id AND r.app_id = a.id AND r.status IN ('pending', 'rolling'))
-		FROM apps a JOIN database_instances d ON d.project_id = a.project_id WHERE d.org_id = $1`, orgID)
+		FROM apps a JOIN database_instances d ON d.project_id = a.project_id WHERE d.org_id = $1 ORDER BY a.project_id, a.id`, orgID)
 	if err != nil {
-		return total, fmt.Errorf("read org apps: %w", err)
+		return nil, fmt.Errorf("read org apps: %w", err)
 	}
 	defer apps.Close()
 	for apps.Next() {
+		var projectID string
 		var doc []byte
 		var deploying bool
-		if err := apps.Scan(&doc, &deploying); err != nil {
-			return total, fmt.Errorf("scan org app: %w", err)
+		if err := apps.Scan(&projectID, &doc, &deploying); err != nil {
+			return nil, fmt.Errorf("scan org app: %w", err)
 		}
 		size, err := ReservedAppNow(doc, deploying)
 		if err != nil {
-			return total, err
+			return nil, err
 		}
-		total = total.Add(size)
+		services = append(services, ServiceUse{Kind: KindApp, Name: appName(doc), ProjectID: projectID, Size: size})
 	}
-	return total, apps.Err()
+	return services, apps.Err()
+}
+
+func appName(doc []byte) string {
+	var named struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(doc, &named); err != nil {
+		return ""
+	}
+	return named.Name
+}
+
+// Report is what the Studio shows of an org's plan budget: the plan's ceiling,
+// what each service holds, and what is left. With the budget off it is empty.
+type Report struct {
+	Enabled  bool         `json:"enabled"`
+	Plan     string       `json:"plan"`
+	Budget   Size         `json:"budget"`
+	Used     Size         `json:"used"`
+	Left     Size         `json:"left"`
+	Services []ServiceUse `json:"services"`
+}
+
+// Report reads the org's budget for display. A plan with no ceiling reports its
+// usage and no limit.
+func (g *Gate) Report(ctx context.Context, q Querier, orgID string) (Report, error) {
+	if !g.Active(ctx) {
+		return Report{Services: []ServiceUse{}}, nil
+	}
+	tier, err := orgTier(ctx, q, orgID)
+	if err != nil {
+		return Report{}, err
+	}
+	services, err := OrgServices(ctx, q, orgID)
+	if err != nil {
+		return Report{}, err
+	}
+	report := Report{Enabled: true, Plan: tier, Services: services}
+	if report.Services == nil {
+		report.Services = []ServiceUse{}
+	}
+	for _, service := range services {
+		report.Used = report.Used.Add(service.Size)
+	}
+	if ceiling, limited := g.Ceiling(tier); limited {
+		report.Budget, report.Left = ceiling, ceiling.Sub(report.Used)
+	}
+	return report, nil
 }
 
 // ReservedAppNow is what an app holds now. An app with a deploy in flight holds

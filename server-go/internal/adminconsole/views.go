@@ -39,6 +39,8 @@ type OrgRow struct {
 	CreatedAt    *time.Time `json:"createdAt,omitempty"`
 	// CreditMicros is the org's credit balance; absent while credits are off or the org has no account.
 	CreditMicros *int64 `json:"creditMicros,omitempty"`
+	// Budget is what the org holds of its plan; absent while the plan budget is off.
+	Budget *OrgBudget `json:"budget,omitempty"`
 }
 
 // UserQuery filters the users table. Search matches an email, a domain

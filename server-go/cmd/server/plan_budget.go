@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/planbudget"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -51,6 +53,7 @@ func wirePlanBudget(cfg config.AppConfig, sqlStore storage.PlatformStore) *planb
 	if recorded > 0 {
 		log.Printf("plan budget: recorded the size of %d databases", recorded)
 	}
+	reportOverBudget(ctx, pg)
 	return gate
 }
 
@@ -94,5 +97,51 @@ func recordFunctionRuntimes(cfg config.AppConfig, pg *pgstore.Store, functions e
 	}
 	if err != nil {
 		failBackfill(cfg, "functions runtimes", err)
+	}
+}
+
+// newPlanBudgetHandler serves the plan budget to an org's members; nil when the store cannot report it.
+func newPlanBudgetHandler(sqlStore storage.PlatformStore) *handler.PlanBudgetHandler {
+	source, ok := sqlStore.(handler.PlanBudgetSource)
+	if !ok {
+		return nil
+	}
+	return handler.NewPlanBudgetHandler(source, sqlStore)
+}
+
+// mountPlanBudget adds the budget read to the org routes, while the budget applies: the flag is on and this is
+// the cloud. A self-hosted install enforces no budget, so it shows none.
+func mountPlanBudget(cfg config.AppConfig, d *handlerDeps) {
+	if d.planBudgetHandler != nil && d.orgHandler != nil {
+		d.orgHandler.SetPlanBudget(d.planBudgetHandler, planBudgetGateFor(cfg, d.features))
+	}
+}
+
+// planBudgetGateFor answers 404 for the budget route unless the budget applies, decided per request.
+func planBudgetGateFor(cfg config.AppConfig, flags features.Flags) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !cfg.IsCloud() || !features.Enabled(r.Context(), flags, features.PlanBudget) {
+				http.NotFound(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// reportOverBudget names every org already over its plan from what is recorded.
+// It is a report, not a refusal: such an org keeps what it runs and cannot grow.
+// It reads records only; whether a cluster really runs at its recorded size is not checked here.
+func reportOverBudget(ctx context.Context, pg *pgstore.Store) {
+	over, err := pg.OrgsOverBudget(ctx)
+	if err != nil {
+		log.Printf("WARN: plan budget: check which orgs are over their plan: %v", err)
+		return
+	}
+	for _, org := range over {
+		log.Printf("WARN: plan budget: org %s holds %d mCPU, %d MiB, %d GiB, %d services against a plan of %d mCPU, %d MiB, %d GiB, %d services",
+			org.OrgID, org.Used.CPUMilli, org.Used.MemoryBytes>>20, org.Used.DiskBytes>>30, org.Used.Services,
+			org.Budget.CPUMilli, org.Budget.MemoryBytes>>20, org.Budget.DiskBytes>>30, org.Budget.Services)
 	}
 }

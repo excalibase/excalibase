@@ -31,7 +31,14 @@ export const ORG_FILTERS: FilterDef<ConsoleOrg>[] = [
   },
 ];
 
-export function orgColumns(withCredit = false): Column<ConsoleOrg>[] {
+const trim = (value: number) => String(Number(value.toFixed(2)));
+
+function budgetText(budget: NonNullable<ConsoleOrg['budget']>): string {
+  const gib = 1024 ** 3;
+  return `${trim(budget.cpuMilliUsed / 1000)} of ${trim(budget.cpuMilliLimit / 1000)} vCPU · ${trim(budget.memoryBytesUsed / gib)} of ${trim(budget.memoryBytesLimit / gib)} GiB`;
+}
+
+export function orgColumns(withCredit = false, withBudget = false): Column<ConsoleOrg>[] {
   const columns: Column<ConsoleOrg>[] = [
     {
       id: 'name', header: 'Organization', locked: true, sortValue: serverSorted, text: (org) => org.name,
@@ -50,6 +57,9 @@ export function orgColumns(withCredit = false): Column<ConsoleOrg>[] {
     },
     { id: 'created', header: 'Created', sortValue: serverSorted, defaultHidden: true, cell: (org) => (org.createdAt ? formatInstant(org.createdAt, 'date') : '—') },
   ];
+  if (withBudget) {
+    columns.splice(5, 0, { id: 'budget', header: 'Plan budget', cell: (org) => (org.budget ? budgetText(org.budget) : '—') });
+  }
   if (!withCredit) return columns;
   // Beside the plan, where an admin looks when deciding whether to grant.
   const credit: Column<ConsoleOrg> = { id: 'credit', header: 'Credit', cell: (org) => (org.creditMicros == null ? '—' : dollars(org.creditMicros)) };
@@ -98,7 +108,8 @@ export function OrgsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
   const [creditFor, setCreditFor] = useState<ConsoleOrg | null>(null);
   const [bulk, setBulk] = useState<BulkRequest<ConsoleOrg> | null>(null);
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
-  const columns = useMemo(() => orgColumns(creditsOn), [creditsOn]);
+  const budgetOn = useFeatureEnabled('planbudget').enabled;
+  const columns = useMemo(() => orgColumns(creditsOn, budgetOn), [creditsOn, budgetOn]);
 
   const confirmPlan = async (reason: string) => {
     if (!planFor) return;

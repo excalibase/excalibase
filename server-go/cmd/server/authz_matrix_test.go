@@ -122,6 +122,7 @@ func buildMatrixPlatform(t *testing.T, cfg config.AppConfig, adjust func(*handle
 	deps := matrixDeps(t, instances)
 	deps.orgHandler = handler.NewOrgHandler(platform, nil)
 	deps.creditsHandler = matrixCreditsHandler(platform)
+	deps.planBudgetHandler = matrixPlanBudgetHandler(platform)
 	adjust(deps, platform)
 	return buildRouter(cfg, platform, instances, deps), who, admins, platform
 }

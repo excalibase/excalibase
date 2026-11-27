@@ -14,6 +14,7 @@ import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import type { DatabaseSettings } from '../types';
 import { DOCUMENTDB_LABEL } from '../utils/engine';
 import { serverErrorMessage } from '../utils/serverError';
+import { PlanBudgetLeft } from '../components/PlanBudgetLeft';
 import { passwordProblem } from '../utils/databasePassword';
 import { DatabasePasswordField } from '../components/DatabasePasswordField';
 import { ProjectPasswordPanel } from '../components/ProjectPasswordPanel';
@@ -387,6 +388,7 @@ export function ProvisionPage() {
           </>
         )}
 
+        <PlanBudgetLeft orgId={orgId} />
         {error && (
           <div className="bg-red-900/20 border border-color-error rounded-lg p-4">
             <p data-testid="provision-error" className="text-color-error text-sm">{serverErrorMessage(error, 'The project was not created')}</p>

@@ -38,6 +38,8 @@ export interface ConsoleOrg {
   createdAt?: string;
   // The org's credit balance in micro-dollars; absent while credits are off or the org has no account.
   creditMicros?: number;
+  // What the org holds of its plan; absent while the plan budget is off.
+  budget?: { cpuMilliUsed: number; cpuMilliLimit: number; memoryBytesUsed: number; memoryBytesLimit: number };
 }
 
 export interface Page<T> {

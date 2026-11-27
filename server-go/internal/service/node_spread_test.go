@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
@@ -153,5 +154,34 @@ func TestRequireNodeCount_SingleHostIsOneNode(t *testing.T) {
 	assertTooFewNodes(t, svc.RequireNodeCount(context.Background(), domain.Standard, 3), 3, 1)
 	if err := svc.RequireNodeCount(context.Background(), domain.Free, 1); err != nil {
 		t.Fatalf("one copy on one host: %v", err)
+	}
+}
+
+// A plan with several copies runs them on separate nodes (the database operator requires anti-affinity on the
+// hostname), so the node-count rule holds with the plan budget on exactly as with it off. Only a plan with
+// one copy has nothing to spread.
+func TestPlanBudgetOnKeepsTheNodeCountRuleForAPlanWithSeveralCopies(t *testing.T) {
+	ctx := context.Background()
+	standard, _ := config.GetTierConfig(domain.Standard)
+	for _, flags := range []features.Flags{features.NewStatic(), features.NewStatic(features.PlanBudget)} {
+		svc, _, mock := setupProvisioningTest(t)
+		svc.SetFeatures(flags)
+		mock.Capacity = roomyNodes(2)
+		assertTooFewNodes(t, svc.RequireNodeCount(ctx, domain.Standard, 3), 3, 2)
+		assertTooFewNodes(t, svc.RequireNodesForTier(ctx, domain.Standard), 3, 2)
+		assertTooFewNodes(t, svc.RequireNodeSpread(ctx, domain.Standard, standard), 3, 2)
+		mock.Capacity = roomyNodes(3)
+		if err := svc.RequireNodeCount(ctx, domain.Standard, 3); err != nil {
+			t.Errorf("3 copies on 3 nodes: %v", err)
+		}
+	}
+}
+
+func TestAPlanWithOneCopyNeedsNoNodeLookupWithThePlanBudgetOn(t *testing.T) {
+	svc, _, mock := setupProvisioningTest(t)
+	svc.SetFeatures(features.NewStatic(features.PlanBudget))
+	mock.CapacityError = errors.New("down")
+	if err := svc.RequireNodeCount(context.Background(), domain.Free, 1); err != nil {
+		t.Fatalf("one copy: %v", err)
 	}
 }

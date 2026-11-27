@@ -38,13 +38,21 @@ type OrgHandler struct {
 	// orgGuard refuses invites into, and joins of, a suspended owner's org (EXC-845); nil allows all.
 	orgGuard *orgguard.Guard
 	// credits serves an org's credit balance and statement (EXC-866); nil leaves them unmounted.
-	credits     *CreditsHandler
-	creditsGate func(http.Handler) http.Handler
+	credits *CreditsHandler
+	// planBudget serves an org's plan budget (EXC-901); nil leaves the route unmounted.
+	planBudget     *PlanBudgetHandler
+	planBudgetGate func(http.Handler) http.Handler
+	creditsGate    func(http.Handler) http.Handler
 }
 
 // SetCredits mounts the credit routes under each org.
 func (h *OrgHandler) SetCredits(credits *CreditsHandler, gate func(http.Handler) http.Handler) {
 	h.credits, h.creditsGate = credits, gate
+}
+
+// SetPlanBudget mounts the plan-budget read under each org.
+func (h *OrgHandler) SetPlanBudget(planBudget *PlanBudgetHandler, gate func(http.Handler) http.Handler) {
+	h.planBudget, h.planBudgetGate = planBudget, gate
 }
 
 // mountCreditRoutes is a no-op while no credit handler is wired, and on the
@@ -127,6 +135,7 @@ func (h *OrgHandler) Routes(r chi.Router, isCloud bool, createLimits ...func(htt
 		r.Get("/invites", h.ListPendingInvites)
 
 		h.mountCreditRoutes(r)
+		h.mountPlanBudgetRoutes(r)
 
 		r.Route("/projects/{projectId}/members", func(r chi.Router) {
 			r.Get("/", h.ListProjectMembers)
@@ -832,4 +841,11 @@ func isReadOrDelete(method string) bool {
 		return true
 	}
 	return false
+}
+
+// mountPlanBudgetRoutes is a no-op while no plan-budget handler is wired.
+func (h *OrgHandler) mountPlanBudgetRoutes(r chi.Router) {
+	if h != nil && h.planBudget != nil {
+		h.planBudget.OrgRoutes(r, h.planBudgetGate)
+	}
 }

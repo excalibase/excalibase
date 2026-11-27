@@ -1569,6 +1569,8 @@ With the flag off nothing is ever refused for the budget, and creates, add-datab
 
 A failed resize puts the old size back without admitting it again, because the cluster still runs at that size. A leaked reservation fails closed (the org sees less room than it has); there is no periodic reconcile yet.
 
+With the flag on, a plan is a CPU/RAM budget, but its copies still run one per node (the database operator requires hostname anti-affinity), so the node-count refusal ("STANDARD needs 3 nodes") stays for any plan with more than one copy and a plan with one copy needs no node check. Studio shows the budget on Usage and Home (used against the limit, per service), what is left beside the create and resize forms, and per org in the admin orgs table; the route is `GET /api/orgs/{orgId}/plan-budget`, mounted only while the flag is on. Boot logs every org whose recorded usage already passes its plan (records only; a cluster's live size is not read, so drift between the record and a running cluster is not detected yet).
+
 `FEATURE_CREDITS` with `FEATURE_PLANBUDGET` off is allowed (the ledger without a ceiling). With the budget on and credits off the ceiling is the plan's budget, which every current Free shape fits.
 
 ## Limited trial until verified (EXC-899, in progress)

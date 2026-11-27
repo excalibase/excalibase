@@ -37,6 +37,8 @@ export type Feature =
   | 'credits'
   // Unverified accounts cannot run containers until they verify with GitHub (EXC-899).
   | 'limitedtrial'
+  // The plan is a CPU/RAM/disk budget every growth step is held to (EXC-901).
+  | 'planbudget'
   // The cloud-console layout of Studio (EXC-762); off until the owner turns it on.
   | 'studio_v2';
 
