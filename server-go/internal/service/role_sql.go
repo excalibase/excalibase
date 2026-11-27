@@ -96,7 +96,18 @@ func alterRolePasswordSQL(role, verifier string) string {
 const reservedSchemaRebuildSQL = `
 DO $excalibase_reserved_rebuild$
 BEGIN
-  IF EXISTS (
+  IF ` + excalibaseSchemaTaintedCondition + ` THEN
+    RAISE WARNING 'the excalibase schema held objects a non-superuser owned; it is dropped and rebuilt';
+    DROP SCHEMA excalibase CASCADE;
+  END IF;
+END
+$excalibase_reserved_rebuild$;
+`
+
+// excalibaseSchemaTaintedCondition is true while the excalibase schema, or
+// anything in it, belongs to a role that is not a superuser, or a trigger sits
+// on one of its tables. The rebuild acts on it and the reconcile probe reads it.
+const excalibaseSchemaTaintedCondition = `(EXISTS (
     SELECT 1 FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner
     WHERE n.nspname = 'excalibase' AND NOT r.rolsuper
   ) OR EXISTS (
@@ -112,13 +123,7 @@ BEGIN
     JOIN pg_class c ON c.oid = t.tgrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'excalibase' AND NOT t.tgisinternal
-  ) THEN
-    RAISE WARNING 'the excalibase schema held objects a non-superuser owned; it is dropped and rebuilt';
-    DROP SCHEMA excalibase CASCADE;
-  END IF;
-END
-$excalibase_reserved_rebuild$;
-`
+  ))`
 
 // reservedSchemaLockdownSQL leaves the excalibase schema the superuser's: it
 // takes the schema, takes CREATE from every other role and leaves the app role

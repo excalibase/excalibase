@@ -93,8 +93,12 @@ func (s *ProvisioningService) reconcileIfPending(ctx context.Context, inst *doma
 		return false, err
 	}
 	if err := s.reconcileProject(projectCtx, inst.ProjectID); err != nil {
+		if isSchemaAlertError(err) {
+			s.trackSchemaAlert(inst.ProjectID, true, err)
+		}
 		return false, err
 	}
+	s.trackSchemaAlert(inst.ProjectID, false, nil)
 	return true, nil
 }
 
@@ -108,7 +112,14 @@ func (s *ProvisioningService) rolesPending(ctx context.Context, inst *domain.Dat
 	if unfiled, err := s.missingRuntimeLogin(ctx, inst.ProjectID); err != nil || unfiled {
 		return unfiled, err
 	}
-	return appReachesAuth(ctx, s.roleSQLExecer(inst.Namespace, inst.ProjectID+primaryPodSuffix), inst.DatabaseName)
+	exec := s.roleSQLExecer(inst.Namespace, inst.ProjectID+primaryPodSuffix)
+	state, err := probePlatform(ctx, exec, inst)
+	if err != nil || state.appReachesAuth || state.schemasDrifted {
+		return err == nil, err
+	}
+	s.trackSchemaAlert(inst.ProjectID, false, nil)
+	drifted, err := s.passwordsDrifted(inst, state.stored)
+	return len(drifted) > 0, err
 }
 
 // missingSchedulerLogin reports whether vault holds no excalibase_scheduler
@@ -166,15 +177,14 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	}
 	roleSQL += mintedSQL
 	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
-	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
-		return fmt.Errorf("re-run registration SQL: %w", err)
+	driftSQL, err := s.passwordRepairFor(ctx, exec, inst)
+	if err != nil {
+		return err
 	}
-	// A grant the revokes cannot take away (another grantor's, a chain of
-	// roles) must surface, not pass as reconciled every pass.
-	if reaches, err := appReachesAuth(ctx, exec, spec.databaseName); err != nil || reaches {
-		if err == nil {
-			err = errors.New("excalibase_app still reaches auth after the registration SQL")
-		}
+	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, registrationScripts(roleSQL, driftSQL)...); err != nil {
+		return s.alertableRunError(ctx, exec, inst, schemaLeftError(fmt.Errorf("re-run registration SQL: %w", err)))
+	}
+	if err := verifyPlatformClean(ctx, exec, inst); err != nil {
 		return err
 	}
 	if err := s.ensureClusterCertLogins(ctx, inst); err != nil {
@@ -396,4 +406,54 @@ func (s *ProvisioningService) RunRoleReconcile(ctx context.Context, leader Leade
 		log.Printf("platform role reconcile: %d project(s) reconciled, %d failed", report.Reconciled, len(report.Failed))
 	}
 	return report
+}
+
+// passwordRepairFor is the SQL that sets back every password changed in SQL.
+// It reads the vault and the database under the project's lease, so a rotation
+// that finished since the probe is not mistaken for drift.
+func (s *ProvisioningService) passwordRepairFor(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance) (string, error) {
+	state, err := probePlatform(ctx, exec, inst)
+	if err != nil {
+		return "", err
+	}
+	drifted, err := s.passwordsDrifted(inst, state.stored)
+	if err != nil {
+		return "", err
+	}
+	return passwordRepairSQL(drifted)
+}
+
+// verifyPlatformClean is the check after the registration SQL: a grant the
+// revokes cannot take away (another grantor's, a chain of roles) or a platform
+// schema the repair left unclean must surface, not pass as reconciled every pass.
+func verifyPlatformClean(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance) error {
+	state, err := probePlatform(ctx, exec, inst)
+	if err != nil {
+		return err
+	}
+	if state.appReachesAuth {
+		return errors.New("excalibase_app still reaches auth after the registration SQL")
+	}
+	if state.schemasDrifted {
+		return errPlatformSchemaLeft
+	}
+	return nil
+}
+
+// alertableRunError marks a failed run whatever stage it failed at: when no
+// reason to alert was found in its text, the project is probed again, and drift
+// that remains means the repair did not finish. A probe that cannot be read
+// alerts too: nothing says the schemas are clean.
+func (s *ProvisioningService) alertableRunError(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance, err error) error {
+	if isSchemaAlertError(err) {
+		return err
+	}
+	state, probeErr := probePlatform(ctx, exec, inst)
+	if probeErr != nil {
+		return fmt.Errorf("%w: %v (%v)", errPlatformRepairUnchecked, err, probeErr)
+	}
+	if state.schemasDrifted || state.appReachesAuth {
+		return fmt.Errorf("%w: %v", errPlatformSchemaLeft, err)
+	}
+	return err
 }

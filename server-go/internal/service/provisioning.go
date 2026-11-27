@@ -44,6 +44,8 @@ type ProvisioningService struct {
 	// mysqlCreation is the mysql feature: new MySQL projects may be created.
 	// Existing ones are looked after either way (ADR 0041).
 	mysqlCreation bool
+	// schemaAlerts records a platform schema the reconcile left for an operator (EXC-821); nil only logs.
+	schemaAlerts *AlertingService
 	// queryStats is the slowqueries feature: new MySQL projects are granted
 	// their digests at creation (EXC-654).
 	queryStats bool
