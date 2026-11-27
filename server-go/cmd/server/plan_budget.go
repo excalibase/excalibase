@@ -19,10 +19,13 @@ import (
 // (EXC-901). It checks nothing on a self-hosted install, which is not metered,
 // or while FEATURE_PLANBUDGET is off.
 func planBudgetGate(cfg config.AppConfig) *planbudget.Gate {
-	flags := cfg.Features()
-	return planbudget.NewGate(func(ctx context.Context) bool {
-		return cfg.IsCloud() && features.Enabled(ctx, flags, features.PlanBudget)
-	}, cfg.PlanBudget)
+	return planbudget.NewGate(func(ctx context.Context) bool { return planBudgetOn(ctx, cfg) }, cfg.PlanBudget)
+}
+
+// planBudgetOn is the one test of whether the plan budget applies: the flag is
+// on and this is the cloud. A self-hosted install is never metered.
+func planBudgetOn(ctx context.Context, cfg config.AppConfig) bool {
+	return cfg.IsCloud() && features.Enabled(ctx, cfg.Features(), features.PlanBudget)
 }
 
 // wirePlanBudget hands the gate to the stores and records what every service
@@ -38,9 +41,12 @@ func wirePlanBudget(cfg config.AppConfig, sqlStore storage.PlatformStore) *planb
 	}
 	pg.SetPlanBudget(gate)
 	ctx := context.Background()
-	recorded, err := pg.BackfillReservations(ctx)
+	recorded, failed, err := pg.BackfillReservations(ctx)
 	if err != nil {
 		failBackfill(cfg, "database sizes", err)
+	}
+	for _, one := range failed {
+		log.Printf("ERROR: plan budget: could not record the size of %s, so its org's growth is refused until it is fixed: %v", one.ProjectID, one.Err)
 	}
 	if recorded > 0 {
 		log.Printf("plan budget: recorded the size of %d databases", recorded)
@@ -52,7 +58,7 @@ func wirePlanBudget(cfg config.AppConfig, sqlStore storage.PlatformStore) *planb
 // be recorded, since admitting against a partial sum would let usage outrun the
 // plan; with the budget off it only says so.
 func failBackfill(cfg config.AppConfig, what string, err error) {
-	if features.Enabled(context.Background(), cfg.Features(), features.PlanBudget) {
+	if planBudgetOn(context.Background(), cfg) {
 		log.Fatalf("plan budget: record the %s: %v", what, err)
 	}
 	log.Printf("WARN: plan budget: record the %s: %v", what, err)
@@ -61,9 +67,8 @@ func failBackfill(cfg config.AppConfig, what string, err error) {
 // planProjectCap is the plan budget's project count per plan, used only while
 // the budget is on. Free holds one project, the owner's.
 func planProjectCap(cfg config.AppConfig) service.ProjectCap {
-	flags := cfg.Features()
 	return func(ctx context.Context, tier domain.TierType) (int, bool) {
-		if !features.Enabled(ctx, flags, features.PlanBudget) {
+		if !planBudgetOn(ctx, cfg) {
 			return 0, false
 		}
 		switch tier {

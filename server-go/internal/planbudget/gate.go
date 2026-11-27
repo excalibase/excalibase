@@ -111,11 +111,15 @@ func orgTier(ctx context.Context, tx Querier, orgID string) (string, error) {
 	return tier, nil
 }
 
+// ErrUnrecordedSize refuses growth in an org that holds a database whose size
+// the budget could not read: fail closed for that org only.
+var ErrUnrecordedSize = errors.New("the plan budget could not read the size of one of this organization's databases, so it cannot grow until that is fixed")
+
 // OrgUsage sums what the org's databases, apps and functions runtimes reserve.
 func OrgUsage(ctx context.Context, q Querier, orgID string) (Size, error) {
 	var total Size
 	databases, err := q.QueryContext(ctx, `
-		SELECT tier, status, COALESCE(storage_size, ''), reserved_cpu_milli, reserved_memory_bytes, reserved_disk_bytes, reserved_copies, has_functions_runtime
+		SELECT project_id, tier, status, no_database, COALESCE(storage_size, ''), reserved_cpu_milli, reserved_memory_bytes, reserved_disk_bytes, reserved_copies, has_functions_runtime
 		FROM database_instances WHERE org_id = $1`, orgID)
 	if err != nil {
 		return total, fmt.Errorf("read org databases: %w", err)
@@ -123,13 +127,16 @@ func OrgUsage(ctx context.Context, q Querier, orgID string) (Size, error) {
 	defer databases.Close()
 	for databases.Next() {
 		var db Database
-		var tier, storageSize string
-		var hasRuntime bool
-		if err := databases.Scan(&tier, &db.Status, &storageSize, &db.PerCopy.CPUMilli, &db.PerCopy.MemoryBytes, &db.PerCopy.DiskBytes, &db.Copies, &hasRuntime); err != nil {
+		var projectID, tier, storageSize string
+		var hasRuntime, noDatabase bool
+		if err := databases.Scan(&projectID, &tier, &db.Status, &noDatabase, &storageSize, &db.PerCopy.CPUMilli, &db.PerCopy.MemoryBytes, &db.PerCopy.DiskBytes, &db.Copies, &hasRuntime); err != nil {
 			return total, fmt.Errorf("scan org database: %w", err)
 		}
 		if disk, err := ParseBytes(storageSize); err == nil && storageSize != "" {
 			db.PerCopy.DiskBytes = disk
+		}
+		if db.Copies == 0 && !noDatabase && db.Status != string(domain.StatusDeleting) {
+			return total, fmt.Errorf("%w (project %s)", ErrUnrecordedSize, projectID)
 		}
 		total = total.Add(ReservedDatabase(db))
 		if hasRuntime {

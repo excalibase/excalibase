@@ -1565,7 +1565,9 @@ Plan numbers are settings: `PLANBUDGET_FREE_*` and `PLANBUDGET_STANDARD_*` for `
 
 Admission runs inside the writer's own transaction under the existing per-org lock: lock, sum, the writer's own state change, commit. The paths are project and database create, add-database, restore (new project and cancelling a deletion), database copy, plan resize, `/storage` disk growth, resume and its retry, app create, edit, scale, deploy and resume, a project's first function, and templates and MCP tools, which call the same services. Shrinking, deleting, pausing and resizing down always pass, even for an org already over its budget.
 
-Every boot records the size each database already holds (from the plan it was created under) and marks projects that already run functions. That backfill writes only the platform's own rows: it never reads, resizes or restarts a cluster, container or workload, and is safe with the flag off. Turn the flag on only after one boot has run it.
+With the flag off the budget reads and records nothing: creates, add-database, resize and functions behave exactly as before it existed. With it on (cloud only; a self-hosted install is never metered), every boot records the size each database already holds, from the plan it was created under, and marks projects that already run functions, before the server takes traffic. That backfill writes only the platform's own rows: it never reads, resizes or restarts a cluster, container or workload. A database it cannot read (a plan row it cannot parse, an unknown tier) is logged and skipped, and growth in that one org is refused until it is fixed; other orgs are unaffected. Sizes are Kubernetes quantities, so `1.5Gi`, `4G` and `500M` are fine.
+
+A failed resize puts the old size back without admitting it again, because the cluster still runs at that size. A leaked reservation fails closed (the org sees less room than it has); there is no periodic reconcile yet.
 
 `FEATURE_CREDITS` with `FEATURE_PLANBUDGET` off is allowed (the ledger without a ceiling). With the budget on and credits off the ceiling is the plan's budget, which every current Free shape fits.
 

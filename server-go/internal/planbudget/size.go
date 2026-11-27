@@ -4,8 +4,9 @@ package planbudget
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // Size is a reserved amount: what a service is sized to, or what an org may hold.
@@ -100,43 +101,22 @@ var (
 	diskDim     = dimension{"disk", func(s Size) int64 { return s.DiskBytes }, func(n int64) Size { return Size{DiskBytes: n} }}
 )
 
-// ParseCPUMilli reads a Kubernetes-style CPU quantity: "0.5", "2" or "250m".
+// ParseCPUMilli reads a Kubernetes quantity of CPU: "0.5", "2" or "250m", and
+// anything else the admin tier editor accepts.
 func ParseCPUMilli(text string) (int64, error) {
-	text = strings.TrimSpace(text)
-	if strings.HasSuffix(text, "m") {
-		n, err := strconv.ParseInt(strings.TrimSuffix(text, "m"), 10, 64)
-		if err != nil || n < 0 {
-			return 0, fmt.Errorf("cpu %q is not a quantity", text)
-		}
-		return n, nil
-	}
-	f, err := strconv.ParseFloat(text, 64)
-	if err != nil || f < 0 {
+	quantity, err := resource.ParseQuantity(strings.TrimSpace(text))
+	if err != nil || quantity.Sign() < 0 {
 		return 0, fmt.Errorf("cpu %q is not a quantity", text)
 	}
-	return int64(f*1000 + 0.5), nil
+	return quantity.MilliValue(), nil
 }
 
-var byteSuffixes = []struct {
-	suffix string
-	factor int64
-}{{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40}}
-
-// ParseBytes reads a Kubernetes-style byte quantity: "512Mi", "5Gi" or plain bytes.
+// ParseBytes reads a Kubernetes quantity of bytes: "512Mi", "1.5Gi", "4G" or
+// plain bytes, and anything else the admin tier editor accepts.
 func ParseBytes(text string) (int64, error) {
-	text = strings.TrimSpace(text)
-	for _, s := range byteSuffixes {
-		if strings.HasSuffix(text, s.suffix) {
-			n, err := strconv.ParseInt(strings.TrimSuffix(text, s.suffix), 10, 64)
-			if err != nil || n < 0 {
-				return 0, fmt.Errorf("size %q is not a quantity", text)
-			}
-			return n * s.factor, nil
-		}
-	}
-	n, err := strconv.ParseInt(text, 10, 64)
-	if err != nil || n < 0 {
+	quantity, err := resource.ParseQuantity(strings.TrimSpace(text))
+	if err != nil || quantity.Sign() < 0 {
 		return 0, fmt.Errorf("size %q is not a quantity", text)
 	}
-	return n, nil
+	return quantity.Value(), nil
 }

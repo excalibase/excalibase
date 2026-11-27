@@ -11,7 +11,8 @@ import (
 )
 
 type recordingReserver struct {
-	asked []planbudget.Reservation
+	asked    []planbudget.Reservation
+	restored []planbudget.Reservation
 	held  planbudget.Reservation
 	err   error
 }
@@ -24,6 +25,12 @@ func (r *recordingReserver) ReserveDatabaseSize(_ context.Context, _ string, nex
 	previous := r.held
 	r.held = next
 	return previous, nil
+}
+
+func (r *recordingReserver) RestoreDatabaseSize(_ context.Context, _ string, previous planbudget.Reservation) error {
+	r.restored = append(r.restored, previous)
+	r.held = previous
+	return nil
 }
 
 var standardPlan = config.TierConfig{CPU: "2", Memory: "4Gi", Instances: 3, StorageSize: "50Gi"}
@@ -40,8 +47,11 @@ func TestAResizeReservesThePlansSizeTimesItsCopiesBeforeAnythingMoves(t *testing
 		t.Fatalf("%+v want %+v", reserver.asked[0], want)
 	}
 	putBack()
-	if len(reserver.asked) != 2 || reserver.asked[1].PerCopy.CPUMilli != 500 || reserver.asked[1].Copies != 1 {
-		t.Fatalf("a failed change puts the old size back: %+v", reserver.asked)
+	if len(reserver.asked) != 1 {
+		t.Fatalf("putting the old size back must not be admitted again: %+v", reserver.asked)
+	}
+	if len(reserver.restored) != 1 || reserver.restored[0].PerCopy.CPUMilli != 500 || reserver.restored[0].Copies != 1 {
+		t.Fatalf("a failed change puts the old size back: %+v", reserver.restored)
 	}
 }
 

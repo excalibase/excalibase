@@ -49,7 +49,7 @@ func (s *ProvisioningService) reserveResize(ctx context.Context, inst *domain.Da
 	return func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if _, err := s.reserver.ReserveDatabaseSize(ctx, inst.ProjectID, previous); err != nil {
+		if err := s.reserver.RestoreDatabaseSize(ctx, inst.ProjectID, previous); err != nil {
 			log.Printf("ERROR: put back the reserved size of %s: %v", inst.ProjectID, err)
 		}
 	}, nil

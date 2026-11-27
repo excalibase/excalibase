@@ -348,13 +348,14 @@ func TestEveryCurrentFreeShapeIsAdmittedUnderTheDefaultPlan(t *testing.T) {
 
 func TestTheBackfillRecordsWhatADatabaseHoldsAndIsIdempotent(t *testing.T) {
 	store := testStore(t)
+	store.SetPlanBudget(gateOf(1000, 1024, 10, 5, true))
 	org := orgOf(t, store, "backowner")
 	newDatabase(t, store, "proj-k-one", org)
 	if _, err := store.db.Exec(`UPDATE database_instances SET reserved_copies = 0, reserved_cpu_milli = 0, reserved_memory_bytes = 0, reserved_disk_bytes = 0`); err != nil {
 		t.Fatal(err)
 	}
-	n, err := store.BackfillReservations(context.Background())
-	if err != nil || n != 1 {
+	n, failed, err := store.BackfillReservations(context.Background())
+	if err != nil || n != 1 || len(failed) != 0 {
 		t.Fatalf("%d %v", n, err)
 	}
 	var cpu, copies int64
@@ -364,7 +365,7 @@ func TestTheBackfillRecordsWhatADatabaseHoldsAndIsIdempotent(t *testing.T) {
 	if cpu != freeDatabaseCPU || copies != 1 {
 		t.Fatalf("cpu %d copies %d", cpu, copies)
 	}
-	if again, _ := store.BackfillReservations(context.Background()); again != 0 {
+	if again, _, _ := store.BackfillReservations(context.Background()); again != 0 {
 		t.Fatalf("a second run found %d", again)
 	}
 }
@@ -463,5 +464,193 @@ func TestEveryGrowthStepWaitsForTheOrgLock(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Fatalf("%s after the lock was released: %v", name, err)
 		}
+	}
+}
+
+// setTierRow stores a tier the way the admin editor does, with any quantity it accepts,
+// and puts the tier back as it was when the test ends: the tier rows are shared by every test.
+func setTierRow(t *testing.T, store *Store, tier domain.TierType, cpu, memory, storageSize string, instances int) {
+	t.Helper()
+	ctx := context.Background()
+	previous, had, err := store.GetTierConfig(ctx, tier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited, err := config.GetTierConfig(tier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited.CPU, edited.Memory, edited.StorageSize, edited.Instances = cpu, memory, storageSize, instances
+	edited.MaxStorageSize = storageSize
+	if _, err := store.UpsertTierConfig(ctx, tier, edited, nil); err != nil {
+		t.Fatalf("store tier %s: %v", tier, err)
+	}
+	t.Cleanup(func() {
+		if !had {
+			_, _ = store.db.Exec(`DELETE FROM tier_configs WHERE tier = $1`, tier)
+			return
+		}
+		_, _ = store.UpsertTierConfig(ctx, tier, previous, nil)
+	})
+}
+
+func reservedOf(t *testing.T, store *Store, project string) (memory, copies int64) {
+	t.Helper()
+	if err := store.db.QueryRow(`SELECT reserved_memory_bytes, reserved_copies FROM database_instances WHERE project_id = $1`, project).Scan(&memory, &copies); err != nil {
+		t.Fatal(err)
+	}
+	return memory, copies
+}
+
+// Every quantity the admin tier editor stores is a size the budget can read.
+func TestCreateReadsEveryQuantityTheTierEditorAccepts(t *testing.T) {
+	for _, c := range []struct {
+		cpu, memory, disk string
+		wantMemory        int64
+	}{
+		{"1.5", "4G", "1.5Gi", 4_000_000_000},
+		{"500m", "500M", "10G", 500_000_000},
+		{"0.25", "1.5Gi", "5Gi", 3 << 29},
+	} {
+		store, org := budgetOrg(t, 100000)
+		setTierRow(t, store, domain.Free, c.cpu, c.memory, c.disk, 1)
+		project := "proj-q-" + c.cpu
+		if err := store.Create(instanceRow(project, org)); err != nil {
+			t.Fatalf("%+v: %v", c, err)
+		}
+		if memory, copies := reservedOf(t, store, project); memory != c.wantMemory || copies != 1 {
+			t.Fatalf("%+v: recorded %d bytes, %d copies", c, memory, copies)
+		}
+	}
+}
+
+// With the flag off a create is what main does: nothing is parsed, read or recorded.
+func TestFlagOffCreateNeverReadsOrRecordsAReservation(t *testing.T) {
+	store := testStore(t)
+	store.SetPlanBudget(gateOf(1, 1, 1, 1, false))
+	org := orgOf(t, store, "flagoffcreate")
+	setTierRow(t, store, domain.Free, "lots", "plenty", "much", 1)
+	if err := store.Create(instanceRow("proj-off-one", org)); err != nil {
+		t.Fatalf("a tier the budget cannot read must not stop a create while the flag is off: %v", err)
+	}
+	if memory, copies := reservedOf(t, store, "proj-off-one"); memory != 0 || copies != 0 {
+		t.Fatalf("flag off records nothing: %d bytes, %d copies", memory, copies)
+	}
+}
+
+func TestFlagOffAddingADatabaseNeverReadsOrRecordsAReservation(t *testing.T) {
+	store := testStore(t)
+	store.SetPlanBudget(gateOf(1, 1, 1, 1, false))
+	org := orgOf(t, store, "flagoffadd")
+	setTierRow(t, store, domain.Free, "lots", "plenty", "much", 1)
+	empty := instanceRow("proj-off-add", org)
+	empty.NoDatabase = true
+	if err := store.Create(empty); err != nil {
+		t.Fatal(err)
+	}
+	empty.StorageSize = "5Gi"
+	if err := store.RecordDatabaseChoices(empty, "ACTIVE"); err != nil {
+		t.Fatalf("flag off: %v", err)
+	}
+	if _, copies := reservedOf(t, store, "proj-off-add"); copies != 0 {
+		t.Fatalf("flag off records nothing: %d", copies)
+	}
+}
+
+func TestFlagOffResizeFunctionsAndBackfillTouchNothing(t *testing.T) {
+	store := testStore(t)
+	store.SetPlanBudget(gateOf(1, 1, 1, 1, false))
+	org := orgOf(t, store, "flagoffrest")
+	newDatabase(t, store, "proj-off-rest", org)
+	ctx := context.Background()
+	previous, err := store.ReserveDatabaseSize(ctx, "proj-off-rest", planbudget.Reservation{PerCopy: planbudget.Size{CPUMilli: 9000}, Copies: 3})
+	if err != nil || previous != (planbudget.Reservation{}) {
+		t.Fatalf("%+v %v", previous, err)
+	}
+	if err := store.RestoreDatabaseSize(ctx, "proj-off-rest", planbudget.Reservation{PerCopy: planbudget.Size{CPUMilli: 9000}, Copies: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureFunctionsRuntime(ctx, "proj-off-rest"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkFunctionsRuntimes(ctx, []string{"proj-off-rest"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, failed, err := store.BackfillReservations(ctx); n != 0 || len(failed) != 0 || err != nil {
+		t.Fatalf("flag off backfills nothing: %d %v %v", n, failed, err)
+	}
+	var cpu, copies int64
+	var runtime bool
+	if err := store.db.QueryRow(`SELECT reserved_cpu_milli, reserved_copies, has_functions_runtime FROM database_instances WHERE project_id = 'proj-off-rest'`).Scan(&cpu, &copies, &runtime); err != nil {
+		t.Fatal(err)
+	}
+	if cpu != 0 || copies != 0 || runtime {
+		t.Fatalf("flag off wrote %d %d %v", cpu, copies, runtime)
+	}
+}
+
+// One database the backfill cannot read does not stop the boot, and fails closed for its org only.
+func TestTheBackfillSkipsABadRowAndRefusesGrowthInItsOrgOnly(t *testing.T) {
+	store := testStore(t)
+	store.SetPlanBudget(gateOf(100000, 64*1024, 500, 50, true))
+	bad, good := orgOf(t, store, "backbad"), orgOf(t, store, "backgood")
+	newDatabase(t, store, "proj-bad", bad)
+	newDatabase(t, store, "proj-good", good)
+	if _, err := store.db.Exec(`UPDATE database_instances SET reserved_copies = 0, reserved_cpu_milli = 0, reserved_memory_bytes = 0, reserved_disk_bytes = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE database_instances SET tier = 'MYSTERY' WHERE project_id = 'proj-bad'`); err != nil {
+		t.Fatal(err)
+	}
+	n, failed, err := store.BackfillReservations(context.Background())
+	if err != nil || n != 1 || len(failed) != 1 || failed[0].ProjectID != "proj-bad" {
+		t.Fatalf("recorded %d, failed %+v, err %v", n, failed, err)
+	}
+	if err := store.Create(instanceRow("proj-bad-two", bad)); !errors.Is(err, planbudget.ErrUnrecordedSize) {
+		t.Fatalf("the org holding an unreadable database must not grow: %v", err)
+	}
+	if err := store.Create(instanceRow("proj-good-two", good)); err != nil {
+		t.Fatalf("another org is unaffected: %v", err)
+	}
+	if err := store.UpdateStorageSizeIfStatus("proj-bad", "1Gi", "ACTIVE"); err != nil {
+		t.Fatalf("a shrink in that org still passes: %v", err)
+	}
+}
+
+// A failed resize puts the old size back even when other growth has taken the room since.
+func TestAPutBackIsNeverRefused(t *testing.T) {
+	store, org := budgetOrg(t, 1200)
+	ctx := context.Background()
+	newDatabase(t, store, "proj-pb-a", org)
+	newDatabase(t, store, "proj-pb-b", org)
+	small := planbudget.Reservation{PerCopy: planbudget.Size{CPUMilli: 100, MemoryBytes: 128 << 20, DiskBytes: freeDatabaseDisk}, Copies: 1}
+	previous, err := store.ReserveDatabaseSize(ctx, "proj-pb-b", small)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newDatabase(t, store, "proj-pb-c", org)
+	if err := store.RestoreDatabaseSize(ctx, "proj-pb-b", previous); err != nil {
+		t.Fatalf("the cluster still runs at the old size, so the record must go back: %v", err)
+	}
+	var cpu int64
+	if err := store.db.QueryRow(`SELECT reserved_cpu_milli FROM database_instances WHERE project_id = 'proj-pb-b'`).Scan(&cpu); err != nil || cpu != freeDatabaseCPU {
+		t.Fatalf("restored cpu %d %v", cpu, err)
+	}
+}
+
+// A tier edit changes what new databases get; running clusters keep their size until a resize,
+// so what they are recorded at must not move either.
+func TestATierEditDoesNotChangeWhatARunningDatabaseHolds(t *testing.T) {
+	store, org := budgetOrg(t, 100000)
+	setTierRow(t, store, domain.Free, "500m", "1Gi", "5Gi", 1)
+	newDatabase(t, store, "proj-te-one", org)
+	before, _ := reservedOf(t, store, "proj-te-one")
+	setTierRow(t, store, domain.Free, "2", "8Gi", "50Gi", 1)
+	if after, _ := reservedOf(t, store, "proj-te-one"); after != before || before != 1<<30 {
+		t.Fatalf("recorded %d then %d", before, after)
+	}
+	newDatabase(t, store, "proj-te-two", org)
+	if memory, _ := reservedOf(t, store, "proj-te-two"); memory != 8<<30 {
+		t.Fatalf("a new database takes the edited tier: %d", memory)
 	}
 }

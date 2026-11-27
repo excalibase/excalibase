@@ -121,6 +121,9 @@ func releaseSettledReservation(q execQuerier, inst *domain.DatabaseInstance) err
 
 // admitInsert admits a new row's reservation, writes the row and records what it holds.
 func (s *Store) admitInsert(ctx context.Context, tx *sql.Tx, inst *domain.DatabaseInstance) error {
+	if !s.budget.Active(ctx) {
+		return insertInstance(tx, inst)
+	}
 	perCopy, copies, err := tierReservation(ctx, tx, inst.Tier, inst.StorageSize)
 	if err != nil {
 		return err
@@ -156,6 +159,9 @@ func (s *Store) admitStatusChange(ctx context.Context, tx *sql.Tx, orgID string,
 // cluster is touched. A resize down always passes. See storage.ProjectBudgetStore.
 func (s *Store) ReserveDatabaseSize(ctx context.Context, projectID string, next planbudget.Reservation) (planbudget.Reservation, error) {
 	var previous planbudget.Reservation
+	if !s.budget.Active(ctx) {
+		return previous, nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return previous, fmt.Errorf("begin resize reservation: %w", err)
@@ -195,6 +201,9 @@ func (s *Store) ReserveDatabaseSize(ctx context.Context, projectID string, next 
 // EnsureFunctionsRuntime admits a project's functions runtime the first time it
 // is needed and records that it exists. Calling it again costs nothing.
 func (s *Store) EnsureFunctionsRuntime(ctx context.Context, projectID string) error {
+	if !s.budget.Active(ctx) {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin functions runtime reservation: %w", err)
@@ -224,14 +233,25 @@ func (s *Store) EnsureFunctionsRuntime(ctx context.Context, projectID string) er
 	return tx.Commit()
 }
 
+// BackfillFailure is a database whose size could not be recorded. It stays
+// unrecorded, which refuses growth in its org and nowhere else.
+type BackfillFailure struct {
+	ProjectID string
+	Err       error
+}
+
 // BackfillReservations records the size of every database that has none yet,
-// from the plan it was created under. It writes the platform's own rows only:
-// no cluster, container or workload is read, resized or restarted. It is safe
-// to run on every boot.
-func (s *Store) BackfillReservations(ctx context.Context) (int, error) {
+// from the plan it was created under, and returns how many it recorded and
+// which it could not. It writes the platform's own rows only: no cluster,
+// container or workload is read, resized or restarted. It does nothing while
+// the budget is off, and is safe to run on every boot.
+func (s *Store) BackfillReservations(ctx context.Context) (int, []BackfillFailure, error) {
+	if !s.budget.Active(ctx) {
+		return 0, nil, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT project_id, tier, COALESCE(storage_size, '') FROM database_instances WHERE reserved_copies = 0 AND NOT no_database`)
 	if err != nil {
-		return 0, fmt.Errorf("find unrecorded reservations: %w", err)
+		return 0, nil, fmt.Errorf("find unrecorded reservations: %w", err)
 	}
 	type pending struct{ projectID, tier, storage string }
 	var todo []pending
@@ -239,20 +259,21 @@ func (s *Store) BackfillReservations(ctx context.Context) (int, error) {
 		var p pending
 		if err := rows.Scan(&p.projectID, &p.tier, &p.storage); err != nil {
 			rows.Close()
-			return 0, err
+			return 0, nil, err
 		}
 		todo = append(todo, p)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
+	var failed []BackfillFailure
 	for _, p := range todo {
 		if err := s.backfillOne(ctx, p.projectID, domain.TierType(p.tier), p.storage); err != nil {
-			return 0, err
+			failed = append(failed, BackfillFailure{ProjectID: p.projectID, Err: err})
 		}
 	}
-	return len(todo), nil
+	return len(todo) - len(failed), failed, nil
 }
 
 func (s *Store) backfillOne(ctx context.Context, projectID string, tier domain.TierType, storageSize string) error {
@@ -266,9 +287,37 @@ func (s *Store) backfillOne(ctx context.Context, projectID string, tier domain.T
 	return err
 }
 
+// RestoreDatabaseSize puts a recorded reservation back after a resize that
+// failed on the cluster. It is not admitted: the database is still running at
+// that size, so refusing it would leave the record smaller than the cluster.
+func (s *Store) RestoreDatabaseSize(ctx context.Context, projectID string, previous planbudget.Reservation) error {
+	if !s.budget.Active(ctx) {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin restore of reservation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+	orgID, err := projectOrg(tx, projectID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, planbudget.OrgLockSpace, orgID); err != nil {
+		return fmt.Errorf("lock org budget: %w", err)
+	}
+	if err := recordReservation(ctx, tx, projectID, previous.PerCopy, previous.Copies); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // MarkFunctionsRuntimes records that these projects already run functions, so
 // their runtimes count from the start. Like the backfill it only writes rows.
 func (s *Store) MarkFunctionsRuntimes(ctx context.Context, projectIDs []string) error {
+	if !s.budget.Active(ctx) {
+		return nil
+	}
 	for _, id := range projectIDs {
 		if _, err := s.db.ExecContext(ctx, `UPDATE database_instances SET has_functions_runtime = TRUE WHERE project_id = $1 AND NOT has_functions_runtime`, id); err != nil {
 			return fmt.Errorf("mark functions runtime of %s: %w", id, err)

@@ -85,6 +85,9 @@ func (s *Store) explainNoDatabaseWrite(res rowsAffecter, projectID, expected str
 // the size it reserves. A project that already holds a reservation (a retry of
 // the same add) is not charged twice.
 func (s *Store) admitAddedDatabase(ctx context.Context, tx *sql.Tx, inst *domain.DatabaseInstance, status string) (planbudget.Size, int64, error) {
+	if !s.budget.Active(ctx) {
+		return planbudget.Size{}, 0, nil
+	}
 	orgID, err := projectOrg(tx, inst.ProjectID)
 	if err != nil {
 		return planbudget.Size{}, 0, err

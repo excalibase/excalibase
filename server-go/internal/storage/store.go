@@ -119,6 +119,8 @@ type ProjectDiskStore interface {
 type ProjectBudgetStore interface {
 	// It returns what the database held before, so a change that fails afterwards can put it back.
 	ReserveDatabaseSize(ctx context.Context, projectID string, next planbudget.Reservation) (planbudget.Reservation, error)
+	// RestoreDatabaseSize records a previous size again without admitting it: the cluster still runs at it.
+	RestoreDatabaseSize(ctx context.Context, projectID string, previous planbudget.Reservation) error
 }
 
 // FunctionsRuntimeStore admits a project's functions runtime the first time one

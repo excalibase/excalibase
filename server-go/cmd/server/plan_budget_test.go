@@ -49,3 +49,10 @@ func TestFreeHoldsOneProjectOnlyWhileTheBudgetIsOn(t *testing.T) {
 		t.Fatal("enterprise has no budget number")
 	}
 }
+
+func TestASelfHostedInstallKeepsNoProjectCapEvenWithTheFlagOn(t *testing.T) {
+	cap := planProjectCap(budgetConfig("selfhosted", features.PlanBudget))
+	if _, ok := cap(context.Background(), domain.Free); ok {
+		t.Fatal("self-hosters are unlimited: the budget's project cap must not apply")
+	}
+}
