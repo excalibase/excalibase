@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
@@ -154,4 +155,37 @@ func TestRequireNodeCount_SingleHostIsOneNode(t *testing.T) {
 	if err := svc.RequireNodeCount(context.Background(), domain.Free, 1); err != nil {
 		t.Fatalf("one copy on one host: %v", err)
 	}
+}
+
+// A plan is a CPU/RAM budget, not a topology: with the plan budget on, no tier is refused for its node count.
+func TestPlanBudgetOnDropsTheNodeCountRule(t *testing.T) {
+	ctx := context.Background()
+	standard, _ := config.GetTierConfig(domain.Standard)
+	for name, setup := range map[string]func(*ProvisioningService, *k8s.MockClient){
+		"two nodes":   func(_ *ProvisioningService, m *k8s.MockClient) { m.Capacity = roomyNodes(2) },
+		"unreadable":  func(_ *ProvisioningService, m *k8s.MockClient) { m.CapacityError = errors.New("down") },
+		"single host": func(s *ProvisioningService, _ *k8s.MockClient) { s.k8sClient = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _, mock := setupProvisioningTest(t)
+			setup(svc, mock)
+			svc.SetFeatures(features.NewStatic(features.PlanBudget))
+			if err := svc.RequireNodeCount(ctx, domain.Standard, 3); err != nil {
+				t.Errorf("RequireNodeCount: %v", err)
+			}
+			if err := svc.RequireNodesForTier(ctx, domain.Standard); err != nil {
+				t.Errorf("RequireNodesForTier: %v", err)
+			}
+			if err := svc.RequireNodeSpread(ctx, domain.Standard, standard); err != nil {
+				t.Errorf("RequireNodeSpread: %v", err)
+			}
+		})
+	}
+}
+
+func TestPlanBudgetOffKeepsTheNodeCountRule(t *testing.T) {
+	svc, _, mock := setupProvisioningTest(t)
+	mock.Capacity = roomyNodes(2)
+	svc.SetFeatures(features.NewStatic())
+	assertTooFewNodes(t, svc.RequireNodeCount(context.Background(), domain.Standard, 3), 3, 2)
 }

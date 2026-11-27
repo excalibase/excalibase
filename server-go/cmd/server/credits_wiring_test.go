@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/credits"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
+	"github.com/excalibase/provisioning-poc/internal/planbudget"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -245,4 +246,14 @@ func TestCreditSignupSkipsTheGrantForSomeoneWhoAlreadyHoldsAClaim(t *testing.T) 
 			t.Errorf("state %s: %d grants, want %d", state, ledger.grants, wantGrants)
 		}
 	}
+}
+
+type matrixBudgetSource struct{}
+
+func (matrixBudgetSource) PlanBudgetReport(context.Context, string) (planbudget.Report, error) {
+	return planbudget.Report{Services: []planbudget.ServiceUse{}}, nil
+}
+
+func matrixPlanBudgetHandler(members *fakePlatform) *handler.PlanBudgetHandler {
+	return handler.NewPlanBudgetHandler(matrixBudgetSource{}, members)
 }

@@ -710,3 +710,44 @@ func TestAFunctionsRuntimeDeployedWhileTheFlagIsOffStillCountsWhenItComesOn(t *t
 		t.Fatalf("recorded %v %v", runtime, err)
 	}
 }
+
+// The report lists what each service holds, and what is left of the plan, in the org's own numbers.
+func TestTheReportListsEachServiceAndWhatIsLeft(t *testing.T) {
+	store, org := budgetOrg(t, 2000)
+	newDatabase(t, store, "proj-r-one", org)
+	if err := store.EnsureFunctionsRuntime(context.Background(), "proj-r-one"); err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.PlanBudgetReport(context.Background(), org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Enabled || report.Budget.CPUMilli != 2000 {
+		t.Fatalf("the plan allows 2 vCPU: %+v", report)
+	}
+	kinds := map[string]bool{}
+	var sum planbudget.Size
+	for _, service := range report.Services {
+		kinds[service.Kind] = true
+		sum = sum.Add(service.Size)
+		if service.ProjectID != "proj-r-one" {
+			t.Errorf("service %+v belongs to the one project", service)
+		}
+	}
+	if !kinds["database"] || !kinds["functions"] {
+		t.Fatalf("a database and its functions runtime: %+v", report.Services)
+	}
+	if sum != report.Used || report.Left != report.Budget.Sub(report.Used) {
+		t.Fatalf("used %+v must be the sum of the services %+v, left the rest of the budget %+v", report.Used, sum, report.Left)
+	}
+}
+
+func TestTheReportIsOffWhileTheFlagIsOff(t *testing.T) {
+	store := testStore(t)
+	store.SetPlanBudget(gateOf(1000, 1024, 10, 5, false))
+	org := orgOf(t, store, "reportoff")
+	report, err := store.PlanBudgetReport(context.Background(), org)
+	if err != nil || report.Enabled || len(report.Services) != 0 {
+		t.Fatalf("flag off reads nothing: %+v %v", report, err)
+	}
+}

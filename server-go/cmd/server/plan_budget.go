@@ -9,6 +9,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/planbudget"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -94,5 +95,21 @@ func recordFunctionRuntimes(cfg config.AppConfig, pg *pgstore.Store, functions e
 	}
 	if err != nil {
 		failBackfill(cfg, "functions runtimes", err)
+	}
+}
+
+// newPlanBudgetHandler serves the plan budget to an org's members; nil when the store cannot report it.
+func newPlanBudgetHandler(sqlStore storage.PlatformStore) *handler.PlanBudgetHandler {
+	source, ok := sqlStore.(handler.PlanBudgetSource)
+	if !ok {
+		return nil
+	}
+	return handler.NewPlanBudgetHandler(source, sqlStore)
+}
+
+// mountPlanBudget adds the budget read to the org routes, behind the planbudget flag.
+func mountPlanBudget(d *handlerDeps) {
+	if d.planBudgetHandler != nil && d.orgHandler != nil {
+		d.orgHandler.SetPlanBudget(d.planBudgetHandler, features.Require(d.features, features.PlanBudget))
 	}
 }

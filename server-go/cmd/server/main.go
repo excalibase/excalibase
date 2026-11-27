@@ -1197,6 +1197,8 @@ type handlerDeps struct {
 	orgHandler         *handler.OrgHandler
 	// creditsHandler serves credits (EXC-866); nil when the store keeps no ledger.
 	creditsHandler *handler.CreditsHandler
+	// planBudgetHandler shows an org its plan budget (EXC-901); nil when the store cannot report it.
+	planBudgetHandler *handler.PlanBudgetHandler
 	// credits is the credit service the sweeper and the verification paths use.
 	credits         *credits.Service
 	vaultHandler    *handler.VaultHandler
@@ -2069,6 +2071,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		orgHandler:            newOrgHandler(sqlStore, store, provSvc, planChanged),
 		credits:               creditsService,
 		creditsHandler:        newCreditsHandler(cfg, creditsService, sqlStore),
+		planBudgetHandler:     newPlanBudgetHandler(sqlStore),
 		vaultHandler:          vaultHandler,
 		schemaHandler:         schemaHandler,
 		tableImportHandler:    newTableImportHandler(cfg, schemaHandler, store, sqlStore),
@@ -2550,6 +2553,7 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 // mountOrgAndAdminRoutes mounts /api/orgs and /api/admin.
 func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 	creditsGate := mountCredits(d)
+	mountPlanBudget(d)
 	if d.creditsHandler != nil {
 		r.Route("/api/credits", func(r chi.Router) {
 			r.Use(auth.RequireAuth)

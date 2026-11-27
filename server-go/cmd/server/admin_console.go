@@ -25,6 +25,7 @@ func buildAdminConsole(cfg config.AppConfig, sqlStore storage.PlatformStore, run
 	console := adminconsole.NewConsole(queries, apphost.NewPostgresAppStore(sqlStore.DB()), runtime)
 	console.SetAudit(sqlStore)
 	console.SetCreditBalances(creditBalancesWhenOn(cfg.Features(), queries.CreditBalances))
+	console.SetPlanBudgets(planBudgetsWhenOn(sqlStore))
 	suspensions := adminconsole.NewSuspensionService(queries, apps, sqlStore)
 	suspensions.SetNotifier(suspensionNotifier(cfg, mail, backups), func(ctx context.Context) bool {
 		return features.Enabled(ctx, cfg.Features(), features.SuspensionEmails)
@@ -74,5 +75,31 @@ func creditBalancesWhenOn(flags features.Flags, read adminconsole.CreditBalances
 			return nil, nil
 		}
 		return read(ctx, orgIDs)
+	}
+}
+
+// planBudgetsWhenOn answers the orgs table's budget column from the store's budget report;
+// the report is empty while the budget is off, so the column is then too.
+func planBudgetsWhenOn(sqlStore storage.PlatformStore) adminconsole.PlanBudgets {
+	source, ok := sqlStore.(handler.PlanBudgetSource)
+	if !ok {
+		return nil
+	}
+	return func(ctx context.Context, orgIDs []string) (map[string]adminconsole.OrgBudget, error) {
+		budgets := make(map[string]adminconsole.OrgBudget, len(orgIDs))
+		for _, orgID := range orgIDs {
+			report, err := source.PlanBudgetReport(ctx, orgID)
+			if err != nil {
+				return nil, err
+			}
+			if !report.Enabled {
+				return nil, nil
+			}
+			budgets[orgID] = adminconsole.OrgBudget{
+				CPUMilliUsed: report.Used.CPUMilli, CPUMilliLimit: report.Budget.CPUMilli,
+				MemoryBytesUsed: report.Used.MemoryBytes, MemoryBytesLimit: report.Budget.MemoryBytes,
+			}
+		}
+		return budgets, nil
 	}
 }

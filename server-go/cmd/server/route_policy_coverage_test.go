@@ -265,6 +265,7 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 	}
 	deps.orgHandler = newOrgHandler2(platform.Orgs, users, instances)
 	deps.creditsHandler = matrixCreditsHandler(platform)
+	deps.planBudgetHandler = matrixPlanBudgetHandler(platform)
 	deps.authHandler = handler.NewAuthHandler(users, tokens)
 	deps.svcAcctHandler = handler.NewServiceAccountHandler(users, tokens, nil)
 	deps.realtimeHandler = handler.NewRealtimeHandler(instances, platform.Orgs, nil)

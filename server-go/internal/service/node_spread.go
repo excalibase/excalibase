@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -79,9 +80,10 @@ func (s *ProvisioningService) RequireNodeSpread(ctx context.Context, tierType do
 
 // usableNodes lists the untainted schedulable nodes when the tier has
 // instances to spread, refusing when there are fewer than instances. It
-// returns nothing, and no error, when there is nothing to spread.
+// returns nothing, and no error, when there is nothing to spread, and always
+// while the plan budget is on: a plan is then a CPU/RAM budget, not a topology.
 func (s *ProvisioningService) usableNodes(ctx context.Context, tierType domain.TierType, instances int) ([]k8s.NodeCapacity, error) {
-	if instances <= 1 {
+	if instances <= 1 || features.Enabled(ctx, s.flags, features.PlanBudget) {
 		return nil, nil
 	}
 	if s.k8sClient == nil {

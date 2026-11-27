@@ -72,6 +72,7 @@ type Console struct {
 	objectName func(appName string) string
 	audit      AuditWriter
 	balances   CreditBalances
+	budgets    PlanBudgets
 	now        func() time.Time
 }
 
@@ -85,6 +86,20 @@ type CreditBalances func(ctx context.Context, orgIDs []string) (map[string]int64
 
 // SetCreditBalances wires the balance column of the orgs table.
 func (c *Console) SetCreditBalances(balances CreditBalances) { c.balances = balances }
+
+// OrgBudget is how much of its plan an org holds, for the orgs table.
+type OrgBudget struct {
+	CPUMilliUsed     int64 `json:"cpuMilliUsed"`
+	CPUMilliLimit    int64 `json:"cpuMilliLimit"`
+	MemoryBytesUsed  int64 `json:"memoryBytesUsed"`
+	MemoryBytesLimit int64 `json:"memoryBytesLimit"`
+}
+
+// PlanBudgets reads the plan budget of the given orgs. It answers nothing while the budget is off.
+type PlanBudgets func(ctx context.Context, orgIDs []string) (map[string]OrgBudget, error)
+
+// SetPlanBudgets wires the budget column of the orgs table.
+func (c *Console) SetPlanBudgets(budgets PlanBudgets) { c.budgets = budgets }
 
 // SetTempMailCheck wires the disposable-address list; without it the flag stays unknown.
 func (c *Console) SetTempMailCheck(check func(email string) bool) { c.tempMail = check }
@@ -141,6 +156,7 @@ func (c *Console) Orgs(ctx context.Context, query OrgQuery) (Page[OrgRow], error
 		return Page[OrgRow]{}, fmt.Errorf("list orgs: %w", err)
 	}
 	c.addCreditBalances(ctx, page.Items)
+	c.addPlanBudgets(ctx, page.Items)
 	return page, nil
 }
 
@@ -264,6 +280,27 @@ func (c *Console) addCreditBalances(ctx context.Context, rows []OrgRow) {
 	for i := range rows {
 		if micros, ok := balances[rows[i].ID]; ok {
 			rows[i].CreditMicros = &micros
+		}
+	}
+}
+
+// addPlanBudgets fills the budget column. A failed lookup leaves it empty, like the credit column.
+func (c *Console) addPlanBudgets(ctx context.Context, rows []OrgRow) {
+	if c.budgets == nil || len(rows) == 0 {
+		return
+	}
+	ids := make([]string, len(rows))
+	for i, row := range rows {
+		ids[i] = row.ID
+	}
+	budgets, err := c.budgets(ctx, ids)
+	if err != nil {
+		log.Printf("WARN: admin console: plan budgets: %v", err)
+		return
+	}
+	for i := range rows {
+		if budget, ok := budgets[rows[i].ID]; ok {
+			rows[i].Budget = &budget
 		}
 	}
 }

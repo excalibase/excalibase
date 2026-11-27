@@ -154,6 +154,7 @@ var orgRows = []Row{
 	{Methods: get, Pattern: "/api/orgs/{orgId}/", Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership, Discloses: NoSecret},
 	{Methods: patch, Pattern: "/api/orgs/{orgId}/", Trust: trustNone, Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership, Unrestricted: true, MinRole: roleAdmin},
 	{Methods: del, Pattern: "/api/orgs/{orgId}/", Trust: trustNone, Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership, Unrestricted: true, MinRole: roleOwner, Note: "cloud only"},
+	{Methods: get, Pattern: "/api/orgs/{orgId}/plan-budget", Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership, Discloses: NoSecret, Note: "the plan's CPU/RAM/disk budget, what each service holds and what is left; any member; unmounted while planbudget is off (EXC-901)"},
 	{Methods: get, Pattern: "/api/orgs/{orgId}/credits/", Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership, Discloses: NoSecret, Note: "balance, lots and recent entries; any member; unmounted while credits are off (EXC-866)"},
 	{Methods: get, Pattern: "/api/orgs/{orgId}/credits/entries", Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership, Discloses: NoSecret, Note: "paged ledger; any member; unmounted while credits are off"},
 	{Methods: get, Pattern: "/api/orgs/{orgId}/credits/statement", Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership, Discloses: NoSecret, Note: "one UTC month as JSON or CSV; any member; unmounted while credits are off"},

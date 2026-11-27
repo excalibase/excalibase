@@ -338,3 +338,9 @@ func (s *Store) admitDiskChange(ctx context.Context, tx *sql.Tx, projectID, size
 
 // BudgetActive reports whether the budget admits anything now. See storage.ProjectBudgetStore.
 func (s *Store) BudgetActive(ctx context.Context) bool { return s.budget.Active(ctx) }
+
+// PlanBudgetReport is the org's plan budget for display: what each service
+// holds and what is left. Empty while the budget is off.
+func (s *Store) PlanBudgetReport(ctx context.Context, orgID string) (planbudget.Report, error) {
+	return s.budget.Report(ctx, s.db, orgID)
+}
