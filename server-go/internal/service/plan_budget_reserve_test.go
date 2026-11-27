@@ -13,8 +13,8 @@ import (
 type recordingReserver struct {
 	asked    []planbudget.Reservation
 	restored []planbudget.Reservation
-	held  planbudget.Reservation
-	err   error
+	held     planbudget.Reservation
+	err      error
 }
 
 func (r *recordingReserver) ReserveDatabaseSize(_ context.Context, _ string, next planbudget.Reservation) (planbudget.Reservation, error) {
