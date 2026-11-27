@@ -56,9 +56,9 @@ interface ConfigResponse {
 }
 
 // Browser tests start the dev server with VITE_FORCE_V2=1 to run the whole suite on
-// the new layout; no build for users sets it.
+// the new layout; a production build ignores it, so it can never ship on.
 function withForcedStudioV2(config: ConfigResponse): ConfigResponse {
-  if (import.meta.env.VITE_FORCE_V2 !== '1') return config;
+  if (!import.meta.env.DEV || import.meta.env.VITE_FORCE_V2 !== '1') return config;
   return { ...config, features: { ...config.features, studio_v2: true } };
 }
 

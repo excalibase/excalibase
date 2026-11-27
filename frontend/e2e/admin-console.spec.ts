@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { loginAs, mockCloudMode } from './helpers';
 
+// A cold dev server compiles on the first visit.
+const FIRST_RENDER = 20_000;
 const ADMIN = { id: 'boss', username: 'boss', email: 'boss@test.com', role: 'platform_admin' };
 
 const user = (over: object) => ({
@@ -51,7 +53,7 @@ test.describe('admin console', () => {
     const posts = await stubConsole(page);
     await page.goto('/admin');
 
-    await expect(page.getByText('12 sign-ups in the last 24 h')).toBeVisible();
+    await expect(page.getByText('12 sign-ups in the last 24 h')).toBeVisible({ timeout: FIRST_RENDER });
 
     await page.getByRole('tab', { name: 'Users' }).click();
     const users = page.getByTestId('users-table');

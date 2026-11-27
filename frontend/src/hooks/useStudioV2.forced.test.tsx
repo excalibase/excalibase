@@ -43,4 +43,12 @@ describe('useStudioV2 with VITE_FORCE_V2', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.enabled).toBe(false);
   });
+
+  test('stays off in a production build even when the switch is 1', async () => {
+    vi.stubEnv('DEV', false);
+    vi.stubEnv('VITE_FORCE_V2', '1');
+    const { result } = run({ deploymentMode: 'cloud', features: { studio_v2: false } });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.enabled).toBe(false);
+  });
 });
