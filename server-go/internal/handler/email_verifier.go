@@ -29,6 +29,8 @@ type EmailVerifier struct {
 	studioURL   string
 	productName string
 	now         func() time.Time
+	// creditSignup grants the sign-up credit once an address is proven (EXC-866); nil when credits are not wired.
+	creditSignup CreditSignup
 
 	noticeMu    sync.Mutex
 	noticeSent  map[string]time.Time
@@ -150,7 +152,11 @@ func (v *EmailVerifier) Confirm(ctx context.Context, token string) (string, erro
 	if v == nil || v.store == nil {
 		return "", ErrVerificationUnavailable
 	}
-	return v.store.ConsumeEmailVerification(ctx, hashToken(token), v.now())
+	userID, err := v.store.ConsumeEmailVerification(ctx, hashToken(token), v.now())
+	if err == nil {
+		v.granted(ctx, userID)
+	}
+	return userID, err
 }
 
 // MarkVerified records that the account's address was proven another way.
@@ -158,5 +164,9 @@ func (v *EmailVerifier) MarkVerified(ctx context.Context, userID string) error {
 	if v == nil || v.store == nil {
 		return ErrVerificationUnavailable
 	}
-	return v.store.MarkEmailVerified(ctx, userID, v.now())
+	if err := v.store.MarkEmailVerified(ctx, userID, v.now()); err != nil {
+		return err
+	}
+	v.granted(ctx, userID)
+	return nil
 }

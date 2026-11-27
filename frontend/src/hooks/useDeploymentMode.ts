@@ -51,6 +51,8 @@ interface ConfigResponse {
   // Git builds of sites are switched on (EXC-354); single-host builds only with FEATURE_SINGLEHOSTBUILDS (EXC-671), else refuses by name.
   siteGitBuilds?: boolean;
   features?: Partial<Record<Feature, boolean>>;
+  // The credit terms a sign-up can accept; present only while credits are on (EXC-866).
+  credits?: { termsVersion: string; termsUrl?: string };
   // The public API base the SDK, REST and GraphQL calls go to.
   apiUrl?: string;
   // Where the operator console is also served (EXC-757); absent when it is not.
@@ -112,6 +114,12 @@ export function useSiteGitBuildsEnabled(): boolean {
 export function useCustomDomainsEnabled(): boolean {
   const { data } = useStudioConfig();
   return data?.customDomains === true;
+}
+
+// Undefined unless credits are on, so the sign-up form shows no credit box on installs without them.
+export function useCreditTerms(): { termsVersion: string; termsUrl?: string } | undefined {
+  const { data } = useStudioConfig();
+  return data?.credits;
 }
 
 // Off until the server says the feature is on, so Studio never shows a

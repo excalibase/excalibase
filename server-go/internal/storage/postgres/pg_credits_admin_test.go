@@ -149,3 +149,16 @@ func TestAdminReplayWithAnotherReasonOrExpiryIsAConflict(t *testing.T) {
 		t.Fatalf("no expiry: %v", err)
 	}
 }
+
+func TestAdminConsoleReadsCreditBalancesForTheOrgsAsked(t *testing.T) {
+	store := testStore(t)
+	fundOrg(t, store, "org-cb1", "a", 700, nil)
+	fundOrg(t, store, "org-cb2", "b", 300, nil)
+	balances, err := NewAdminConsole(store.db).CreditBalances(context.Background(), []string{"org-cb1", "org-none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(balances) != 1 || balances["org-cb1"] != 700 {
+		t.Fatalf("%v", balances)
+	}
+}

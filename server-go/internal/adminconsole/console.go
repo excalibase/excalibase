@@ -71,12 +71,20 @@ type Console struct {
 	tempMail   func(email string) bool
 	objectName func(appName string) string
 	audit      AuditWriter
+	balances   CreditBalances
 	now        func() time.Time
 }
 
 func NewConsole(reader Reader, apps AppLister, probe AppProbe) *Console {
 	return &Console{reader: reader, apps: apps, probe: probe, objectName: k8s.AppObjectName, now: time.Now}
 }
+
+// CreditBalances reads the credit balance of the given orgs; an org with no account is left out.
+// It answers nothing while credits are off.
+type CreditBalances func(ctx context.Context, orgIDs []string) (map[string]int64, error)
+
+// SetCreditBalances wires the balance column of the orgs table.
+func (c *Console) SetCreditBalances(balances CreditBalances) { c.balances = balances }
 
 // SetTempMailCheck wires the disposable-address list; without it the flag stays unknown.
 func (c *Console) SetTempMailCheck(check func(email string) bool) { c.tempMail = check }
@@ -132,6 +140,7 @@ func (c *Console) Orgs(ctx context.Context, query OrgQuery) (Page[OrgRow], error
 	if err != nil {
 		return Page[OrgRow]{}, fmt.Errorf("list orgs: %w", err)
 	}
+	c.addCreditBalances(ctx, page.Items)
 	return page, nil
 }
 
@@ -234,5 +243,27 @@ func (c *Console) recordOpen(ctx context.Context, actor Actor, projectID, reason
 		ProjectID: projectID, Details: reason, IPAddress: actor.IP}
 	if err := c.audit.LogAudit(ctx, entry); err != nil {
 		log.Printf("ERROR: audit %s %s: %v", AuditActionProjectOpen, projectID, err)
+	}
+}
+
+// addCreditBalances fills the balance column. A failed lookup leaves the column empty:
+// the credit is context for the table, not a reason to hide the orgs.
+func (c *Console) addCreditBalances(ctx context.Context, rows []OrgRow) {
+	if c.balances == nil || len(rows) == 0 {
+		return
+	}
+	ids := make([]string, len(rows))
+	for i, row := range rows {
+		ids[i] = row.ID
+	}
+	balances, err := c.balances(ctx, ids)
+	if err != nil {
+		log.Printf("WARN: admin console: credit balances: %v", err)
+		return
+	}
+	for i := range rows {
+		if micros, ok := balances[rows[i].ID]; ok {
+			rows[i].CreditMicros = &micros
+		}
 	}
 }

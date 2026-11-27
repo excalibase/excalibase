@@ -110,6 +110,11 @@ func (s *Service) trialFor(ctx context.Context, userID string) (TrialView, error
 	return view, nil
 }
 
+// TrialState is where the person stands on the sign-up credit.
+func (s *Service) TrialState(ctx context.Context, userID string) (TrialState, error) {
+	return s.ledger.CreditTrialState(ctx, userID)
+}
+
 // Entries pages an org's ledger, newest first.
 func (s *Service) Entries(ctx context.Context, orgID string, beforeID int64, limit int) ([]Entry, error) {
 	if limit <= 0 || limit > maxEntriesPage {
@@ -275,4 +280,14 @@ func (s *Service) sweepIfLeader(ctx context.Context, leader Leader) {
 	if leading {
 		s.Sweep(ctx)
 	}
+}
+
+// RecordTerms stores that the person accepted the current terms, for a person
+// who ticked the box at sign-up. It grants nothing: the grant waits for the
+// verified address.
+func (s *Service) RecordTerms(ctx context.Context, userID, version string) error {
+	if version != s.rules.TermsVersion {
+		return ErrTermsVersion
+	}
+	return s.ledger.AcceptCreditTerms(ctx, userID, version, s.now())
 }

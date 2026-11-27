@@ -86,3 +86,52 @@ func creditsBootCheck(cfg config.AppConfig) error {
 	}
 	return trust.RequireContainerGate(ctx, flags, "credits")
 }
+
+// creditSignup is the credit ledger's side of sign-up and verification; with the flag off it does nothing.
+type creditSignup struct {
+	svc   *credits.Service
+	flags features.Flags
+}
+
+func (c creditSignup) on(ctx context.Context) bool {
+	return c.svc != nil && features.Enabled(ctx, c.flags, features.Credits)
+}
+
+func (c creditSignup) RecordTerms(ctx context.Context, userID, version string) {
+	if !c.on(ctx) {
+		return
+	}
+	if err := c.svc.RecordTerms(ctx, userID, version); err != nil {
+		log.Printf("WARN: credits: record terms for %s: %v", userID, err)
+	}
+}
+
+func (c creditSignup) GrantOnVerified(ctx context.Context, userID string) {
+	if !c.on(ctx) {
+		return
+	}
+	if c.holdsClaim(ctx, userID) {
+		return
+	}
+	if _, err := c.svc.GrantTrial(ctx, userID); err != nil {
+		log.Printf("WARN: credits: grant on verification for %s: %v", userID, err)
+	}
+}
+
+// holdsClaim says the person already has their one sign-up claim, granted or refused, so a repeat sign-in
+// need not take the grant lock. A read that fails falls through to the grant, which decides for itself.
+func (c creditSignup) holdsClaim(ctx context.Context, userID string) bool {
+	state, err := c.svc.TrialState(ctx, userID)
+	return err == nil && (state.State == "granted" || state.State == "refused")
+}
+
+// wireCreditSignup connects sign-up and every verification path to the ledger.
+func wireCreditSignup(cfg config.AppConfig, svc *credits.Service, authHandler *handler.AuthHandler, verifier *handler.EmailVerifier) {
+	signup := creditSignup{svc: svc, flags: cfg.Features()}
+	if authHandler != nil {
+		authHandler.SetCreditSignup(signup)
+	}
+	if verifier != nil {
+		verifier.SetCreditSignup(signup)
+	}
+}

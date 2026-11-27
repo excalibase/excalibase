@@ -36,6 +36,8 @@ export interface ConsoleOrg {
   cpuCores: number;
   memoryMb: number;
   createdAt?: string;
+  // The org's credit balance in micro-dollars; absent while credits are off or the org has no account.
+  creditMicros?: number;
 }
 
 export interface Page<T> {

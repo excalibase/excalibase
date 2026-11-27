@@ -1923,6 +1923,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler.SetInviteOnly(cfg.RegistrationMode == "invite")
 	authHandler.SetSetupTokenStore(sqlStore)
 	authHandler.SetEmailVerifier(emailVerifier)
+	creditsService := buildCreditsService(cfg, sqlStore)
+	wireCreditSignup(cfg, creditsService, authHandler, emailVerifier)
 	if cfg.IsCloud() {
 		// Self-hosted keeps its one default org; cloud accounts each get a
 		// personal one when they sign in (EXC-553).
@@ -2020,7 +2022,6 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// ports offline (EXC-845); the database endpoint step joins in runServer.
 	servingGuard := newOrgGuard(store, sqlStore)
 	suspensions.AddServingSteps(service.NewSuspendedSites(sitesSvc, store, servingGuard), service.NewSuspendedWorkloads(appDeploySvc, store, servingGuard))
-	creditsService := buildCreditsService(cfg, sqlStore)
 	oauthHandler, trustVerify := buildStudioOAuthHandlers(cfg, vc, sqlStore, authHandler)
 	return &handlerDeps{
 		orgGuard:              newOrgGuard(store, sqlStore),
@@ -2142,6 +2143,12 @@ type routerStores interface {
 	storage.OrgStore
 }
 
+// creditTermsBody is the terms a sign-up box links and records.
+type creditTermsBody struct {
+	TermsVersion string `json:"termsVersion"`
+	TermsURL     string `json:"termsUrl"`
+}
+
 // serveConfig answers what the studio must know before login: the deployment
 // mode, and whether app hosting is mounted so it never links to a 404.
 func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
@@ -2163,12 +2170,17 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 		AdminHost string `json:"adminHost,omitempty"`
 		// AdminConsole is false when the console is switched off, so Studio hides it.
 		AdminConsole bool `json:"adminConsole"`
+		// Credits is the credit terms Studio's sign-up box asks about; absent while credits are off (EXC-866).
+		Credits *creditTermsBody `json:"credits,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, Sites: cfg.SitesAvailable(),
 			SiteGitBuilds: cfg.SiteGitBuildsOn(),
 			CustomDomains: customDomainsOn(cfg), SiteCustomDomains: cfg.SitesCustomDomainsAvailable(), Features: features.Snapshot(r.Context(), flags),
 			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/"), AdminHost: cfg.AdminHost, AdminConsole: !cfg.AdminConsoleDisabled()}
+		if features.Enabled(r.Context(), flags, features.Credits) {
+			body.Credits = &creditTermsBody{TermsVersion: cfg.Credits.TermsVersion, TermsURL: cfg.Credits.TermsURL}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
 			log.Printf("write /api/config: %v", err)

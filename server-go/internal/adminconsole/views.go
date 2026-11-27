@@ -37,6 +37,8 @@ type OrgRow struct {
 	CPUCores     float64    `json:"cpuCores"`
 	MemoryMB     float64    `json:"memoryMb"`
 	CreatedAt    *time.Time `json:"createdAt,omitempty"`
+	// CreditMicros is the org's credit balance; absent while credits are off or the org has no account.
+	CreditMicros *int64 `json:"creditMicros,omitempty"`
 }
 
 // UserQuery filters the users table. Search matches an email, a domain
