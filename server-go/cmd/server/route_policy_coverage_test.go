@@ -86,13 +86,14 @@ var gateRefusalBodies = map[string]bool{
 	`{"error":"a deploy token may only deploy its own site and read its deploys"}`: true,
 	`{"error":"a metrics key may only read its own project's metrics"}`:            true,
 	// Refusals the handlers write themselves, in their own words.
-	`{"error":"org not found","status":404}`:                                                    true,
-	`{"error":"insufficient permissions","status":403}`:                                         true,
-	`{"error":"only org owner can delete","status":403}`:                                        true,
-	`{"error":"unauthorized","status":401}`:                                                     true,
-	`{"error":"auth required","status":401}`:                                                    true,
-	`{"error":"internal route not configured","status":503}`:                                    true,
-	`{"error":"the admin console needs a signed-in session, not an access token","status":403}`: true,
+	`{"error":"org not found","status":404}`:                                                             true,
+	`{"error":"insufficient permissions","status":403}`:                                                  true,
+	`{"error":"only org owner can delete","status":403}`:                                                 true,
+	`{"error":"unauthorized","status":401}`:                                                              true,
+	`{"error":"auth required","status":401}`:                                                             true,
+	`{"error":"internal route not configured","status":503}`:                                             true,
+	`{"error":"the admin console needs a signed-in session, not an access token","status":403}`:          true,
+	`{"error":"accepting the credit terms needs a signed-in session, not an access token","status":403}`: true,
 	// The in-cluster-only gate answers like an unmounted route.
 	`404 page not found`: true,
 	// The end-user function gate: no studio credential is an end-user JWT.
@@ -263,6 +264,7 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 		users.Add(&domain.User{ID: id, Role: u.Role, Active: true})
 	}
 	deps.orgHandler = newOrgHandler2(platform.Orgs, users, instances)
+	deps.creditsHandler = matrixCreditsHandler(platform)
 	deps.authHandler = handler.NewAuthHandler(users, tokens)
 	deps.svcAcctHandler = handler.NewServiceAccountHandler(users, tokens, nil)
 	deps.realtimeHandler = handler.NewRealtimeHandler(instances, platform.Orgs, nil)

@@ -12,6 +12,7 @@ import "testing"
 // platform data takes a Permission instead.
 var ownerlessSessionRoutes = map[string]string{
 	"POST /api/email/verify/send":   "mails the caller's own verification flow",
+	"POST /api/credits/terms":       "the caller accepts the credit terms for themself",
 	"GET /api/tiers/":               "tier specs for the provision page",
 	"GET /api/postgres/catalog":     "supported PostgreSQL majors",
 	"GET /api/mysql/catalog":        "supported MySQL versions",

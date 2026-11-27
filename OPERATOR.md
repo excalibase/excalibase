@@ -1454,6 +1454,17 @@ project and the background app start refuse a project created by a suspended
 member, so an org in good standing cannot resume such a project until that
 member is unsuspended or the project is recreated.
 
+## Credits (EXC-866)
+
+Off until `FEATURE_CREDITS=true` (Helm `env.FEATURE_CREDITS`, or `.env` on a single host; same on both). `FEATURE_CREDITS=true` refuses to boot unless `FEATURE_LIMITEDTRIAL` is also on, so credit never funds containers for unverified accounts. Off, no credit route is mounted (each answers like an unmounted route), nothing is granted or swept, and Studio shows the Usage page as before. This change builds the ledger, the sign-up credit, admin grants and the balance pages. Nothing meters usage yet, so the balance only moves by grants, adjustments and expiry.
+
+- **Money** is integer micro-dollars in an append-only ledger (`credit_entries`; triggers refuse UPDATE, DELETE and TRUNCATE) split across **lots** that each expire on their own date. Σ lots = balance = Σ entries always. There are no foreign keys to orgs or users, so deleting an org leaves its ledger.
+- **Sign-up credit:** a verified person who accepted the credit terms (Usage & credits page) gets it once, on their one free org. Claims on `user:<id>`, on the exact lower-cased email (no other canonicalisation, so a deleted account's address cannot earn it again) and on each linked `github:`/`google:` subject make it once per person; an identity linked later is claimed too, under the same lock a grant holds. Someone who becomes ineligible (upgraded, suspended, deactivated, no free org, identity claimed) leaves the queue and never holds a place a newcomer is owed. Past the trial cap, people join a first-come queue and are served as trials end. A sweeper runs every minute on the leading replica.
+- **Settings** (all read at boot; a bad value stops the boot): `CREDITS_TRIAL_DOLLARS` (300), `CREDITS_TRIAL_DAYS` (90), `CREDITS_TRIAL_CAP` (40), `CREDITS_ADMIN_GRANT_CAP_DOLLARS` (1000), `CREDITS_TERMS_VERSION` (v1; change it to ask everyone to accept new terms), `CREDITS_TERMS_URL`.
+- **Expiry:** a lot expires only once the org's meter watermark (`credit_meter_watermarks`) has passed its date, so every hour before it is billed to it first. While no meter runs, an org expires by the clock. Once a meter runs (`Rules.Metered`, set by the metering change), an org the meter has not started on keeps its lots until its first watermark.
+- **Admin:** `POST /api/admin/console/orgs/{orgId}/credits` with `{amountMicros, reason, expiresAt?}` and an `Idempotency-Key` header. Session only, `manage_orgs`, reason 8 to 500 characters, at most the cap per action; a negative amount takes credit back and is refused below zero. Its audit row is written in the same transaction as the ledger entry.
+- **Reads:** `GET /api/orgs/{orgId}/credits/` (balance, lots, recent entries), `.../credits/entries`, `.../credits/statement?month=YYYY-MM[&format=csv]`; org members only. Billing runs in UTC; Studio shows local time.
+
 ## Limited trial until verified (EXC-899, in progress)
 
 Off until `FEATURE_LIMITEDTRIAL=true` (Helm `env.FEATURE_LIMITEDTRIAL`, or `.env` on a single host; same on both). With it off every account behaves as it does today and nothing is read.

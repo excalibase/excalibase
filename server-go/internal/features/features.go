@@ -174,6 +174,10 @@ const (
 	// Traffic, Storage) and the read-only routes under /api/admin/analytics
 	// (EXC-898). Staff-only; off: the routes answer 404 and the tabs are absent.
 	AdminAnalytics Feature = "adminanalytics"
+	// Credits is the credit ledger: the sign-up credit, admin grants, the
+	// balance in Studio and the statement (EXC-866). Off: no route, no
+	// sweeper, no grant, and Studio shows today's Usage page.
+	Credits Feature = "credits"
 	// StudioV2 is the cloud-console layout of Studio: new top bar, navigation
 	// and shared tables. Frontend only; the server just reports it (EXC-762).
 	StudioV2 Feature = "studio_v2"
@@ -181,7 +185,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails, SelfHeal, NetMeter, LimitedTrial, BehaviourReview, AdminAnalytics}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails, SelfHeal, NetMeter, LimitedTrial, BehaviourReview, AdminAnalytics, Credits}
 }
 
 type Flags interface {

@@ -342,6 +342,8 @@ type AppConfig struct {
 	SelfHealAlertAfter int
 	// Trust is the limited trial's settings (EXC-899).
 	Trust TrustConfig
+	// Credits is the sign-up credit's settings (EXC-866).
+	Credits CreditsConfig
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -461,52 +463,31 @@ func (c AppConfig) Validate() error {
 	if c.ProvisionerMode == "docker" && c.IsCloud() {
 		return errDockerCloudUnsupported
 	}
-	if err := c.validateAppTmpPercent(); err != nil {
-		return err
+	checks := []func() error{
+		c.validateAppTmpPercent,
+		c.validateTenantStorageClasses,
+		c.validateTenantStorage,
+		c.validateEdge,
+		c.validateFileStorage,
+		c.validateFunctionEgress,
+		c.validateBehaviour,
+		c.validateAppLocalRegistries,
+		c.validateAppBuilds,
+		c.validateAppRegistry,
+		func() error { return validateRequestMetricsTargets(c.RequestMetricsTargets) },
+		c.validateSites,
+		c.validateTrust,
+		c.validateCredits,
+		c.validateSiteGit,
+		c.validateScheduler,
+		c.validateAppRoute,
 	}
-	if err := c.validateTenantStorageClasses(); err != nil {
-		return err
+	for _, check := range checks {
+		if err := check(); err != nil {
+			return err
+		}
 	}
-	if err := c.validateTenantStorage(); err != nil {
-		return err
-	}
-	if err := c.validateEdge(); err != nil {
-		return err
-	}
-	if err := c.validateFileStorage(); err != nil {
-		return err
-	}
-	if err := c.validateFunctionEgress(); err != nil {
-		return err
-	}
-	if err := c.validateBehaviour(); err != nil {
-		return err
-	}
-	if err := c.validateAppLocalRegistries(); err != nil {
-		return err
-	}
-	if err := c.validateAppBuilds(); err != nil {
-		return err
-	}
-	if err := c.validateAppRegistry(); err != nil {
-		return err
-	}
-	if err := validateRequestMetricsTargets(c.RequestMetricsTargets); err != nil {
-		return err
-	}
-	if err := c.validateSites(); err != nil {
-		return err
-	}
-	if err := c.validateTrust(); err != nil {
-		return err
-	}
-	if err := c.validateSiteGit(); err != nil {
-		return err
-	}
-	if err := c.validateScheduler(); err != nil {
-		return err
-	}
-	return c.validateAppRoute()
+	return nil
 }
 
 // validateScheduler refuses a claim lease that can expire while a healthy
@@ -532,6 +513,7 @@ func Load() AppConfig {
 	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
 	cfg.SelfHealAlertAfter = envInt("EXCALIBASE_SELFHEAL_ALERT_AFTER", 5)
 	cfg.Trust = loadTrust()
+	cfg.Credits = loadCredits()
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"

@@ -25,6 +25,8 @@ export interface Backend {
   allowed?: Record<string, unknown>;
   tiers?: unknown[];
   features?: Record<string, boolean>;
+  // The answer of GET /orgs/{id}/credits/; absent answers 500.
+  credits?: unknown;
   config?: Record<string, unknown>;
   failApps?: string[];
   failAllowed?: string[];
@@ -59,6 +61,7 @@ function answer(backend: Backend, url: string) {
   if (url === '/config') return configReply(backend);
   if (url === '/orgs') return reply(ORGS);
   if (url === '/provision') return provisionReply(backend);
+  if (/^\/orgs\/[^/]+\/credits\/$/.test(url)) return backend.credits ? reply(backend.credits) : fail(500, 'boom');
   if (url === '/tiers') return reply(backend.tiers ?? []);
   if (url === '/auth/tokens') return reply(backend.tokens ?? []);
   const scoped = /^\/projects\/([^/]+)\/(.*?)\/?$/.exec(url);
@@ -71,4 +74,12 @@ export function mountWith(backend: Backend, ui: ReactElement, route = '/') {
   vi.mocked(api.get).mockImplementation(((url: string) => answer(backend, url)) as never);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(createElement(QueryClientProvider, { client }, createElement(MemoryRouter, { initialEntries: [route] }, ui)));
+}
+
+export function creditOverview(extra: object = {}) {
+  return {
+    orgId: 'org-1', balanceMicros: 300_000_000, lots: [{ id: 1, kind: 'grant_trial', originalMicros: 300_000_000, remainingMicros: 300_000_000, expiresAt: '2027-02-25T00:00:00Z', createdAt: '2026-11-27T00:00:00Z' }],
+    entries: [{ id: 1, kind: 'grant_trial', amountMicros: 300_000_000, actor: 'system', reason: 'sign-up credit', createdAt: '2026-11-27T00:00:00Z' }],
+    nextExpiry: '2027-02-25T00:00:00Z', trial: { state: 'granted', amountMicros: 300_000_000, days: 90 }, billedIn: 'UTC', termsVersion: 'v1', termsUrl: 'https://example.test/terms', ...extra,
+  };
 }

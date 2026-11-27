@@ -344,6 +344,14 @@ services:
       EXCALIBASE_SELFHEAL_ALERT_AFTER: ${EXCALIBASE_SELFHEAL_ALERT_AFTER:-5}
       # Limited trial until verified (EXC-899); off until chosen. Only the trust state exists so far; the verify flow and the limits come later.
       FEATURE_LIMITEDTRIAL: ${FEATURE_LIMITEDTRIAL:-false}
+      # Credit ledger, the sign-up credit and admin grants (EXC-866); off until chosen.
+      FEATURE_CREDITS: ${FEATURE_CREDITS:-false}
+      CREDITS_TRIAL_DOLLARS: ${CREDITS_TRIAL_DOLLARS:-300}
+      CREDITS_TRIAL_DAYS: ${CREDITS_TRIAL_DAYS:-90}
+      CREDITS_TRIAL_CAP: ${CREDITS_TRIAL_CAP:-40}
+      CREDITS_ADMIN_GRANT_CAP_DOLLARS: ${CREDITS_ADMIN_GRANT_CAP_DOLLARS:-1000}
+      CREDITS_TERMS_VERSION: ${CREDITS_TERMS_VERSION:-v1}
+      CREDITS_TERMS_URL: ${CREDITS_TERMS_URL:-https://excalibase.io/credit-terms}
       TRUST_GH_MIN_AGE_DAYS: ${TRUST_GH_MIN_AGE_DAYS:-90}
       TRUST_GH_MIN_PUBLIC_EVENTS: ${TRUST_GH_MIN_PUBLIC_EVENTS:-5}
       TRUST_GH_ACTIVITY_WINDOW_DAYS: ${TRUST_GH_ACTIVITY_WINDOW_DAYS:-90}

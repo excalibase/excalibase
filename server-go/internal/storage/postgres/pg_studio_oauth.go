@@ -45,8 +45,31 @@ func (s *Store) FindUserByIdentity(ctx context.Context, provider, subject string
 }
 
 func (s *Store) LinkStudioIdentity(ctx context.Context, provider, subject, userID, email string) error {
-	_, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// The lock a grant holds while it reads the person's identities: a link either lands before the grant
+	// reads them, and is claimed by it, or after the grant, and claims itself below.
+	// It is taken even with credits off: a link is rare and brief, and a flag check here would race the flag.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, creditGrantLockSpace); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO studio_identities (provider, subject, user_id, email) VALUES ($1, $2, $3, $4)`,
-		provider, subject, userID, email)
-	return err
+		provider, subject, userID, email); err != nil {
+		return err
+	}
+	// A person who already holds the sign-up credit claims the new identity
+	// too, so it can never earn a second grant on another account. A subject
+	// someone else claimed first is left alone and does not block the link.
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO credit_grant_claims (claim_kind, claim_value, user_id, org_id, entry_id, terms_version, terms_accepted_at)
+		 SELECT $1, $2, user_id, org_id, entry_id, terms_version, terms_accepted_at FROM credit_grant_claims
+		 WHERE claim_kind = 'user' AND claim_value = $3 AND entry_id IS NOT NULL AND $1 IN ('github', 'google')
+		 ON CONFLICT DO NOTHING`, provider, subject, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

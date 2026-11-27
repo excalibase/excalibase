@@ -25,6 +25,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/bootstrap"
 	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/credits"
 	"github.com/excalibase/provisioning-poc/internal/docbrowser"
 	"github.com/excalibase/provisioning-poc/internal/dockerapps"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -157,6 +158,9 @@ func runServer(cfg config.AppConfig) {
 	sqlStore := buildPlatformStore(cfg)
 	defer sqlStore.Close()
 	if err := trustBackfillCheck(cfg, sqlStore); err != nil {
+		log.Fatal(err)
+	}
+	if err := creditsBootCheck(cfg); err != nil {
 		log.Fatal(err)
 	}
 
@@ -353,6 +357,8 @@ func runServer(cfg config.AppConfig) {
 		defer stopRestoreSweeper()
 	}
 
+	stopCredits := startCreditsSweeper(cfg, sqlStore, deps.credits)
+	defer stopCredits()
 	stopAppRollouts := startAppRolloutSweeper(cfg, sqlStore, deps.appDeploySvc)
 	defer stopAppRollouts()
 	stopImageWatcher := startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)
@@ -1186,10 +1192,14 @@ type handlerDeps struct {
 	ssoHandler        *handler.SSOProvidersHandler
 	svcAcctHandler    *handler.ServiceAccountHandler
 	orgHandler        *handler.OrgHandler
-	vaultHandler      *handler.VaultHandler
-	schemaHandler     *handler.SchemaHandler
-	realtimeHandler   *handler.RealtimeHandler
-	fnHandler         *handler.FunctionHandler
+	// creditsHandler serves credits (EXC-866); nil when the store keeps no ledger.
+	creditsHandler *handler.CreditsHandler
+	// credits is the credit service the sweeper and the verification paths use.
+	credits         *credits.Service
+	vaultHandler    *handler.VaultHandler
+	schemaHandler   *handler.SchemaHandler
+	realtimeHandler *handler.RealtimeHandler
+	fnHandler       *handler.FunctionHandler
 	// tableImportHandler loads CSV, XLSX and Google Sheets into a table (EXC-368).
 	tableImportHandler *handler.TableImportHandler
 	// permissionHandler serves permissions, tracked functions and function
@@ -2005,6 +2015,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// ports offline (EXC-845); the database endpoint step joins in runServer.
 	servingGuard := newOrgGuard(store, sqlStore)
 	suspensions.AddServingSteps(service.NewSuspendedSites(sitesSvc, store, servingGuard), service.NewSuspendedWorkloads(appDeploySvc, store, servingGuard))
+	creditsService := buildCreditsService(cfg, sqlStore)
 	return &handlerDeps{
 		orgGuard:              newOrgGuard(store, sqlStore),
 		trustGate:             newTrustGate(cfg, store, sqlStore),
@@ -2040,6 +2051,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		ssoHandler:            buildSSOProvidersHandler(cfg, vc, sqlStore),
 		svcAcctHandler:        handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
 		orgHandler:            newOrgHandler(sqlStore, store, provSvc, planChanged),
+		credits:               creditsService,
+		creditsHandler:        newCreditsHandler(cfg, creditsService, sqlStore),
 		vaultHandler:          vaultHandler,
 		schemaHandler:         schemaHandler,
 		tableImportHandler:    newTableImportHandler(cfg, schemaHandler, store, sqlStore),
@@ -2474,6 +2487,14 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 
 // mountOrgAndAdminRoutes mounts /api/orgs and /api/admin.
 func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
+	creditsGate := mountCredits(d)
+	if d.creditsHandler != nil {
+		r.Route("/api/credits", func(r chi.Router) {
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.LimitBody(custommw.DefaultBodyLimit))
+			d.creditsHandler.PersonRoutes(r, creditsGate)
+		})
+	}
 	r.Route("/api/orgs", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		// Membership and org lifecycle widen who holds authority, so a

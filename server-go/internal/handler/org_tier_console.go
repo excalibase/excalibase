@@ -25,6 +25,9 @@ func (h *OrgHandler) SetAudit(audit auditWriter) { h.audit = audit }
 // does not belong to.
 func (h *OrgHandler) ConsoleRoutes(r chi.Router) {
 	r.With(auth.RequirePermission(auth.PermManageOrgs), requireSession).Patch("/console/orgs/{orgId}/tier", h.SetOrgTier)
+	if h != nil && h.credits != nil {
+		h.credits.ConsoleRoutes(r, h.creditsGate)
+	}
 }
 
 // SetOrgTier changes an org's plan. The reason is required and audited.

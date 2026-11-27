@@ -177,6 +177,19 @@ jobs:
       - name: API upload size on the edge (real Caddy and Studio nginx)
         run: sh deploy/single-host/tests/api-upload-edge.sh docker
 
+  migration-numbers:
+    name: Migration numbers
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Added migrations are numbered above main's highest
+        run: |
+          bash tests/migration-numbers-selftest.sh
+          BASE_REF=origin/${{ github.base_ref }} bash tests/migration-numbers-test.sh
+
   release-tags:
     name: Release tag plan
     needs: changes

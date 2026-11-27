@@ -5,6 +5,7 @@ import { useTiers } from '../../api/tiers';
 import { useUsageOptions } from '../usage/useOrgUsage';
 import { orgUsage } from '../usage/usageModel';
 import { useAccessTokens } from '../../api/accessTokens';
+import { useOrgCredits } from '../../api/credits';
 import { useAppHostingEnabled, useFeatureEnabled, useSitesEnabled } from '../../hooks/useDeploymentMode';
 import { useCurrentOrg, useMyProjects } from '../../hooks/useMemberOrgs';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
@@ -74,6 +75,8 @@ export function HomePage() {
   const tiers = useTiers();
   const usageOptions = useUsageOptions();
   const plan = org ? orgUsage(projects, tiers.data?.find((t) => t.tier === org.tier), new Map(), usageOptions) : undefined;
+  const creditsOn = useFeatureEnabled('credits').enabled;
+  const credits = useOrgCredits(org?.id, creditsOn);
   const tokens = useAccessTokens();
   const { byProject } = useProjectServices(projects);
   const openDatabases = useOpenDatabases(projects);
@@ -120,7 +123,7 @@ export function HomePage() {
         {shown('health') && !error && !isLoading && (
           <HealthWidget counts={healthCounts(projects)} failingApps={appsKnown ? apps.filter((a) => a.status === 'FAILED').length : null} />
         )}
-        {shown('credits') && projectsReady && <CreditsWidget planName={org?.tier} projects={plan?.projects} limitsKnown={plan?.limitsKnown ?? false} />}
+        {shown('credits') && projectsReady && <CreditsWidget planName={org?.tier} projects={plan?.projects} limitsKnown={plan?.limitsKnown ?? false} credit={creditsOn ? credits.data : undefined} creditFailed={creditsOn && credits.isError} />}
         {shown('security') && (
           <SecurityWidget
             summary={{ ...securitySummary({ tokens: tokenList, openDatabases: 0, now }), openDatabases: openDatabases.open }}

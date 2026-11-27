@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS credit_meter_watermarks;
+DROP TABLE IF EXISTS credit_waitlist;
+DROP TABLE IF EXISTS credit_terms_acceptances;
+DROP TABLE IF EXISTS credit_grant_claims;
+DROP TABLE IF EXISTS credit_lot_debits;
+DROP TABLE IF EXISTS credit_lots;
+DROP TABLE IF EXISTS credit_entries;
+DROP TABLE IF EXISTS credit_accounts;
+DROP FUNCTION IF EXISTS credit_ledger_is_append_only();

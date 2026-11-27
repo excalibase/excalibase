@@ -120,6 +120,8 @@ func buildMatrixPlatform(t *testing.T, cfg config.AppConfig, adjust func(*handle
 	issue(admins, callerAdminSession, matrixAdminID, domain.AccessToken{Scopes: auth.ScopeSession})
 
 	deps := matrixDeps(t, instances)
+	deps.orgHandler = handler.NewOrgHandler(platform, nil)
+	deps.creditsHandler = matrixCreditsHandler(platform)
 	adjust(deps, platform)
 	return buildRouter(cfg, platform, instances, deps), who, admins, platform
 }

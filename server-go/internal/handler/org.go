@@ -37,6 +37,22 @@ type OrgHandler struct {
 	audit auditWriter
 	// orgGuard refuses invites into, and joins of, a suspended owner's org (EXC-845); nil allows all.
 	orgGuard *orgguard.Guard
+	// credits serves an org's credit balance and statement (EXC-866); nil leaves them unmounted.
+	credits     *CreditsHandler
+	creditsGate func(http.Handler) http.Handler
+}
+
+// SetCredits mounts the credit routes under each org.
+func (h *OrgHandler) SetCredits(credits *CreditsHandler, gate func(http.Handler) http.Handler) {
+	h.credits, h.creditsGate = credits, gate
+}
+
+// mountCreditRoutes is a no-op while no credit handler is wired, and on the
+// handler-less value route tests build.
+func (h *OrgHandler) mountCreditRoutes(r chi.Router) {
+	if h != nil && h.credits != nil {
+		h.credits.OrgRoutes(r, h.creditsGate)
+	}
 }
 
 // SetOrgGuard makes inviting and accepting refuse an org whose owner is suspended.
@@ -109,6 +125,8 @@ func (h *OrgHandler) Routes(r chi.Router, isCloud bool, createLimits ...func(htt
 		})
 
 		r.Get("/invites", h.ListPendingInvites)
+
+		h.mountCreditRoutes(r)
 
 		r.Route("/projects/{projectId}/members", func(r chi.Router) {
 			r.Get("/", h.ListProjectMembers)

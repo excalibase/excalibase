@@ -34,6 +34,13 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodPost, "/api/projects/" + matrixProjectA + "/apps/app-1/builds"},
 		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/builds/b-1"},
 	},
+	features.Credits: {
+		{http.MethodGet, "/api/orgs/" + matrixOrgA + "/credits/"},
+		{http.MethodGet, "/api/orgs/" + matrixOrgA + "/credits/entries"},
+		{http.MethodGet, "/api/orgs/" + matrixOrgA + "/credits/statement"},
+		{http.MethodPost, "/api/credits/terms"},
+		{http.MethodPost, "/api/admin/console/orgs/" + matrixOrgA + "/credits"},
+	},
 	features.MCP: {
 		{http.MethodPost, "/mcp"},
 		{http.MethodGet, "/api/schema/" + matrixProjectA + "/query?sql=select+1"},
