@@ -616,3 +616,45 @@ func TestReconcileProjectRoles_ASquattedPlatformRoleIsAlertedByName(t *testing.T
 		t.Fatalf("alerts = %+v", open)
 	}
 }
+
+// A repair that failed and whose aftermath cannot be read, such as a database
+// that stopped taking connections, alerts instead of going quiet.
+func TestReconcileProjectRoles_AFailedRunWhoseProbeFailsIsAlerted(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
+	alerts := NewAlertingService(t.TempDir())
+	h.svc.SetSchemaAlerts(alerts)
+	probes := 0
+	h.kube.ExecAnswer = func(cmd []string) (string, error) {
+		if !strings.Contains(strings.Join(cmd, " "), probeAuthTag) {
+			return "", nil
+		}
+		probes++
+		if probes > 2 {
+			return "", errors.New("FATAL: database \"app\" is not currently accepting connections")
+		}
+		return probeAuthTag + "\tf\n" + probeSchemasTag + "\tt\n", nil
+	}
+	h.kube.ExecAnswerStdin = func(string) (string, error) {
+		return "", errors.New("exit code 3: NOTICE: excalibase-repair-stage:registration ERROR: something else broke")
+	}
+	report := h.svc.ReconcileProjectRoles(context.Background())
+	if len(report.Failed) != 1 || !errors.Is(report.Failed[0], errPlatformRepairUnchecked) {
+		t.Fatalf("report = %+v", report)
+	}
+	open := alerts.GetActiveAlertsForProject(rotProject)
+	if len(open) != 1 || open[0].Severity != "CRITICAL" || !strings.Contains(open[0].Message, "could not be probed") {
+		t.Fatalf("alerts = %+v", open)
+	}
+}
+
+// Text an owner put in a role name reaches no alert: only names exactly on the
+// platform's list do, and a prefix match is not one.
+func TestSquattedRoles_KeepOnlyExactPlatformNames(t *testing.T) {
+	payload := "excalibase_ call 555-0100 for a refund"
+	got := squattedRoles("ERROR: platform role(s) " + payload + ", " + roleApp + ", excalibase_x, pg_evil, documentdb_x were created outside the platform")
+	if len(got) != 1 || got[0] != roleApp {
+		t.Fatalf("squattedRoles = %q, want only %q", got, roleApp)
+	}
+}

@@ -80,6 +80,7 @@ func platformSchemaFragments() *strings.Replacer {
 		"{{CUSTOMER_D}}", customerRolePredicate("dr"),
 		"{{FOREIGN_PROC}}", foreignRoutine("p", "proowner", "pronamespace"),
 		"{{FOREIGN_OP}}", foreignRoutine("op", "oprowner", "oprnamespace"),
+		"{{FOREIGN_OPCLASS}}", foreignRoutine("oc", "opcowner", "opcnamespace"),
 		"{{TAINTED}}", excalibaseSchemaTaintedCondition,
 	)
 }
@@ -92,45 +93,9 @@ func typeOwnerOf(alias string) string {
       WHERE g.rngmultitypid = {{T}}.oid), {{T}}.typowner) ELSE {{T}}.typowner END)`, "{{T}}", alias)
 }
 
-// customerOwnedObjects lists the owner of every object kind the quarantine
-// moves, for the schema named by {{NS}}.
-var customerOwnedObjects = `(
-    SELECT c.relowner AS owner FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'c')
-    UNION ALL SELECT p.proowner FROM pg_proc p WHERE p.pronamespace = {{NS}}
-    UNION ALL SELECT ` + typeOwnerOf("t") + ` FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
-    UNION ALL SELECT op.oprowner FROM pg_operator op WHERE op.oprnamespace = {{NS}}
-  )`
-
-// movableObjects are the objects the quarantine moves: composite types,
-// routines, types and domains, and operators, with their owners, in {{NS}}.
-var movableObjects = `(
-    SELECT c.relowner AS owner FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind = 'c'
-    UNION ALL SELECT p.proowner FROM pg_proc p WHERE p.pronamespace = {{NS}}
-    UNION ALL SELECT ` + typeOwnerOf("t") + ` FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
-    UNION ALL SELECT op.oprowner FROM pg_operator op WHERE op.oprnamespace = {{NS}}
-  )`
-
-// movableWithTargets is movableObjects as the statement that moves each, with
-// whether the name is already taken in the quarantine schema {{QNS}}.
-var movableWithTargets = `(
-    SELECT 'TYPE' AS kind, c.reltype::regtype::text AS ident, c.oid AS object_oid, c.relowner AS owner,
-           EXISTS (SELECT 1 FROM pg_type x WHERE x.typnamespace = {{QNS}} AND x.typname = c.relname) AS collides
-      FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind = 'c'
-    UNION ALL SELECT 'ROUTINE', p.oid::regprocedure::text, p.oid, p.proowner,
-           EXISTS (SELECT 1 FROM pg_proc x WHERE x.pronamespace = {{QNS}} AND x.proname = p.proname AND x.proargtypes = p.proargtypes)
-      FROM pg_proc p WHERE p.pronamespace = {{NS}}
-    UNION ALL SELECT CASE t.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END, t.oid::regtype::text, t.oid, ` + typeOwnerOf("t") + `,
-           EXISTS (SELECT 1 FROM pg_type x WHERE x.typnamespace = {{QNS}} AND x.typname = t.typname)
-      FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
-    UNION ALL SELECT 'OPERATOR', format('%I.%s (%s, %s)', (SELECT nspname FROM pg_namespace WHERE oid = {{NS}}), op.oprname,
-           coalesce(NULLIF(op.oprleft, 0)::regtype::text, 'NONE'), coalesce(NULLIF(op.oprright, 0)::regtype::text, 'NONE')),
-           op.oid, op.oprowner,
-           EXISTS (SELECT 1 FROM pg_operator x WHERE x.oprnamespace = {{QNS}} AND x.oprname = op.oprname AND x.oprleft = op.oprleft AND x.oprright = op.oprright)
-      FROM pg_operator op WHERE op.oprnamespace = {{NS}}
-  )`
-
 // taintedTables are tables in {{NS}} with a policy, column default, CHECK or
-// index expression that calls a routine or operator the platform does not own.
+// index expression that calls a routine or operator, or an index that uses an
+// operator class, the platform does not own.
 const taintedTables = `(
     SELECT x.rel FROM (
       SELECT a.adrelid AS rel, d.refclassid, d.refobjid FROM pg_attrdef a JOIN pg_depend d ON d.classid = 'pg_attrdef'::regclass AND d.objid = a.oid
@@ -140,6 +105,7 @@ const taintedTables = `(
     ) x
     WHERE (x.refclassid = 'pg_proc'::regclass AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = x.refobjid AND {{FOREIGN_PROC}}))
        OR (x.refclassid = 'pg_operator'::regclass AND EXISTS (SELECT 1 FROM pg_operator op WHERE op.oid = x.refobjid AND {{FOREIGN_OP}}))
+       OR (x.refclassid = 'pg_opclass'::regclass AND EXISTS (SELECT 1 FROM pg_opclass oc WHERE oc.oid = x.refobjid AND {{FOREIGN_OPCLASS}}))
   )`
 
 // storedRoleVerifier is one role and the verifier pg_authid holds for it.

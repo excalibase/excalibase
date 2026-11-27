@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +23,10 @@ var errPlatformSchemaLeft = errors.New("a platform schema holds customer objects
 // memberships the owner chose, so adopting it would hand them the platform's
 // name. An operator reads the alert, which names it, and decides.
 var errPlatformRoleSquatted = errors.New("a platform role name was taken outside the platform")
+
+// errPlatformRepairUnchecked is a failed repair run whose aftermath could not be
+// read: whether drift remains is unknown, which is not a reason to stay quiet.
+var errPlatformRepairUnchecked = errors.New("the platform schema repair failed and drift could not be checked")
 
 // errPlatformRepairFailed is a repair script that failed for a reason of its own.
 var errPlatformRepairFailed = errors.New("the platform schema repair failed")
@@ -102,6 +107,10 @@ func schemaAlertMessage(reason error) string {
 		return "The repair of the project's platform schemas was cut off by a statement or lock timeout, so it did not finish. " +
 			"An operator must find what slows it (OPERATOR.md 6.10)."
 	}
+	if errors.Is(reason, errPlatformRepairUnchecked) {
+		return "A run of the platform schema repair failed and the project could not be probed afterwards, so whether customer grants or objects remain in " +
+			"the auth or excalibase_cdc schema is unknown. An operator must check the project (OPERATOR.md 6.10)."
+	}
 	if errors.Is(reason, errPlatformRoleSquatted) {
 		return "Registration is refused because role(s) " + strings.Join(squattedRoles(reason.Error()), ", ") +
 			" were created outside the platform, so the project's registration SQL cannot run. An operator must review and drop them (OPERATOR.md 6.10)."
@@ -117,8 +126,8 @@ func schemaAlertMessage(reason error) string {
 var squatText = regexp.MustCompile(`platform role\(s\) ([^\n]+?) were created outside the platform`)
 
 // squattedRoles are the reserved role names the registration SQL refused on.
-// Only names on the platform's own list count, so nothing else in an error text
-// reaches an alert.
+// Only names exactly on the platform's own list count, never a prefix match, so
+// text an owner chose in a role name cannot reach an alert.
 func squattedRoles(text string) []string {
 	match := squatText.FindStringSubmatch(text)
 	if match == nil {
@@ -126,7 +135,7 @@ func squattedRoles(text string) []string {
 	}
 	var names []string
 	for _, name := range strings.Split(match[1], ", ") {
-		if pgroles.IsReserved(name) {
+		if slices.Contains(pgroles.ReservedNames(), name) {
 			names = append(names, name)
 		}
 	}
@@ -135,7 +144,7 @@ func squattedRoles(text string) []string {
 
 // isSchemaAlertError is true for an error that opens the project alert.
 func isSchemaAlertError(err error) bool {
-	for _, reason := range []error{errPlatformSchemaLeft, errPlatformRepairCutOff, errPlatformRepairFailed, errPlatformRoleSquatted} {
+	for _, reason := range []error{errPlatformSchemaLeft, errPlatformRepairCutOff, errPlatformRepairFailed, errPlatformRoleSquatted, errPlatformRepairUnchecked} {
 		if errors.Is(err, reason) {
 			return true
 		}

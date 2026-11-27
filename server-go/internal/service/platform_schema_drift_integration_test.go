@@ -70,6 +70,14 @@ SELECT count(*) FROM (
   UNION ALL SELECT p.proowner, p.pronamespace FROM pg_proc p
   UNION ALL SELECT t.typowner, t.typnamespace FROM pg_type t WHERE t.typrelid = 0 AND t.typcategory <> 'A'
   UNION ALL SELECT o.oprowner, o.oprnamespace FROM pg_operator o
+  UNION ALL SELECT f.opfowner, f.opfnamespace FROM pg_opfamily f
+  UNION ALL SELECT k.opcowner, k.opcnamespace FROM pg_opclass k
+  UNION ALL SELECT l.collowner, l.collnamespace FROM pg_collation l
+  UNION ALL SELECT v.conowner, v.connamespace FROM pg_conversion v
+  UNION ALL SELECT g.cfgowner, g.cfgnamespace FROM pg_ts_config g
+  UNION ALL SELECT d.dictowner, d.dictnamespace FROM pg_ts_dict d
+  UNION ALL SELECT e.extowner, e.extnamespace FROM pg_extension e
+  UNION ALL SELECT x.stxowner, x.stxnamespace FROM pg_statistic_ext x
 ) objects JOIN pg_roles r ON r.oid = objects.owner
 WHERE objects.ns IN ('auth'::regnamespace, 'excalibase_cdc'::regnamespace)
   AND NOT r.rolsuper AND r.rolname NOT IN ('auth_admin', 'cdc_watcher')`

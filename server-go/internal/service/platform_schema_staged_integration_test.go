@@ -547,3 +547,93 @@ func TestPlatformSchemas_DefaultPrivilegesToPublicAreClearedAndSeen(t *testing.T
 		})
 	}
 }
+
+// Every kind of object a customer role can own in a platform schema is seen by
+// the probe, moved out by the quarantine, and gone from the schema afterwards.
+func TestPlatformSchemas_EveryKindOfCustomerObjectIsQuarantined(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	mustExec(t, c.admin, `CREATE TABLE auth.stat_base (a int, b int)`)
+	for kind, statements := range map[string][]string{
+		"collation":  {`CREATE COLLATION auth.coll (provider = libc, locale = 'C')`, `ALTER COLLATION auth.coll OWNER TO excalibase_app`},
+		"conversion": {`CREATE CONVERSION auth.conv FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8`, `ALTER CONVERSION auth.conv OWNER TO excalibase_app`},
+		"ts config":  {`CREATE TEXT SEARCH CONFIGURATION auth.tsconf (COPY = simple)`, `ALTER TEXT SEARCH CONFIGURATION auth.tsconf OWNER TO excalibase_app`},
+		"ts dict":    {`CREATE TEXT SEARCH DICTIONARY auth.tsdict (TEMPLATE = simple)`, `ALTER TEXT SEARCH DICTIONARY auth.tsdict OWNER TO excalibase_app`},
+		"op family":  {`CREATE OPERATOR FAMILY auth.opfam USING btree`, `ALTER OPERATOR FAMILY auth.opfam USING btree OWNER TO excalibase_app`},
+		"op class":   {`CREATE OPERATOR CLASS auth.opcls FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4, int4)`, `ALTER OPERATOR CLASS auth.opcls USING btree OWNER TO excalibase_app`, `ALTER OPERATOR FAMILY auth.opcls USING btree OWNER TO excalibase_app`},
+		"statistics": {`CREATE STATISTICS auth.stat (dependencies) ON a, b FROM auth.stat_base`, `ALTER STATISTICS auth.stat OWNER TO excalibase_app`},
+	} {
+		for _, statement := range statements {
+			mustExec(t, c.admin, statement)
+		}
+		if !c.probe(t) {
+			t.Errorf("%s: the probe did not see it", kind)
+		}
+		c.register(t)
+		if n := scanString(t, c.admin, customerOwnedInPlatformSchemas); n != "0" {
+			t.Errorf("%s: %s customer-owned object(s) are still in the platform schemas", kind, n)
+		}
+		if c.probe(t) {
+			t.Errorf("%s: drift left behind", kind)
+		}
+	}
+}
+
+// An index on a platform table that uses a customer's operator class would run
+// the customer's support functions; the class is moved out and the table is left
+// for an operator.
+func TestPlatformSchemas_AnIndexUsingACustomerOperatorClassIsLeftForAnOperator(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	mustExec(t, c.admin, `CREATE OPERATOR CLASS auth.opcls FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4, int4)`)
+	mustExec(t, c.admin, `ALTER OPERATOR CLASS auth.opcls USING btree OWNER TO excalibase_app`)
+	mustExec(t, c.admin, `ALTER OPERATOR FAMILY auth.opcls USING btree OWNER TO excalibase_app`)
+	mustExec(t, c.admin, `CREATE INDEX users_by_class ON auth.users (id auth.opcls)`)
+	if !c.probe(t) {
+		t.Fatal("the probe did not see an index on a customer operator class")
+	}
+	err := c.registerWith(t, "")
+	if err == nil || !strings.Contains(err.Error(), platformSchemaLeftMarker) {
+		t.Fatalf("registration did not leave the table for an operator: %v", err)
+	}
+}
+
+// The repair covers every catalog with a namespace column: a new one in a later
+// Postgres release fails here until it is on the list or explained.
+func TestPlatformSchemas_EveryCatalogWithANamespaceColumnIsCovered(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	covered := map[string]bool{}
+	for _, catalog := range schemaScopedCatalogs() {
+		covered[catalog] = true
+	}
+	rows, err := c.admin.Query(`SELECT DISTINCT cl.relname FROM pg_attribute a JOIN pg_class cl ON cl.oid = a.attrelid
+		WHERE cl.relnamespace = 'pg_catalog'::regnamespace AND cl.relkind = 'r' AND NOT a.attisdropped AND a.attnum > 0
+		  AND (a.attname ~ 'namespace$' OR a.attname ~ 'nspid$' OR a.attname = 'nspname') ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var catalog string
+		if err := rows.Scan(&catalog); err != nil {
+			t.Fatal(err)
+		}
+		if !covered[catalog] {
+			t.Errorf("%s has a namespace column and is neither in schemaObjectKinds nor in schemaCatalogsNotObjects", catalog)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// No customer role can own an event trigger, which has no schema to look in.
+func TestPlatformSchemas_AnEventTriggerCannotBeGivenToACustomerRole(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	mustExec(t, c.admin, `CREATE FUNCTION public.evt() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN END $$`)
+	mustExec(t, c.admin, `CREATE EVENT TRIGGER probe_evt ON ddl_command_start EXECUTE FUNCTION public.evt()`)
+	mustBeRefused(t, c.admin, `ALTER EVENT TRIGGER probe_evt OWNER TO excalibase_app`)
+}

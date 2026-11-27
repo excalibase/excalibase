@@ -443,12 +443,16 @@ func verifyPlatformClean(ctx context.Context, exec roleSQLExecer, inst *domain.D
 // alertableRunError marks a failed run whatever stage it failed at: when no
 // reason to alert was found in its text, the project is probed again, and drift
 // that remains means the repair did not finish. A probe that cannot be read
-// leaves the error as it was.
+// alerts too: nothing says the schemas are clean.
 func (s *ProvisioningService) alertableRunError(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance, err error) error {
 	if isSchemaAlertError(err) {
 		return err
 	}
-	if state, probeErr := probePlatform(ctx, exec, inst); probeErr == nil && (state.schemasDrifted || state.appReachesAuth) {
+	state, probeErr := probePlatform(ctx, exec, inst)
+	if probeErr != nil {
+		return fmt.Errorf("%w: %v (%v)", errPlatformRepairUnchecked, err, probeErr)
+	}
+	if state.schemasDrifted || state.appReachesAuth {
 		return fmt.Errorf("%w: %v", errPlatformSchemaLeft, err)
 	}
 	return err

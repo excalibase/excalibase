@@ -21,9 +21,9 @@ func platformSchemaScripts() (lockdown, quarantine, refusal string) {
 // schemaScoped fills the fragments that depend on which schema is read.
 func schemaScoped(namespace string) *strings.Replacer {
 	scoped := strings.NewReplacer("{{NS}}", namespace, "{{QNS}}", "to_regnamespace(quarantine)")
-	return strings.NewReplacer("{{OWNED}}", scoped.Replace(customerOwnedObjects), "{{TAINTED_TABLES}}", taintedTables,
+	return strings.NewReplacer("{{OWNED}}", scoped.Replace(ownedObjectsSQL()), "{{TAINTED_TABLES}}", taintedTables,
 		"{{LAST_TRY}}", strconv.Itoa(quarantineNameTries-1), "{{GRANTED}}", scoped.Replace(grantedOnSchema), "{{REVOKE_HELPER}}", revokeHelperSQL,
-		"{{STAGE_LOCKDOWN}}", stageNotice("lockdown"), "{{STAGE_QUARANTINE}}", stageNotice("quarantine"), "{{STAGE_REFUSAL}}", stageNotice("refusal"), "{{MOVABLE}}", scoped.Replace(movableObjects), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargets))
+		"{{STAGE_LOCKDOWN}}", stageNotice("lockdown"), "{{STAGE_QUARANTINE}}", stageNotice("quarantine"), "{{STAGE_REFUSAL}}", stageNotice("refusal"), "{{MOVABLE}}", scoped.Replace(movableObjectsSQL()), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargetsSQL()))
 }
 
 // The lockdown takes the schema back, reclaims the platform's own tables a
