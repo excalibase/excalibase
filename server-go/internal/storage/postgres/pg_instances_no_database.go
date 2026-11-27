@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -30,22 +31,7 @@ func (s *Store) RecordDatabaseChoices(inst *domain.DatabaseInstance, expected st
 		return fmt.Errorf("begin database choices: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
-	orgID, err := projectOrg(tx, inst.ProjectID)
-	if err != nil {
-		return err
-	}
-	perCopy, copies, err := tierReservation(ctx, tx, inst.Tier, inst.StorageSize)
-	if err != nil {
-		return err
-	}
-	adding := planbudget.ReservedDatabase(planbudget.Database{Status: expected, PerCopy: perCopy, Copies: copies})
-	err = s.budget.Admit(ctx, tx, orgID, func(ctx context.Context) (planbudget.Size, error) {
-		row, err := readReservedRow(ctx, tx, inst.ProjectID)
-		if err != nil || row.copies > 0 {
-			return planbudget.Size{}, err
-		}
-		return adding, nil
-	})
+	perCopy, copies, err := s.admitAddedDatabase(ctx, tx, inst, expected)
 	if err != nil {
 		return err
 	}
@@ -93,4 +79,27 @@ func (s *Store) explainNoDatabaseWrite(res rowsAffecter, projectID, expected str
 		return fmt.Errorf("%w: %s", storage.ErrProjectHasDatabase, projectID)
 	}
 	return s.explainRefusedUpdate(projectID, expected)
+}
+
+// admitAddedDatabase admits the database an add is about to create and returns
+// the size it reserves. A project that already holds a reservation (a retry of
+// the same add) is not charged twice.
+func (s *Store) admitAddedDatabase(ctx context.Context, tx *sql.Tx, inst *domain.DatabaseInstance, status string) (planbudget.Size, int64, error) {
+	orgID, err := projectOrg(tx, inst.ProjectID)
+	if err != nil {
+		return planbudget.Size{}, 0, err
+	}
+	perCopy, copies, err := tierReservation(ctx, tx, inst.Tier, inst.StorageSize)
+	if err != nil {
+		return planbudget.Size{}, 0, err
+	}
+	adding := planbudget.ReservedDatabase(planbudget.Database{Status: status, PerCopy: perCopy, Copies: copies})
+	err = s.budget.Admit(ctx, tx, orgID, func(ctx context.Context) (planbudget.Size, error) {
+		row, err := readReservedRow(ctx, tx, inst.ProjectID)
+		if err != nil || row.copies > 0 {
+			return planbudget.Size{}, err
+		}
+		return adding, nil
+	})
+	return perCopy, copies, err
 }

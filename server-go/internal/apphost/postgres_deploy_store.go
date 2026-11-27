@@ -369,10 +369,21 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 func (s *PostgresDeployStore) admitDeploy(tx *sql.Tx, projectID, appID string) error {
 	return admitApp(context.Background(), s.budget, tx, projectID, func(ctx context.Context) (planbudget.Size, error) {
 		var doc []byte
-		if err := tx.QueryRowContext(ctx, `SELECT doc FROM apps WHERE project_id = $1 AND id = $2`, projectID, appID).Scan(&doc); err != nil {
+		var deploying bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT doc, EXISTS (SELECT 1 FROM app_deploys r WHERE r.project_id = apps.project_id AND r.app_id = apps.id AND r.status IN ($3, $4))
+			FROM apps WHERE project_id = $1 AND id = $2`, projectID, appID, DeployStatusPending, DeployStatusRolling).Scan(&doc, &deploying); err != nil {
 			return planbudget.Size{}, fmt.Errorf("read app for deploy: %w", err)
 		}
-		return growth(doc, doc, StatusRunning)
+		held, err := planbudget.ReservedAppNow(doc, deploying)
+		if err != nil {
+			return planbudget.Size{}, err
+		}
+		next, err := planbudget.ReservedAppAs(doc, StatusRunning)
+		if err != nil {
+			return planbudget.Size{}, err
+		}
+		return next.Sub(held), nil
 	})
 }
 

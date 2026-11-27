@@ -140,17 +140,20 @@ func OrgUsage(ctx context.Context, q Querier, orgID string) (Size, error) {
 		return total, err
 	}
 	apps, err := q.QueryContext(ctx, `
-		SELECT a.doc FROM apps a JOIN database_instances d ON d.project_id = a.project_id WHERE d.org_id = $1`, orgID)
+		SELECT a.doc,
+		       EXISTS (SELECT 1 FROM app_deploys r WHERE r.project_id = a.project_id AND r.app_id = a.id AND r.status IN ('pending', 'rolling'))
+		FROM apps a JOIN database_instances d ON d.project_id = a.project_id WHERE d.org_id = $1`, orgID)
 	if err != nil {
 		return total, fmt.Errorf("read org apps: %w", err)
 	}
 	defer apps.Close()
 	for apps.Next() {
 		var doc []byte
-		if err := apps.Scan(&doc); err != nil {
+		var deploying bool
+		if err := apps.Scan(&doc, &deploying); err != nil {
 			return total, fmt.Errorf("scan org app: %w", err)
 		}
-		size, err := ReservedApp(doc)
+		size, err := ReservedAppNow(doc, deploying)
 		if err != nil {
 			return total, err
 		}
@@ -158,3 +161,15 @@ func OrgUsage(ctx context.Context, q Querier, orgID string) (Size, error) {
 	}
 	return total, apps.Err()
 }
+
+// ReservedAppNow is what an app holds now. An app with a deploy in flight holds
+// what it will run at, so the deploy's own row is what the next admission sees.
+func ReservedAppNow(doc []byte, deploying bool) (Size, error) {
+	if deploying {
+		return ReservedAppAs(doc, runningStatus)
+	}
+	return ReservedApp(doc)
+}
+
+// runningStatus is the app status of a converged rollout (apphost.StatusRunning).
+const runningStatus = string(domain.StatusActive)
