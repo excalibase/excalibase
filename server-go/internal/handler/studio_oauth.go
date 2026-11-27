@@ -115,7 +115,9 @@ func (h *StudioOAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, accountRefusal(err))
 		return
 	}
-	h.auth.recordCreditTerms(r.Context(), user.ID, creditTerms)
+	if created {
+		h.auth.recordCreditTerms(r.Context(), user.ID, creditTerms)
+	}
 	if h.auth.creditSignup != nil {
 		h.auth.creditSignup.GrantOnVerified(r.Context(), user.ID)
 	}
@@ -205,7 +207,7 @@ func (h *StudioOAuthHandler) refuse(w http.ResponseWriter, r *http.Request, reas
 // accountFor returns the Studio account for a provider identity: the one
 // already linked, else the one using the same address (linked now), else a
 // new account created under the same rules as password sign-up. created
-// reports the last case, whose invite has then already been spent.
+// reports the last case, whose invite, if any, has then already been spent.
 func (h *StudioOAuthHandler) accountFor(ctx context.Context, identity studiooauth.Identity, inviteHash string) (*domain.User, bool, error) {
 	user, err := h.identities.FindUserByIdentity(ctx, identity.Provider, identity.Subject)
 	if err != nil {
@@ -298,7 +300,7 @@ func (h *StudioOAuthHandler) createFromIdentity(ctx context.Context, identity st
 		return nil, false, err
 	}
 	if inviteHash == "" {
-		return user, false, nil
+		return user, true, nil
 	}
 	if _, status, _ := h.auth.joinInvitedOrg(ctx, inviteHash, user); status != 0 {
 		return nil, false, signInRefusal("invite_invalid")

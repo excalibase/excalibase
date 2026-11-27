@@ -226,3 +226,23 @@ func TestTheOrgsTableReadsBalancesOnlyWhileCreditsAreOn(t *testing.T) {
 		t.Fatalf("flag on: %v", got)
 	}
 }
+
+type claimedLedger struct {
+	countingLedger
+	state credits.TrialState
+}
+
+func (l *claimedLedger) CreditTrialState(context.Context, string) (credits.TrialState, error) {
+	return l.state, nil
+}
+
+func TestCreditSignupSkipsTheGrantForSomeoneWhoAlreadyHoldsAClaim(t *testing.T) {
+	for state, wantGrants := range map[string]int{"granted": 0, "refused": 0, "none": 1, "waitlisted": 1} {
+		ledger := &claimedLedger{state: credits.TrialState{State: state}}
+		signup := creditSignup{svc: credits.NewService(ledger, credits.Rules{TermsVersion: "v1"}, nil), flags: features.NewStatic(features.Credits)}
+		signup.GrantOnVerified(context.Background(), "u1")
+		if ledger.grants != wantGrants {
+			t.Errorf("state %s: %d grants, want %d", state, ledger.grants, wantGrants)
+		}
+	}
+}

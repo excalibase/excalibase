@@ -110,6 +110,11 @@ func (s *Service) trialFor(ctx context.Context, userID string) (TrialView, error
 	return view, nil
 }
 
+// TrialState is where the person stands on the sign-up credit.
+func (s *Service) TrialState(ctx context.Context, userID string) (TrialState, error) {
+	return s.ledger.CreditTrialState(ctx, userID)
+}
+
 // Entries pages an org's ledger, newest first.
 func (s *Service) Entries(ctx context.Context, orgID string, beforeID int64, limit int) ([]Entry, error) {
 	if limit <= 0 || limit > maxEntriesPage {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/studiooauth"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
 
@@ -80,6 +81,7 @@ func TestOAuthCarriesTheTermsBoxThroughTheProvider(t *testing.T) {
 	h := newOAuthHarness(t, false)
 	signup := &recordedSignup{}
 	h.auth.SetCreditSignup(signup)
+	h.signIn.identity = studiooauth.Identity{Provider: "github", Subject: "9999", Email: "brand-new@example.com"}
 	w := doRequest(h.router, "GET", "/api/auth/oauth/github/start?creditTerms=v1", "")
 	var carried *http.Cookie
 	for _, c := range w.Result().Cookies() {
@@ -128,5 +130,32 @@ func TestOAuthStartWithoutTheBoxSetsNoTermsCookie(t *testing.T) {
 		if c.Name == auth.CookieName(creditTermsCookie) {
 			t.Fatalf("unexpected cookie %+v", c)
 		}
+	}
+}
+
+func callbackCarryingTerms(h *oauthHarness) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("GET", "/api/auth/oauth/github/callback?code=c&state=st4te", nil)
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(oauthStateCookie), Value: "st4te"})
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(creditTermsCookie), Value: "v1"})
+	rec := httptest.NewRecorder()
+	h.router.ServeHTTP(rec, req)
+	return rec
+}
+
+// A start link anyone can craft must not record consent for an account that was not made through it.
+func TestOAuthSignInOfAnExistingAccountRecordsNoTermsEvenWithTheCookie(t *testing.T) {
+	h := newOAuthHarness(t, false)
+	signup := &recordedSignup{}
+	h.auth.SetCreditSignup(signup)
+	h.users.users["u-dev"] = &domain.User{ID: "u-dev", Username: "dev", Email: "dev@example.com", Active: true, Kind: domain.UserKindHuman}
+	h.links.users["u-dev"] = "dev@example.com"
+
+	redirectedTo(t, callbackCarryingTerms(h))
+
+	if len(signup.terms) != 0 {
+		t.Fatalf("terms recorded for an existing account: %v", signup.terms)
+	}
+	if len(signup.grants) != 1 {
+		t.Fatalf("the grant is still tried: %v", signup.grants)
 	}
 }

@@ -110,9 +110,19 @@ func (c creditSignup) GrantOnVerified(ctx context.Context, userID string) {
 	if !c.on(ctx) {
 		return
 	}
+	if c.holdsClaim(ctx, userID) {
+		return
+	}
 	if _, err := c.svc.GrantTrial(ctx, userID); err != nil {
 		log.Printf("WARN: credits: grant on verification for %s: %v", userID, err)
 	}
+}
+
+// holdsClaim says the person already has their one sign-up claim, granted or refused, so a repeat sign-in
+// need not take the grant lock. A read that fails falls through to the grant, which decides for itself.
+func (c creditSignup) holdsClaim(ctx context.Context, userID string) bool {
+	state, err := c.svc.TrialState(ctx, userID)
+	return err == nil && (state.State == "granted" || state.State == "refused")
 }
 
 // wireCreditSignup connects sign-up and every verification path to the ledger.
