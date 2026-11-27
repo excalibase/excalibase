@@ -493,3 +493,57 @@ func TestPlatformSchemas_SchemalessDefaultPrivilegesForACustomerAreClearedAndSee
 		t.Fatal("the platform's own default privilege in auth was cleared")
 	}
 }
+
+// An owner who takes a platform role name makes the registration SQL refuse
+// every time; the lockdown and the quarantine run ahead of it and still finish.
+func TestPlatformSchemas_ASquattedPlatformRoleDoesNotKeepTheRepairFromRunning(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	mustExec(t, c.admin, `GRANT documentdb TO `+customerOwner+` WITH ADMIN OPTION`)
+	plantRoutine(t, c, "auth", "sq", "excalibase_app")
+	mustExec(t, c.admin, `CREATE TABLE auth.note (id int)`)
+	mustExec(t, c.admin, `ALTER TABLE auth.note OWNER TO excalibase_app`)
+	mustExec(t, c.admin, grantCreateOnAuth+`excalibase_app`)
+
+	err := c.registerWith(t, "")
+
+	if err == nil || !strings.Contains(err.Error(), "were created outside the platform") {
+		t.Fatalf("registration did not refuse on the squatted role: %v", err)
+	}
+	if c.inSchema(t, "auth", "sq") || !c.inAnyQuarantine(t, "sq") {
+		t.Fatal("the quarantine did not run ahead of the refusing registration SQL")
+	}
+	if scanBool(t, c.admin, `SELECT has_schema_privilege('excalibase_app', 'auth', 'CREATE')`) {
+		t.Fatal("the lockdown did not run")
+	}
+	if !c.probe(t) {
+		t.Fatal("the table left in auth is not drift, so the reconcile would not alert")
+	}
+}
+
+// A default privilege granted to PUBLIC, in the schema or for the role anywhere,
+// would hand every role each new platform table; it is seen and cleared.
+func TestPlatformSchemas_DefaultPrivilegesToPublicAreClearedAndSeen(t *testing.T) {
+	for name, statement := range map[string]string{
+		"in schema":  `ALTER DEFAULT PRIVILEGES FOR ROLE auth_admin IN SCHEMA auth GRANT SELECT, INSERT ON TABLES TO PUBLIC`,
+		"schemaless": `ALTER DEFAULT PRIVILEGES FOR ROLE auth_admin GRANT SELECT, INSERT ON TABLES TO PUBLIC`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newPlatformSchemaCase(t)
+			c.register(t)
+			mustExec(t, c.admin, statement)
+			if !c.probe(t) {
+				t.Fatal("the probe did not see a default privilege to PUBLIC")
+			}
+			c.register(t)
+			if c.probe(t) {
+				t.Fatal("the default privilege survived")
+			}
+			mustExec(t, c.authAdmin, `CREATE TABLE auth.tokens (id int)`)
+			if scanBool(t, c.admin, `SELECT has_table_privilege($1, 'auth.tokens', 'SELECT') OR has_table_privilege('excalibase_app', 'auth.tokens', 'INSERT')`, customerOwner) {
+				t.Fatal("a new platform table is open to a customer role through PUBLIC")
+			}
+		})
+	}
+}

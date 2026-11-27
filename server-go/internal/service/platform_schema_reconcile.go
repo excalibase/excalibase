@@ -93,7 +93,7 @@ func (s *ProvisioningService) reconcileIfPending(ctx context.Context, inst *doma
 		return false, err
 	}
 	if err := s.reconcileProject(projectCtx, inst.ProjectID); err != nil {
-		if errors.Is(err, errPlatformSchemaLeft) || errors.Is(err, errPlatformRepairCutOff) || errors.Is(err, errPlatformRepairFailed) {
+		if isSchemaAlertError(err) {
 			s.trackSchemaAlert(inst.ProjectID, true, err)
 		}
 		return false, err
@@ -182,7 +182,7 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 		return err
 	}
 	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, registrationScripts(roleSQL, driftSQL)...); err != nil {
-		return schemaLeftError(fmt.Errorf("re-run registration SQL: %w", err))
+		return s.alertableRunError(ctx, exec, inst, schemaLeftError(fmt.Errorf("re-run registration SQL: %w", err)))
 	}
 	if err := verifyPlatformClean(ctx, exec, inst); err != nil {
 		return err
@@ -438,4 +438,18 @@ func verifyPlatformClean(ctx context.Context, exec roleSQLExecer, inst *domain.D
 		return errPlatformSchemaLeft
 	}
 	return nil
+}
+
+// alertableRunError marks a failed run whatever stage it failed at: when no
+// reason to alert was found in its text, the project is probed again, and drift
+// that remains means the repair did not finish. A probe that cannot be read
+// leaves the error as it was.
+func (s *ProvisioningService) alertableRunError(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance, err error) error {
+	if isSchemaAlertError(err) {
+		return err
+	}
+	if state, probeErr := probePlatform(ctx, exec, inst); probeErr == nil && (state.schemasDrifted || state.appReachesAuth) {
+		return fmt.Errorf("%w: %v", errPlatformSchemaLeft, err)
+	}
+	return err
 }

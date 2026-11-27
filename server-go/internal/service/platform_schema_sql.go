@@ -83,10 +83,10 @@ BEGIN
     FOR item IN
       SELECT d.defaclrole::regrole::text AS owner_role, d.defaclnamespace = 0 AS schemaless,
              CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' ELSE 'TYPES' END AS kind,
-             string_agg(quote_ident(r.rolname), ', ') AS roles
-      FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN pg_roles r ON r.oid = a.grantee JOIN pg_roles dr ON dr.oid = d.defaclrole
+             string_agg(CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ') AS roles
+      FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a LEFT JOIN pg_roles r ON r.oid = a.grantee JOIN pg_roles dr ON dr.oid = d.defaclrole
       WHERE (d.defaclnamespace = schema_oid OR (d.defaclnamespace = 0 AND NOT {{CUSTOMER_D}}))
-        AND d.defaclobjtype IN ('r', 'S', 'f', 'T') AND {{CUSTOMER_R}}
+        AND d.defaclobjtype IN ('r', 'S', 'f', 'T') AND (a.grantee = 0 OR {{CUSTOMER_R}})
       GROUP BY d.defaclrole, d.defaclnamespace, d.defaclobjtype
     LOOP
       EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %s %s REVOKE ALL ON %s FROM %s CASCADE', item.owner_role,
@@ -148,8 +148,7 @@ BEGIN
           target := NULL;
         END LOOP;
         IF target IS NULL THEN
-          RAISE EXCEPTION 'every quarantine schema name for an object in schema % is taken; it is ` + platformSchemaLeftMarker + `', entry.schema_name
-            USING ERRCODE = 'insufficient_privilege';
+          CONTINUE;
         END IF;
         EXECUTE format('CREATE SCHEMA %I', target);
       END IF;
@@ -178,11 +177,10 @@ BEGIN
     IF schema_oid IS NULL OR to_regrole(entry.service_role) IS NULL THEN
       CONTINUE;
     END IF;
-    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
-               WHERE c.relnamespace = schema_oid AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND {{CUSTOMER_R}})
+    IF EXISTS (SELECT 1 FROM {{OWNED}} o JOIN pg_roles r ON r.oid = o.owner WHERE {{CUSTOMER_R}})
        OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
                   WHERE c.relnamespace = schema_oid AND NOT {{CUSTOMER_R}} AND c.oid IN {{TAINTED_TABLES}}) THEN
-      RAISE EXCEPTION 'schema % holds a relation or a table that is ` + platformSchemaLeftMarker + `', entry.schema_name
+      RAISE EXCEPTION 'schema % holds an object or a table that is ` + platformSchemaLeftMarker + `', entry.schema_name
         USING ERRCODE = 'insufficient_privilege';
     END IF;
   END LOOP;
@@ -223,10 +221,10 @@ const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND w.rulename <> '_RETURN' AND NOT {{CUSTOMER_R}})
       OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND NOT {{CUSTOMER_R}} AND c.oid IN {{TAINTED_TABLES}})
-      OR EXISTS (SELECT 1 FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN pg_roles r ON r.oid = a.grantee
+      OR EXISTS (SELECT 1 FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a LEFT JOIN pg_roles r ON r.oid = a.grantee
                  JOIN pg_roles dr ON dr.oid = d.defaclrole
                  WHERE (d.defaclnamespace = to_regnamespace(v.schema_name) OR (d.defaclnamespace = 0 AND NOT {{CUSTOMER_D}}))
-                   AND d.defaclobjtype IN ('r', 'S', 'f', 'T') AND {{CUSTOMER_R}})
+                   AND d.defaclobjtype IN ('r', 'S', 'f', 'T') AND (a.grantee = 0 OR {{CUSTOMER_R}}))
       OR EXISTS (SELECT 1 FROM pg_type t CROSS JOIN LATERAL aclexplode(t.typacl) a JOIN pg_roles r ON r.oid = a.grantee
                  WHERE t.typnamespace = to_regnamespace(v.schema_name) AND t.typcategory <> 'A' AND {{CUSTOMER_R}})
     )

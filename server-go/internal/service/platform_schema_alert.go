@@ -9,11 +9,19 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 // errPlatformSchemaLeft is a reconcile that kept every revoke it could and left
 // customer-owned objects in a platform schema for an operator (EXC-821).
 var errPlatformSchemaLeft = errors.New("a platform schema holds customer objects left for an operator")
+
+// errPlatformRoleSquatted is a registration refused because the owner created a
+// role named like one of the platform's. The platform does not reclaim or drop
+// such a role: it may own objects and carries attributes, a password and
+// memberships the owner chose, so adopting it would hand them the platform's
+// name. An operator reads the alert, which names it, and decides.
+var errPlatformRoleSquatted = errors.New("a platform role name was taken outside the platform")
 
 // errPlatformRepairFailed is a repair script that failed for a reason of its own.
 var errPlatformRepairFailed = errors.New("the platform schema repair failed")
@@ -36,8 +44,10 @@ func (s *ProvisioningService) SetSchemaAlerts(alerts *AlertingService) { s.schem
 // repair work. It fails closed: an error with no script named alerts.
 func schemaLeftError(err error) error {
 	switch {
-	case err == nil || errors.Is(err, errPlatformSchemaLeft) || errors.Is(err, errPlatformRepairCutOff) || errors.Is(err, errPlatformRepairFailed):
+	case err == nil || isSchemaAlertError(err):
 		return err
+	case len(squattedRoles(err.Error())) > 0:
+		return fmt.Errorf("%w: %v", errPlatformRoleSquatted, err)
 	case strings.Contains(err.Error(), platformSchemaLeftMarker):
 		return fmt.Errorf("%w: %v", errPlatformSchemaLeft, err)
 	case errors.Is(err, context.DeadlineExceeded) || isTimeoutError(err.Error()):
@@ -92,10 +102,43 @@ func schemaAlertMessage(reason error) string {
 		return "The repair of the project's platform schemas was cut off by a statement or lock timeout, so it did not finish. " +
 			"An operator must find what slows it (OPERATOR.md 6.10)."
 	}
+	if errors.Is(reason, errPlatformRoleSquatted) {
+		return "Registration is refused because role(s) " + strings.Join(squattedRoles(reason.Error()), ", ") +
+			" were created outside the platform, so the project's registration SQL cannot run. An operator must review and drop them (OPERATOR.md 6.10)."
+	}
 	if errors.Is(reason, errPlatformRepairFailed) {
 		return "A script of the platform schema repair failed, so customer grants or objects may remain in the project's auth or excalibase_cdc schema. " +
 			"An operator must read the reconcile log (OPERATOR.md 6.10)."
 	}
 	return "A customer role owns objects in the project's auth or excalibase_cdc schema that the platform cannot move or adopt. " +
 		"Every grant was revoked; an operator must review them (OPERATOR.md 6.10)."
+}
+
+var squatText = regexp.MustCompile(`platform role\(s\) ([^\n]+?) were created outside the platform`)
+
+// squattedRoles are the reserved role names the registration SQL refused on.
+// Only names on the platform's own list count, so nothing else in an error text
+// reaches an alert.
+func squattedRoles(text string) []string {
+	match := squatText.FindStringSubmatch(text)
+	if match == nil {
+		return nil
+	}
+	var names []string
+	for _, name := range strings.Split(match[1], ", ") {
+		if pgroles.IsReserved(name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// isSchemaAlertError is true for an error that opens the project alert.
+func isSchemaAlertError(err error) bool {
+	for _, reason := range []error{errPlatformSchemaLeft, errPlatformRepairCutOff, errPlatformRepairFailed, errPlatformRoleSquatted} {
+		if errors.Is(err, reason) {
+			return true
+		}
+	}
+	return false
 }

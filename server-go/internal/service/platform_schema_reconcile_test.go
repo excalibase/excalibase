@@ -430,16 +430,16 @@ func TestRegistrationScripts_CommitWhatCannotRefuseBeforeWhatCan(t *testing.T) {
 		t.Fatalf("no script holds %q", marker)
 		return -1
 	}
-	lockdown, repair, role, quarantine, refusal := index("excalibase_schema_lockdown"), index("REPAIR SQL"), index("ROLE SQL"),
-		index("excalibase_schema_quarantine"), index("excalibase_schema_refusal")
-	if !(lockdown < repair && repair < role && role < quarantine && quarantine < refusal) {
-		t.Fatalf("script order = lockdown %d, repair %d, role %d, quarantine %d, refusal %d", lockdown, repair, role, quarantine, refusal)
+	lockdown, quarantine, repair, role, refusal := index("excalibase_schema_lockdown"), index("excalibase_schema_quarantine"), index("REPAIR SQL"),
+		index("ROLE SQL"), index("excalibase_schema_refusal")
+	if !(lockdown < quarantine && quarantine < repair && repair < role && role < refusal) {
+		t.Fatalf("script order = lockdown %d, quarantine %d, repair %d, role %d, refusal %d", lockdown, quarantine, repair, role, refusal)
 	}
 	if strings.Contains(scripts[lockdown], "RAISE EXCEPTION") {
 		t.Error("the lockdown can refuse")
 	}
-	if !strings.Contains(scripts[quarantine], platformSchemaLeftMarker) {
-		t.Error("the quarantine refuses without the marker the alert path reads")
+	if strings.Contains(scripts[quarantine], "RAISE EXCEPTION") {
+		t.Error("the quarantine can stop the registration that follows it")
 	}
 	if len(registrationScripts("ROLE SQL;", "")) != len(scripts)-1 {
 		t.Error("an empty password repair still ran as a script")
@@ -502,16 +502,17 @@ func TestReconcileProjectRoles_ARepairCutOffByATimeoutIsAlerted(t *testing.T) {
 // the repair is.
 func TestReconcileProjectRoles_AnyRepairScriptFailureIsAlerted(t *testing.T) {
 	for name, tc := range map[string]struct {
-		text  string
-		alert bool
+		text       string
+		alert      bool
+		driftAfter string
 	}{
-		"lockdown":     {"exit code 3: NOTICE: excalibase-repair-stage:lockdown ERROR: 2BP01: dependent privileges exist", true},
-		"quarantine":   {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:registration NOTICE: excalibase-repair-stage:quarantine ERROR: 42P07: relation exists", true},
-		"refusal":      {"exit code 3: NOTICE: excalibase-repair-stage:refusal ERROR: boom", true},
-		"registration": {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:registration ERROR: platform role(s) x were created outside the platform", false},
-		"deadline":     {"context deadline exceeded", true},
-		"no marker":    {"exit code 3: ERROR: 2BP01: dependent privileges exist", true},
-		"password":     {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:password ERROR: boom", false},
+		"lockdown":     {"exit code 3: NOTICE: excalibase-repair-stage:lockdown ERROR: 2BP01: dependent privileges exist", true, "f"},
+		"quarantine":   {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:registration NOTICE: excalibase-repair-stage:quarantine ERROR: 42P07: relation exists", true, "f"},
+		"refusal":      {"exit code 3: NOTICE: excalibase-repair-stage:refusal ERROR: boom", true, "f"},
+		"registration": {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:registration ERROR: platform role(s) x were created outside the platform", false, "f"},
+		"deadline":     {"context deadline exceeded", true, "f"},
+		"no marker":    {"exit code 3: ERROR: 2BP01: dependent privileges exist", true, "f"},
+		"password":     {"exit code 3: NOTICE: excalibase-repair-stage:lockdown NOTICE: excalibase-repair-stage:password ERROR: boom", false, "f"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newRotationHarness(t)
@@ -519,9 +520,7 @@ func TestReconcileProjectRoles_AnyRepairScriptFailureIsAlerted(t *testing.T) {
 			h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
 			alerts := NewAlertingService(t.TempDir())
 			h.svc.SetSchemaAlerts(alerts)
-			h.kube.ExecAnswer = func(cmd []string) (string, error) {
-				return probeAuthTag + "\tf\n" + probeSchemasTag + "\tt\n", nil
-			}
+			h.kube.ExecAnswer = driftProbes("t", "t", tc.driftAfter)
 			h.kube.ExecAnswerStdin = func(string) (string, error) { return "", errors.New(tc.text) }
 			h.svc.ReconcileProjectRoles(context.Background())
 			if raised := len(alerts.GetActiveAlertsForProject(rotProject)) == 1; raised != tc.alert {
@@ -553,5 +552,67 @@ func TestPinnedSessionOptions_PinTheMessageLevelAndPlpgsqlNameResolution(t *test
 		if !slices.Contains(pinnedSessionOptions, want) {
 			t.Errorf("%s is not pinned", want)
 		}
+	}
+}
+
+// driftProbes answers the batched probe with the given schema-drift flags in
+// turn (the last repeats): the pending check, the check under the lease, then
+// the one after a failed run.
+func driftProbes(flags ...string) func(cmd []string) (string, error) {
+	calls := 0
+	return func(cmd []string) (string, error) {
+		if !strings.Contains(strings.Join(cmd, " "), probeAuthTag) {
+			return "", nil
+		}
+		flag := flags[min(calls, len(flags)-1)]
+		calls++
+		return probeAuthTag + "\tf\n" + probeSchemasTag + "\t" + flag + "\n", nil
+	}
+}
+
+// A run that failed at the registration SQL still alerts while drift remains,
+// and not once the schemas are clean.
+func TestReconcileProjectRoles_AFailedRunAlertsWhileDriftRemains(t *testing.T) {
+	for name, tc := range map[string]struct {
+		driftAfter string
+		alert      bool
+	}{"drift remains": {"t", true}, "clean": {"f", false}} {
+		t.Run(name, func(t *testing.T) {
+			h := newRotationHarness(t)
+			h.seedPreSchedulerCluster(t)
+			h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
+			alerts := NewAlertingService(t.TempDir())
+			h.svc.SetSchemaAlerts(alerts)
+			h.kube.ExecAnswer = driftProbes("t", "t", tc.driftAfter)
+			h.kube.ExecAnswerStdin = func(string) (string, error) {
+				return "", errors.New("exit code 3: NOTICE: excalibase-repair-stage:registration ERROR: something else broke")
+			}
+			h.svc.ReconcileProjectRoles(context.Background())
+			if raised := len(alerts.GetActiveAlertsForProject(rotProject)) == 1; raised != tc.alert {
+				t.Fatalf("alert raised = %v, want %v", raised, tc.alert)
+			}
+		})
+	}
+}
+
+// A role name the owner took makes registration refuse for good; the alert
+// names the roles, and only names on the platform's list.
+func TestReconcileProjectRoles_ASquattedPlatformRoleIsAlertedByName(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
+	alerts := NewAlertingService(t.TempDir())
+	h.svc.SetSchemaAlerts(alerts)
+	h.kube.ExecAnswer = driftProbes("t", "t", "f")
+	h.kube.ExecAnswerStdin = func(string) (string, error) {
+		return "", errors.New("exit code 3: NOTICE: excalibase-repair-stage:registration ERROR: 42501: platform role(s) excalibase_docbrowser, not_ours were created outside the platform")
+	}
+	report := h.svc.ReconcileProjectRoles(context.Background())
+	if len(report.Failed) != 1 || !errors.Is(report.Failed[0], errPlatformRoleSquatted) {
+		t.Fatalf("report = %+v", report)
+	}
+	open := alerts.GetActiveAlertsForProject(rotProject)
+	if len(open) != 1 || !strings.Contains(open[0].Message, "excalibase_docbrowser") || strings.Contains(open[0].Message, "not_ours") {
+		t.Fatalf("alerts = %+v", open)
 	}
 }
