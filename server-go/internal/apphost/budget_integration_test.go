@@ -195,7 +195,7 @@ func TestAppResizeOnAPlanChangeIsAdmittedLikeGrowth(t *testing.T) {
 	f := newBudgetFixture(t, "appplan", 1500)
 	small := sampleApp(f.project, "tiny", "tiny")
 	small.Tier = "FREE"
-	small.Replicas, small.Status = 1, apphost.StatusRunning
+	small.Replicas, small.Status = 1, apphost.StatusResuming
 	if err := f.apps.Create(small, 100); err != nil {
 		t.Fatal(err)
 	}
