@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/credits"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // matrixLedger answers every credit read from nothing, so a request that gets
@@ -138,5 +139,27 @@ func TestBootRefusesCreditsWithoutTheContainerGate(t *testing.T) {
 	}
 	if err := creditsBootCheck(on()); err != nil {
 		t.Fatalf("both off: %v", err)
+	}
+}
+
+type ledgerStore struct {
+	storage.PlatformStore
+	credits.Ledger
+}
+
+func TestTheCreditServiceExistsOnlyOverAStoreThatKeepsALedger(t *testing.T) {
+	cfg := config.Load()
+	if buildCreditsService(cfg, struct{ storage.PlatformStore }{}) != nil {
+		t.Fatal("a store with no ledger has no credit service")
+	}
+	svc := buildCreditsService(cfg, ledgerStore{Ledger: matrixLedger{}})
+	if svc == nil || svc.Rules().TermsVersion != cfg.Credits.TermsVersion {
+		t.Fatalf("a store with a ledger gets the configured rules: %+v", svc)
+	}
+	if newCreditsHandler(cfg, nil, nil) != nil {
+		t.Fatal("no service, no handler")
+	}
+	if newCreditsHandler(cfg, svc, nil) == nil {
+		t.Fatal("a service gets a handler")
 	}
 }

@@ -405,3 +405,23 @@ func TestEveryKindOfIneligibleQueuedPersonIsPassedOver(t *testing.T) {
 func replaceID(statement, id string) string {
 	return strings.NewReplacer("w2", id, "org-w2", "org-"+id).Replace(statement)
 }
+
+func TestTheAcceptedTermsVersionIsReadBackAndEmptyForSomeoneWhoNeverAccepted(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	if version, err := store.CreditTermsVersion(ctx, "nobody"); err != nil || version != "" {
+		t.Fatalf("never accepted: %q %v", version, err)
+	}
+	if err := store.AcceptCreditTerms(ctx, "reader", "terms-7", creditsNow); err != nil {
+		t.Fatal(err)
+	}
+	if version, err := store.CreditTermsVersion(ctx, "reader"); err != nil || version != "terms-7" {
+		t.Fatalf("%q %v", version, err)
+	}
+	if err := store.AcceptCreditTerms(ctx, "reader", "terms-8", creditsNow.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if version, _ := store.CreditTermsVersion(ctx, "reader"); version != "terms-8" {
+		t.Fatalf("a later acceptance replaces the earlier one: %q", version)
+	}
+}

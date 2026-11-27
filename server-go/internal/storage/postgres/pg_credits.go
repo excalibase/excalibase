@@ -323,7 +323,7 @@ func insertCreditAudit(ctx context.Context, tx *sql.Tx, audit credits.AuditRecor
 }
 
 func findCreditEntryByKey(ctx context.Context, tx *sql.Tx, key string) (credits.Entry, bool, error) {
-	row := tx.QueryRowContext(ctx, creditEntryColumns+` FROM credit_entries WHERE idempotency_key = $1`, key)
+	row := tx.QueryRowContext(ctx, creditEntryByKeySQL, key)
 	entry, err := scanCreditEntry(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return credits.Entry{}, false, nil

@@ -301,3 +301,64 @@ func TestWithMeteringOnALotWaitsForItsOrgsFirstWatermark(t *testing.T) {
 		t.Fatal("a metered org's lot expires once the watermark passes it")
 	}
 }
+
+// watermarkCase is an org with one lot that ends 10 hours after creditsNow, a meter at some hour (or none),
+// and the answer a sweep run at hour 20 must give for each way of asking.
+type watermarkCase struct {
+	name             string
+	meterHour        int
+	hasMeter         bool
+	requireWatermark bool
+	expires          bool
+}
+
+var watermarkCases = []watermarkCase{
+	{name: "no meter, clock rules", expires: true},
+	{name: "no meter, metering on", requireWatermark: true},
+	{name: "meter behind the expiry, clock rules", hasMeter: true, meterHour: 5},
+	{name: "meter behind the expiry, metering on", hasMeter: true, meterHour: 5, requireWatermark: true},
+	{name: "meter past the expiry, clock rules", hasMeter: true, meterHour: 11, expires: true},
+	{name: "meter past the expiry, metering on", hasMeter: true, meterHour: 11, requireWatermark: true, expires: true},
+}
+
+func watermarkOrg(t *testing.T, store *Store, c watermarkCase, orgID string) int64 {
+	t.Helper()
+	fundOrg(t, store, orgID, "wm", 500, inHours(10))
+	if c.hasMeter {
+		if err := store.AdvanceCreditMeterWatermark(context.Background(), orgID, creditsNow.Add(time.Duration(c.meterHour)*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var lotID int64
+	if err := store.db.QueryRow(`SELECT id FROM credit_lots WHERE org_id = $1`, orgID).Scan(&lotID); err != nil {
+		t.Fatal(err)
+	}
+	return lotID
+}
+
+// The sweep that picks the due lots honours the watermark rule by itself.
+func TestBatchExpiryHonoursTheWatermarkRuleInEveryCase(t *testing.T) {
+	later := creditsNow.Add(20 * time.Hour)
+	for i, c := range watermarkCases {
+		store := testStore(t)
+		watermarkOrg(t, store, c, fmt.Sprintf("org-wb%d", i))
+		n, err := store.ExpireCreditLots(context.Background(), later, c.requireWatermark)
+		if err != nil || (n == 1) != c.expires {
+			t.Errorf("%s: expired %d %v, want expired=%v", c.name, n, err, c.expires)
+		}
+	}
+}
+
+// The step that expires one lot re-checks the same rule itself, so a lot the sweep picked a moment too early is not taken.
+func TestSingleLotExpiryHonoursTheWatermarkRuleInEveryCase(t *testing.T) {
+	later := creditsNow.Add(20 * time.Hour)
+	for i, c := range watermarkCases {
+		store := testStore(t)
+		orgID := fmt.Sprintf("org-wl%d", i)
+		lotID := watermarkOrg(t, store, c, orgID)
+		done, err := store.expireCreditLot(context.Background(), lotID, orgID, later, c.requireWatermark)
+		if err != nil || done != c.expires {
+			t.Errorf("%s: expired=%v %v, want %v", c.name, done, err, c.expires)
+		}
+	}
+}

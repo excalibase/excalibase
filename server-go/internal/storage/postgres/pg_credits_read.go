@@ -11,6 +11,13 @@ import (
 
 const creditEntryColumns = `SELECT id, org_id, kind, amount_micros, idempotency_key, period_start, period_end, actor, reason, details, created_at`
 
+// Each entry query is one constant, so what reaches the database is never built at the call site.
+const (
+	creditEntriesPageSQL    = creditEntryColumns + ` FROM credit_entries WHERE org_id = $1 AND ($2 = 0 OR id < $2) ORDER BY id DESC LIMIT $3`
+	creditStatementEntrySQL = creditEntryColumns + ` FROM credit_entries WHERE org_id = $1 AND COALESCE(period_start, created_at) >= $2 AND COALESCE(period_start, created_at) < $3 ORDER BY COALESCE(period_start, created_at), id LIMIT $4`
+	creditEntryByKeySQL     = creditEntryColumns + ` FROM credit_entries WHERE idempotency_key = $1`
+)
+
 func scanCreditEntry(row pgRowScanner) (credits.Entry, error) {
 	var entry credits.Entry
 	var amount int64
@@ -53,8 +60,7 @@ func scanCreditEntries(rows *sql.Rows) ([]credits.Entry, error) {
 
 // CreditEntries lists an org's entries newest first, those before beforeID when it is set.
 func (s *Store) CreditEntries(ctx context.Context, orgID string, beforeID int64, limit int) ([]credits.Entry, error) {
-	rows, err := s.db.QueryContext(ctx,
-		creditEntryColumns+` FROM credit_entries WHERE org_id = $1 AND ($2 = 0 OR id < $2) ORDER BY id DESC LIMIT $3`, orgID, beforeID, limit)
+	rows, err := s.db.QueryContext(ctx, creditEntriesPageSQL, orgID, beforeID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -74,9 +80,7 @@ func (s *Store) CreditStatement(ctx context.Context, orgID string, month time.Ti
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_micros), 0) FROM credit_entries WHERE org_id = $1 AND COALESCE(period_start, created_at) < $2`, orgID, start).Scan(&opening); err != nil {
 		return statement, err
 	}
-	rows, err := s.db.QueryContext(ctx,
-		creditEntryColumns+` FROM credit_entries WHERE org_id = $1 AND COALESCE(period_start, created_at) >= $2 AND COALESCE(period_start, created_at) < $3 ORDER BY COALESCE(period_start, created_at), id LIMIT $4`,
-		orgID, start, end, creditStatementEntryCap)
+	rows, err := s.db.QueryContext(ctx, creditStatementEntrySQL, orgID, start, end, creditStatementEntryCap)
 	if err != nil {
 		return statement, err
 	}

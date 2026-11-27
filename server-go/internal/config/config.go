@@ -463,55 +463,31 @@ func (c AppConfig) Validate() error {
 	if c.ProvisionerMode == "docker" && c.IsCloud() {
 		return errDockerCloudUnsupported
 	}
-	if err := c.validateAppTmpPercent(); err != nil {
-		return err
+	checks := []func() error{
+		c.validateAppTmpPercent,
+		c.validateTenantStorageClasses,
+		c.validateTenantStorage,
+		c.validateEdge,
+		c.validateFileStorage,
+		c.validateFunctionEgress,
+		c.validateBehaviour,
+		c.validateAppLocalRegistries,
+		c.validateAppBuilds,
+		c.validateAppRegistry,
+		func() error { return validateRequestMetricsTargets(c.RequestMetricsTargets) },
+		c.validateSites,
+		c.validateTrust,
+		c.validateCredits,
+		c.validateSiteGit,
+		c.validateScheduler,
+		c.validateAppRoute,
 	}
-	if err := c.validateTenantStorageClasses(); err != nil {
-		return err
+	for _, check := range checks {
+		if err := check(); err != nil {
+			return err
+		}
 	}
-	if err := c.validateTenantStorage(); err != nil {
-		return err
-	}
-	if err := c.validateEdge(); err != nil {
-		return err
-	}
-	if err := c.validateFileStorage(); err != nil {
-		return err
-	}
-	if err := c.validateFunctionEgress(); err != nil {
-		return err
-	}
-	if err := c.validateBehaviour(); err != nil {
-		return err
-	}
-	if err := c.validateAppLocalRegistries(); err != nil {
-		return err
-	}
-	if err := c.validateAppBuilds(); err != nil {
-		return err
-	}
-	if err := c.validateAppRegistry(); err != nil {
-		return err
-	}
-	if err := validateRequestMetricsTargets(c.RequestMetricsTargets); err != nil {
-		return err
-	}
-	if err := c.validateSites(); err != nil {
-		return err
-	}
-	if err := c.validateTrust(); err != nil {
-		return err
-	}
-	if err := c.validateCredits(); err != nil {
-		return err
-	}
-	if err := c.validateSiteGit(); err != nil {
-		return err
-	}
-	if err := c.validateScheduler(); err != nil {
-		return err
-	}
-	return c.validateAppRoute()
+	return nil
 }
 
 // validateScheduler refuses a claim lease that can expire while a healthy
