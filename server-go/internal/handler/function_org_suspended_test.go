@@ -97,7 +97,7 @@ func TestRedeployAll_NotRunWhileTheOrgOwnerIsSuspended(t *testing.T) {
 		Files: []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('x')"}}}); err != nil {
 		t.Fatal(err)
 	}
-	h.redeployAll(httptest.NewRequest("POST", "/", nil), "proj_p1")
+	_, _ = h.redeployAll(httptest.NewRequest("POST", "/", nil), "proj_p1")
 	if runtimeCalls.Load() != 0 {
 		t.Errorf("redeployAll called the runtime %d times, want none", runtimeCalls.Load())
 	}

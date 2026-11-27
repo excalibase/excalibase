@@ -179,3 +179,71 @@ func TestUserTrustConcurrentSavesChain(t *testing.T) {
 		}
 	}
 }
+
+func backdateUser(t *testing.T, store *Store, userID string, created time.Time) {
+	t.Helper()
+	if _, err := store.db.Exec(`UPDATE users SET created_at = $2 WHERE id = $1`, userID, created); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Owner decision 2026-11-26: accounts created before the cutoff are full;
+// the cutoff day itself and later are not grandfathered.
+func TestGrandfatherUsersBeforeTheCutoffOnly(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	cutoff := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	seedGrandfatherUsers(t, store, cutoff)
+
+	granted, err := store.GrandfatherUsersBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGrandfatherOutcome(t, store)
+	if granted < 1 {
+		t.Errorf("granted %d, want at least the one account", granted)
+	}
+	again, err := store.GrandfatherUsersBefore(ctx, cutoff)
+	if err != nil || again != 0 {
+		t.Errorf("a second run granted %d %v, want 0", again, err)
+	}
+}
+
+func seedGrandfatherUsers(t *testing.T, store *Store, cutoff time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	for id, created := range map[string]time.Time{
+		"gf-old":      cutoff.Add(-24 * time.Hour),
+		"gf-boundary": cutoff,
+		"gf-new":      cutoff.Add(24 * time.Hour),
+		"gf-decided":  cutoff.Add(-48 * time.Hour),
+	} {
+		if err := store.CreateUser(ctx, userNamed(id, id)); err != nil {
+			t.Fatal(err)
+		}
+		backdateUser(t, store, id, created)
+	}
+	if err := store.SaveUserTrust(ctx, trustRecord("gf-decided", trust.Limited, trust.MethodAdmin, trust.ReasonAdminOverride), "admin-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertGrandfatherOutcome(t *testing.T, store *Store) {
+	t.Helper()
+	ctx := context.Background()
+	old, _ := store.FindUserTrust(ctx, "gf-old")
+	if old == nil || old.State != trust.Full || old.Method != trust.MethodGrandfathered || old.Reason != trust.ReasonGrandfathered {
+		t.Errorf("an account before the cutoff: %+v", old)
+	}
+	for _, id := range []string{"gf-boundary", "gf-new"} {
+		if got, _ := store.FindUserTrust(ctx, id); got != nil {
+			t.Errorf("%s was grandfathered: %+v", id, got)
+		}
+	}
+	if decided, _ := store.FindUserTrust(ctx, "gf-decided"); decided == nil || decided.State != trust.Limited {
+		t.Errorf("an earlier decision was overwritten: %+v", decided)
+	}
+	if audit := auditRows(t, store, "gf-old"); len(audit) != 1 || audit[0] != [3]string{"", "full", "backfill"} {
+		t.Errorf("audit trail %v", audit)
+	}
+}

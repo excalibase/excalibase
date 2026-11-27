@@ -30,7 +30,7 @@ func TestFunctionEgressPolicyCilium(t *testing.T) {
 
 func TestFunctionEgressPolicyRefusesAnythingElse(t *testing.T) {
 	for _, value := range []string{"Cilium", "calico", "none"} {
-		cfg := AppConfig{ProvisionerMode: "k8s", DeploymentMode: "cloud", FunctionEgressPolicy: value}
+		cfg := AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s", DeploymentMode: "cloud", FunctionEgressPolicy: value}
 		err := cfg.Validate()
 		if err == nil || !strings.Contains(err.Error(), "FUNCTION_EGRESS_POLICY") {
 			t.Errorf("%q must be refused naming FUNCTION_EGRESS_POLICY, got %v", value, err)

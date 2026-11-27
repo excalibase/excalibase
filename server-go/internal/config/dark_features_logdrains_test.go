@@ -22,7 +22,7 @@ func TestDarkFeatures_LogDrainsOnASingleHostNeedHostLogs(t *testing.T) {
 		{"docker", []features.Feature{features.HostLogs}, false},
 	}
 	for _, tc := range cases {
-		got := AppConfig{ProvisionerMode: tc.mode, DarkFeatures: tc.on}.Features().Enabled(context.Background(), features.LogDrains)
+		got := AppConfig{AppTmpPercent: 25, ProvisionerMode: tc.mode, DarkFeatures: tc.on}.Features().Enabled(context.Background(), features.LogDrains)
 		if got != tc.want {
 			t.Errorf("mode %q with %v: logdrains=%v, want %v", tc.mode, tc.on, got, tc.want)
 		}

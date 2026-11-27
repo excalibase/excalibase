@@ -127,7 +127,7 @@ func (s *AppDeployService) pause(ctx context.Context, projectID, appID string, f
 // ready. A rollout that fails leaves the app FAILED; any other failure leaves
 // it RESUMING, for a retry.
 func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, actor string) (resumed *apphost.App, err error) {
-	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+	if err := s.checkStart(ctx, projectID); err != nil {
 		return nil, err
 	}
 	defer func() { s.settleLifecycle(projectID, appID, OperationResume, err) }()

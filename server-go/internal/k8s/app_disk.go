@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -87,13 +89,14 @@ func buildAppDiskClaim(namespace string, app *apphost.App, disk apphost.AppDisk,
 func mountAppDisk(deployment *appsv1.Deployment, claim *corev1.PersistentVolumeClaim, mountPath string) {
 	deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
 	pod := &deployment.Spec.Template.Spec
-	pod.Volumes = []corev1.Volume{{
+	pod.Volumes = append(pod.Volumes, corev1.Volume{
 		Name: appDiskVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim.Name},
 		},
-	}}
-	pod.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: appDiskVolumeName, MountPath: mountPath}}
+	})
+	pod.Containers[0].VolumeMounts = append(pod.Containers[0].VolumeMounts,
+		corev1.VolumeMount{Name: appDiskVolumeName, MountPath: mountPath})
 }
 
 // ensureAppDisk creates the claim once and never changes it: growing is
@@ -182,4 +185,50 @@ func (c *Client) deleteAppDisks(ctx context.Context, namespace, selector string,
 		return err
 	}
 	return waitUntilNoneLeft(ctx, timeout, list)
+}
+
+const (
+	appTmpVolumeName = "tmp"
+	appTmpMountPath  = "/tmp"
+)
+
+// mountAppScratch gives the read-only root its writable scratch: /tmp and a directory for each
+// VOLUME the image declares, which would otherwise be uncapped space on the node's disk. They are
+// memory emptyDirs, so the kernel enforces the size (a disk emptyDir is only checked by eviction
+// after the fact) and the bytes are charged to the container's memory limit, as on a single host.
+// percent of that limit is shared evenly between them. A path the app's own disk is mounted at keeps the disk.
+func mountAppScratch(deployment *appsv1.Deployment, resources corev1.ResourceRequirements, percent int, imageVolumes []string, diskPath string) error {
+	paths := scratchPaths(imageVolumes, diskPath)
+	// size 0 would mean no limit: a missing memory limit, or a share that rounds to nothing, is refused.
+	each := resources.Limits.Memory().Value() * int64(percent) / 100 / int64(1+len(paths))
+	if each < 1 {
+		return fmt.Errorf("%w: %d%% of the %d byte memory limit leaves no room for /tmp and %d image volumes",
+			ErrRenderApp, percent, resources.Limits.Memory().Value(), len(paths))
+	}
+	pod := &deployment.Spec.Template.Spec
+	for index, path := range append([]string{appTmpMountPath}, paths...) {
+		name := appTmpVolumeName
+		if index > 0 {
+			name = fmt.Sprintf("vol-%d", index)
+		}
+		pod.Volumes = append(pod.Volumes, corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: resource.NewQuantity(each, resource.BinarySI)},
+		}})
+		pod.Containers[0].VolumeMounts = append(pod.Containers[0].VolumeMounts, corev1.VolumeMount{Name: name, MountPath: path})
+	}
+	return nil
+}
+
+// scratchPaths are the image's VOLUME paths that need a directory of their own: cleaned, once each, sorted.
+func scratchPaths(imageVolumes []string, diskPath string) []string {
+	paths := []string{}
+	for _, declared := range imageVolumes {
+		cleaned := path.Clean("/" + declared)
+		if cleaned == appTmpMountPath || cleaned == diskPath || slices.Contains(paths, cleaned) {
+			continue
+		}
+		paths = append(paths, cleaned)
+	}
+	slices.Sort(paths)
+	return paths
 }

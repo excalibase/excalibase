@@ -111,6 +111,7 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 		sitebuilds.NewVaultSecrets(args.vault), sitebuilds.Options{
 			Mode: mode, NodeImage: cfg.SiteGit.NodeImage, Members: args.members,
 			CallbackURL: siteGitCallbackURL(cfg), Previews: previewSites(args.sites), OrgGuard: newOrgGuard(args.sqlStore, args.sqlStore),
+			ContainerGate: newTrustGate(cfg, args.sqlStore, args.sqlStore),
 		})
 	dispatcher := sitebuilds.NewDispatcher(service, runner, siteBuildDispatcherOptions(cfg))
 	gitHandler := handler.NewSiteGitHandler(service, cfg.StudioURL)

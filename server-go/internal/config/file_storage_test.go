@@ -44,10 +44,10 @@ func TestValidateFileStorage(t *testing.T) {
 		wantErr string
 	}{
 		{"unset is off, not an error", AppConfig{}, ""},
-		{"complete and apart from backups", AppConfig{FileStorage: complete, BackupEndpoint: "https://r2", BackupBucket: "excalibase-backups"}, ""},
-		{"partial", AppConfig{FileStorage: FileStorageConfig{Bucket: "files"}}, "STORAGE_ACCESS_KEY_ID"},
-		{"the backup bucket", AppConfig{FileStorage: complete, BackupEndpoint: "https://r2", BackupBucket: "files"}, "backups"},
-		{"same bucket name on another store is fine", AppConfig{FileStorage: complete, BackupEndpoint: "https://minio", BackupBucket: "files"}, ""},
+		{"complete and apart from backups", AppConfig{AppTmpPercent: 25, FileStorage: complete, BackupEndpoint: "https://r2", BackupBucket: "excalibase-backups"}, ""},
+		{"partial", AppConfig{AppTmpPercent: 25, FileStorage: FileStorageConfig{Bucket: "files"}}, "STORAGE_ACCESS_KEY_ID"},
+		{"the backup bucket", AppConfig{AppTmpPercent: 25, FileStorage: complete, BackupEndpoint: "https://r2", BackupBucket: "files"}, "backups"},
+		{"same bucket name on another store is fine", AppConfig{AppTmpPercent: 25, FileStorage: complete, BackupEndpoint: "https://minio", BackupBucket: "files"}, ""},
 	}
 	for _, tc := range cases {
 		err := tc.cfg.validateFileStorage()
@@ -61,7 +61,7 @@ func TestValidateFileStorage(t *testing.T) {
 }
 
 func TestValidate_RunsTheFileStorageCheck(t *testing.T) {
-	cfg := AppConfig{FileStorage: FileStorageConfig{Bucket: "files"}}
+	cfg := AppConfig{AppTmpPercent: 25, FileStorage: FileStorageConfig{Bucket: "files"}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate accepted a partial file store")
 	}

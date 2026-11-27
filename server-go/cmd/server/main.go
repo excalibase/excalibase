@@ -53,6 +53,7 @@ import (
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 	"github.com/excalibase/provisioning-poc/internal/studiooauth"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/excalibase/provisioning-poc/internal/wiring"
 	"github.com/excalibase/provisioning-poc/pkg/kmsseal"
@@ -96,6 +97,9 @@ func handleCLIArgs() bool {
 	case "vault":
 		vaultCLI()
 		return true
+	case "trust-backfill":
+		trustBackfillCLI()
+		return true
 	case "help", "--help", "-h":
 		printHelp()
 		return true
@@ -105,15 +109,21 @@ func handleCLIArgs() bool {
 
 // printHelp prints CLI usage information.
 func printHelp() {
-	fmt.Println("Usage: excalibase-server [command]")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  (none)              Start the HTTP server")
-	fmt.Println("  reset-password      Reset admin password (vault-gated)")
-	fmt.Println("  recover-instances   Re-discover K8s clusters into SQLite (vault-gated)")
-	fmt.Println("  vault status        Show whether the running server's vault is sealed")
-	fmt.Println("  vault unseal        Unseal the running server's vault (prompts for the key)")
-	fmt.Println("  help                Show this help")
+	fmt.Print(helpText())
+}
+
+func helpText() string {
+	return `Usage: excalibase-server [command]
+
+Commands:
+  (none)              Start the HTTP server
+  reset-password      Reset admin password (vault-gated)
+  recover-instances   Re-discover K8s clusters into SQLite (vault-gated)
+  vault status        Show whether the running server's vault is sealed
+  vault unseal        Unseal the running server's vault (prompts for the key)
+  trust-backfill      Make accounts created before TRUST_GRANDFATHER_BEFORE full (vault-gated; run before FEATURE_LIMITEDTRIAL)
+  help                Show this help
+`
 }
 
 // runServer initialises all dependencies and starts the HTTP server.
@@ -1132,7 +1142,9 @@ func functionCronLock(cfg config.AppConfig, sqlStore storage.PlatformStore) stor
 // Centralising the bag keeps buildRouter focused on routing rather than wiring.
 type handlerDeps struct {
 	// orgGuard refuses writes on a suspended owner's projects at the project gate (EXC-845); nil allows all.
-	orgGuard          *orgguard.Guard
+	orgGuard *orgguard.Guard
+	// trustGate refuses container writes on a limited owner's projects (EXC-899); nil allows all.
+	trustGate         *trust.Gate
 	suspensions       *adminconsole.SuspensionService
 	provHandler       *handler.ProvisioningHandler
 	sdkKeysHandler    *handler.SDKKeysHandler
@@ -1163,6 +1175,8 @@ type handlerDeps struct {
 	adminConsoleHandler *handler.AdminConsoleHandler
 	// adminAnalyticsHandler is the read-only numbers behind the console's analytics tabs (EXC-898).
 	adminAnalyticsHandler *handler.AdminAnalyticsHandler
+	// adminAttentionHandler pages the lists of the console's needs-attention card (EXC-898).
+	adminAttentionHandler *handler.AdminAttentionHandler
 	// adminAssertions checks Cloudflare Access assertions on the admin host; nil builds the real one from config.
 	adminAssertions adminaccess.Checker
 	// adminGateOverride replaces the gate built from config; tests that probe other layers use it.
@@ -1335,6 +1349,7 @@ func buildFunctionHandler(
 	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
 	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
 	fnHandler.SetOrgGuard(newOrgGuard(store, sqlStore))
+	fnHandler.SetContainerGate(newTrustGate(cfg, store, sqlStore))
 	if cfg.ProvisionerMode != "docker" {
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
@@ -1676,12 +1691,18 @@ func buildBackupService(
 // before operating on it (prevents cross-org project-member enumeration).
 func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceStore, nodes handler.NodePlacement, planChanged func()) *handler.OrgHandler {
 	h := handler.NewOrgHandler(sqlStore, sqlStore)
-	h.SetInstanceStore(instances)
-	h.SetOrgGuard(newOrgGuard(instances, sqlStore))
-	h.SetNodePlacement(nodes)
-	h.SetPlanChangeHook(planChanged)
+	configureOrgHandler(h, instances, newOrgGuard(instances, sqlStore), nodes, planChanged)
 	h.SetAudit(sqlStore)
 	return h
+}
+
+// configureOrgHandler is the wiring every org handler gets, shared with the
+// router tests so they run the production setup rather than their own.
+func configureOrgHandler(h *handler.OrgHandler, instances storage.InstanceStore, guard *orgguard.Guard, nodes handler.NodePlacement, planChanged func()) {
+	h.SetInstanceStore(instances)
+	h.SetOrgGuard(guard)
+	h.SetNodePlacement(nodes)
+	h.SetPlanChangeHook(planChanged)
 }
 
 // newAlertHandler wires the stores the platform-wide alert reads scope their
@@ -1781,6 +1802,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	appDeploySvc.SetProxyGuard(newProxyGuard(cfg, sqlStore))
 	appDeploySvc.SetOrgGuard(newOrgGuard(store, sqlStore))
+	appDeploySvc.SetContainerGate(newTrustGate(cfg, store, sqlStore))
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
 	appDeploySvc.SetNamespaceQuotaTiers(provSvc)
 	provSvc.SetProjectQuotaSync(appDeploySvc.SyncProjectQuota)
@@ -1950,7 +1972,12 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	if origins, ok := sqlStore.(storage.ProjectCorsEditor); ok {
 		appDeploySvc.SetCorsOriginReleaser(origins)
 	}
-	appDeploySvc.SetImageResolver(imagedigest.NewResolver(cfg.ExtraDenyPrefixes()))
+	imageRegistry := imagedigest.NewResolverWithRoutes(cfg.ExtraDenyPrefixes(), imageRegistryRoutes(cfg))
+	appDeploySvc.SetImageResolver(imageRegistry)
+	if cfg.ProvisionerMode != "docker" {
+		// A single host asks its engine for the image's VOLUMEs instead (dockerapps.Runtime).
+		appDeploySvc.SetImageVolumes(imageRegistry)
+	}
 	appDeploySvc.SetLocalRegistries(cfg.AppLocalRegistries)
 	appDeploySvc.SetFeatureFlags(cfg.Features())
 	appNetworkSvc := newAppNetworkService(sqlStore, store, appRuntime, a.claimer)
@@ -1980,6 +2007,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	suspensions.AddServingSteps(service.NewSuspendedSites(sitesSvc, store, servingGuard), service.NewSuspendedWorkloads(appDeploySvc, store, servingGuard))
 	return &handlerDeps{
 		orgGuard:              newOrgGuard(store, sqlStore),
+		trustGate:             newTrustGate(cfg, store, sqlStore),
 		suspensions:           suspensions,
 		appRegistry:           appRegistry,
 		siteBuilds:            builds,
@@ -2005,6 +2033,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		documentsHandler:      buildDocumentBrowser(k8sClient, a.dockerClient, vc, store),
 		adminHandler:          adminHandler,
 		adminConsoleHandler:   adminConsole,
+		adminAttentionHandler: handler.NewAdminAttentionHandler(adminconsole.NewAttention(pgstore.NewAdminConsole(sqlStore.DB()))),
 		adminAnalyticsHandler: handler.NewAdminAnalyticsHandler(pgstore.NewAdminConsole(sqlStore.DB()), cfg.Features()),
 		authHandler:           authHandler,
 		oauthHandler:          buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
@@ -2036,6 +2065,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appTemplateHandler: newAppTemplateHandler(appTemplateArgs{
 			sqlStore: sqlStore, projects: store, deployer: appDeploySvc, tiers: provSvc, disks: appDiskLimits,
 			budget: a.budget, network: appNetworkSvc, vault: vc, claimer: a.claimer, flags: cfg.Features(),
+			gate: newTrustGate(cfg, store, sqlStore),
 		}),
 		tierHandler:      tierHandler,
 		pgCatalogHandler: handler.NewPostgresCatalogHandler(cfg.DocumentDBEnabled),
@@ -2463,6 +2493,7 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 			r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.adminConsoleHandler.Routes(r) })
 			r.Route("/analytics", func(r chi.Router) { d.adminAnalyticsHandler.Routes(r) })
+			r.Route("/attention", func(r chi.Router) { d.adminAttentionHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.orgHandler.ConsoleRoutes(r) })
 			r.Route("/tiers", func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermViewAny))

@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { serverErrorMessage } from '../../utils/serverError';
-import { useOverview } from '../../hooks/useAdminConsole';
+import { useFailedProjects, useOverview, useSuspensions } from '../../hooks/useAdminConsole';
+import { FailedColumn, SignupsColumn, SuspendedColumn } from './attention/AttentionColumns';
 import type { ProjectBrief } from '../../api/adminConsole';
 import { AccountStatusBadge } from './AccountStatusBadge';
 
@@ -45,6 +46,8 @@ function TopList({ title, rows, value }: { readonly title: string; readonly rows
 // First on the page: what an operator should look at before anything else.
 export function NeedsAttention() {
   const { data, isLoading, error } = useOverview();
+  const suspended = useSuspensions();
+  const failed = useFailedProjects();
   if (isLoading) {
     return (
       <div className="bg-surface-card border border-border-primary rounded-xl p-6 flex justify-center">
@@ -59,48 +62,17 @@ export function NeedsAttention() {
       </div>
     );
   }
-  const quiet = data.newlySuspended.length === 0 && data.failedProjects.length === 0 && data.signups24h === 0;
+  const quiet = suspended.isSuccess && failed.isSuccess && (suspended.data?.pages[0]?.total ?? 0) === 0 && (failed.data?.pages[0]?.total ?? 0) === 0 && data.signups24h === 0;
   return (
     <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
       <h2 className="flex items-center gap-2 text-lg font-semibold">
         <AlertTriangle className="w-4 h-4" /> Needs attention
       </h2>
       {quiet && <p className="text-sm text-text-secondary">Nothing needs attention.</p>}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <Section title="Sign-ups">
-          <p className="text-sm">{data.signups24h} sign-ups in the last 24 h</p>
-          <ul className="text-sm space-y-0.5">
-            {data.signupDomains.map((item) => (
-              <li key={item.domain} className="flex justify-between">
-                <span>{item.domain}</span>
-                <span className="text-text-secondary">{item.count}</span>
-              </li>
-            ))}
-          </ul>
-        </Section>
-        <Section title="Newly suspended">
-          {data.newlySuspended.length === 0 && <p className="text-sm text-text-tertiary">None in the last 24 h.</p>}
-          <ul className="space-y-1.5">
-            {data.newlySuspended.map((item) => (
-              <li key={item.userId} className="text-sm">
-                <div className="font-medium">{item.email}</div>
-                <div className="text-xs text-text-tertiary">{item.reason}</div>
-              </li>
-            ))}
-          </ul>
-        </Section>
-        <Section title="Failed projects">
-          {data.failedProjects.length === 0 && <p className="text-sm text-text-tertiary">None.</p>}
-          <ul className="space-y-1.5">
-            {data.failedProjects.map((row) => (
-              <li key={row.projectId} className="text-sm">
-                <span className="font-medium">{row.projectName || row.projectId}</span>
-                <span className="text-text-tertiary"> · {row.ownerEmail}</span>
-                {row.failureReason && <div className="text-xs text-red-400">{row.failureReason}</div>}
-              </li>
-            ))}
-          </ul>
-        </Section>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 items-start">
+        <SignupsColumn signups={data.signups24h} domains={data.signupDomains} />
+        <SuspendedColumn query={suspended} />
+        <FailedColumn query={failed} />
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <TopList title="Top CPU" rows={data.topCpu} value={(row) => cores(row.cpuCores)} />

@@ -9,8 +9,14 @@ vi.mock('../../api/client', () => ({ api: { get: vi.fn() } }));
 
 const brief = (over: object) => ({ projectId: 'p1', projectName: 'shop', orgId: 'o1', ownerEmail: 'o@x.test', ownerStatus: 'active', status: 'ACTIVE', ...over });
 
-function renderCard(data: object) {
-  vi.mocked(api.get).mockResolvedValue({ data } as never);
+// The overview carries the day's numbers; the two lists are read a page at a time from their own routes.
+function renderCard(data: object, lists: { suspended?: object[]; failed?: object[] } = {}) {
+  const page = (items: object[] = []) => ({ data: { items, total: items.length } });
+  vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url === '/admin/attention/suspensions') return Promise.resolve(page(lists.suspended) as never);
+    if (url === '/admin/attention/failed-projects') return Promise.resolve(page(lists.failed) as never);
+    return Promise.resolve({ data } as never);
+  });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -31,15 +37,16 @@ describe('NeedsAttention', () => {
       ...empty,
       signups24h: 31,
       signupDomains: [{ domain: 'mailinator.test', count: 24 }, { domain: 'gmail.com', count: 7 }],
-      newlySuspended: [{ userId: 'u1', email: 'bad@mailinator.test', reason: 'proxy abuse', suspendedAt: '2026-11-16T01:00:00Z' }],
-      failedProjects: [brief({ projectId: 'p9', projectName: 'broken', status: 'FAILED', failureReason: 'no capacity' })],
+    }, {
+      suspended: [{ userId: 'u1', email: 'bad@mailinator.test', reason: 'proxy abuse', suspendedAt: '2026-11-16T01:00:00Z' }],
+      failed: [brief({ projectId: 'p9', projectName: 'broken', status: 'FAILED', failureReason: 'no capacity' })],
     });
 
     expect(await screen.findByText('31 sign-ups in the last 24 h')).toBeInTheDocument();
     expect(screen.getByText('mailinator.test')).toBeInTheDocument();
-    expect(screen.getByText('bad@mailinator.test')).toBeInTheDocument();
+    expect(await screen.findByText('bad@mailinator.test')).toBeInTheDocument();
     expect(screen.getByText('proxy abuse')).toBeInTheDocument();
-    const failed = screen.getByText('broken').closest('li') as HTMLElement;
+    const failed = (await screen.findByText('broken')).closest('li') as HTMLElement;
     expect(within(failed).getByText(/no capacity/)).toBeInTheDocument();
   });
 

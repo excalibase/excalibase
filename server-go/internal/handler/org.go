@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -91,6 +92,7 @@ func (h *OrgHandler) Routes(r chi.Router, isCloud bool, createLimits ...func(htt
 		r.With(createLimits...).Post("/", h.CreateOrg)
 	}
 	r.Route("/{orgId}", func(r chi.Router) {
+		r.Use(h.refuseSuspendedMemberWrites)
 		r.Get("/", h.GetOrg)
 		r.Patch("/", h.UpdateOrg)
 		if isCloud {
@@ -771,4 +773,45 @@ func (h *OrgHandler) denyOrgAction(w http.ResponseWriter, r *http.Request, orgID
 		return
 	}
 	httpError(w, message, http.StatusForbidden)
+}
+
+// refuseSuspendedMemberWrites answers 403 to a member's write on an org whose
+// owner is abuse-suspended, so no org route can widen or rename it (EXC-845).
+// DELETE stays open so a member can leave or clean up. Someone outside the org
+// gets the handler's own 404, which keeps the suspension from being probed.
+func (h *OrgHandler) refuseSuspendedMemberWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r.Context())
+		if user == nil || isReadOrDelete(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if h.orgGuard == nil {
+			writeOrgGuardError(w, orgguard.ErrCheckUnavailable)
+			return
+		}
+		orgID := chi.URLParam(r, "orgId")
+		member, err := h.orgStore.GetOrgMember(r.Context(), orgID, user.ID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows), err == nil && member == nil:
+			next.ServeHTTP(w, r)
+			return
+		case err != nil:
+			writeOrgGuardError(w, fmt.Errorf("%w: read the membership: %w", orgguard.ErrCheckUnavailable, err))
+			return
+		}
+		if err := h.orgGuard.CheckOrg(r.Context(), orgID); err != nil {
+			writeOrgGuardError(w, err)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isReadOrDelete(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodDelete:
+		return true
+	}
+	return false
 }

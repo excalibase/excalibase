@@ -63,7 +63,7 @@ func (g *gvisorCluster) deployWithAuth(t *testing.T, namespace, name string, aut
 	t.Helper()
 	app := liveApp(name, livePrivateImage, 8080)
 	app.ID = "app-" + namespace + "-" + name
-	workload, err := RenderAppWorkload(namespace, app, nil, AppRenderOptions{RuntimeClass: gvisorRuntimeClass, Route: liveRoute, DeployID: liveDeployID, PullAuth: auth})
+	workload, err := RenderAppWorkload(namespace, app, nil, AppRenderOptions{TmpPercent: 25, RuntimeClass: gvisorRuntimeClass, Route: liveRoute, DeployID: liveDeployID, PullAuth: auth})
 	if err != nil {
 		t.Fatalf("render %s: %v", name, err)
 	}

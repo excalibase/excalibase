@@ -55,7 +55,7 @@ func TestCookieIsolation_QuietWhenTheDomainsAreSeparate(t *testing.T) {
 }
 
 func TestCookieIsolation_InsecureCookiesNeverOnHTTPS(t *testing.T) {
-	cfg := AppConfig{StudioURL: "https://app.excalibase.io", InsecureCookies: true}
+	cfg := AppConfig{AppTmpPercent: 25, StudioURL: "https://app.excalibase.io", InsecureCookies: true}
 	if _, err := cfg.CheckCookieIsolation(); err == nil {
 		t.Fatal("insecure cookies were accepted behind an https Studio")
 	}
@@ -90,7 +90,7 @@ func TestCookieIsolation_InsecureCookiesRefusedWhenAHostingDomainIsASibling(t *t
 }
 
 func TestCookieIsolation_SchemeIsReadFromTheParsedURL(t *testing.T) {
-	cfg := AppConfig{StudioURL: "HTTPS://app.excalibase.io", InsecureCookies: true}
+	cfg := AppConfig{AppTmpPercent: 25, StudioURL: "HTTPS://app.excalibase.io", InsecureCookies: true}
 	if _, err := cfg.CheckCookieIsolation(); err == nil {
 		t.Fatal("an upper-case https scheme slipped past the insecure-mode refusal")
 	}

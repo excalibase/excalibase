@@ -32,10 +32,16 @@ func suspendedMayWrite(method, path string) bool {
 
 func suspendedMatrix(t *testing.T, suspended bool) (*chi.Mux, string) {
 	t.Helper()
+	router, who := suspendedMatrixWho(t, suspended)
+	return router, who[callerDeveloper]
+}
+
+func suspendedMatrixWho(t *testing.T, suspended bool) (*chi.Mux, callers) {
+	t.Helper()
 	// App hosting on and the optional handlers wired, so the routes the
 	// default matrix leaves unmounted are walked too.
 	cfg := config.AppConfig{DeploymentMode: "selfhosted", AppHostingEnabled: true}
-	router, who, _, _ := buildMatrixPlatform(t, cfg, func(deps *handlerDeps, _ *fakePlatform) {
+	router, who, _, _ := buildMatrixPlatform(t, cfg, func(deps *handlerDeps, platform *fakePlatform) {
 		instances := fakestore.NewInstances()
 		instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"})
 		deps.documentsHandler = handler.NewDocumentBrowserHandler(nil)
@@ -47,12 +53,14 @@ func suspendedMatrix(t *testing.T, suspended bool) (*chi.Mux, string) {
 			}
 			return map[string]bool{}, nil
 		})
+		deps.orgHandler = handler.NewOrgHandler(platform, nil)
+		configureOrgHandler(deps.orgHandler, instances, deps.orgGuard, nil, nil)
 	})
 	mux, ok := router.(*chi.Mux)
 	if !ok {
 		t.Fatal("buildRouter must return a *chi.Mux")
 	}
-	return mux, who[callerDeveloper]
+	return mux, who
 }
 
 func suspendedRequest(router http.Handler, method, path, token string) (int, string) {

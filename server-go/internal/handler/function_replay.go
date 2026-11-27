@@ -30,6 +30,10 @@ func (h *FunctionHandler) ReplayDeploys(ctx context.Context, projectID string) (
 	if err := h.orgGuard.CheckServing(ctx, projectID); err != nil {
 		return nil, err
 	}
+	// Nor a limited owner's (EXC-899): code is not pushed into a runtime for them.
+	if err := h.containerGate.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	list, err := h.store.List(projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list functions: %w", err)

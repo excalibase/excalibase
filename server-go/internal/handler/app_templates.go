@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/excalibase/provisioning-poc/internal/abuse"
-	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"io"
 	"log"
 	"net/http"
@@ -136,8 +135,8 @@ func writeTemplateError(w http.ResponseWriter, err error) {
 	var failed *service.TemplateFailedError
 	var incomplete *service.TemplateRollbackError
 	switch {
-	case orgguard.IsRefusal(err):
-		writeOrgGuardError(w, err)
+	case isStartRefusal(err):
+		writeStartRefusal(w, err)
 	case errors.As(err, &proxy):
 		httpError(w, proxy.Error(), http.StatusForbidden)
 	case errors.As(err, &registry):

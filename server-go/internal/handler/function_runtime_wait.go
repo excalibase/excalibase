@@ -10,7 +10,6 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
-	"github.com/excalibase/provisioning-poc/internal/orgguard"
 )
 
 // EXC-569: a secret or allowlist change can replace the project's runtime
@@ -104,8 +103,8 @@ func writeRuntimeFailure(w http.ResponseWriter, action string, err error) bool {
 		httpError(w, "project is being deleted", http.StatusConflict)
 	case errors.Is(err, ErrProjectRestoring):
 		httpError(w, "project is being restored", http.StatusConflict)
-	case orgguard.IsRefusal(err):
-		writeOrgGuardError(w, err)
+	case isStartRefusal(err):
+		writeStartRefusal(w, err)
 	case errors.Is(err, edgefn.ErrRuntimeUnreachable), errors.Is(err, errRuntimeNotRolledOut):
 		log.Printf("ERROR: %s: %v", action, err)
 		w.Header().Set("Retry-After", runtimeRetryAfter)
@@ -175,6 +174,9 @@ func (h *FunctionHandler) invokeDeployed(ctx context.Context, client *edgefn.Run
 // redeployFunction sends fn to the runtime as replay does: stored source,
 // the project's secrets and its egress.
 func (h *FunctionHandler) redeployFunction(ctx context.Context, client *edgefn.RuntimeClient, fn *edgefn.Function) error {
+	if err := h.containerGate.CheckProject(ctx, fn.ProjectID); err != nil {
+		return err
+	}
 	env, err := h.deployEnv(ctx, fn.ProjectID)
 	if err != nil {
 		return err

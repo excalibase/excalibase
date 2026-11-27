@@ -378,6 +378,10 @@ type AppConfig struct {
 	// AppEgressExtraDenyCIDRs are off-cluster ranges denied to apps beyond the fixed private list.
 	AppEgressExtraDenyCIDRs []string
 
+	// AppTmpPercent sizes an app pod's scratch /tmp, in memory, as a percent of
+	// its memory limit. The root filesystem is read-only.
+	AppTmpPercent int
+
 	// BuildEgressExtraDenyCIDRs are off-cluster ranges denied to git builds of sites and apps.
 	// Builds run untrusted code, so this list never falls back to the apps' list.
 	BuildEgressExtraDenyCIDRs []string
@@ -456,6 +460,9 @@ func (c AppConfig) IsCloud() bool {
 func (c AppConfig) Validate() error {
 	if c.ProvisionerMode == "docker" && c.IsCloud() {
 		return errDockerCloudUnsupported
+	}
+	if err := c.validateAppTmpPercent(); err != nil {
+		return err
 	}
 	if err := c.validateTenantStorageClasses(); err != nil {
 		return err
@@ -674,6 +681,7 @@ func load() AppConfig {
 		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",
 		AppRuntimeClass:                envOr("APP_RUNTIME_CLASS", "gvisor"),
 		AppEgressExtraDenyCIDRs:        envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),
+		AppTmpPercent:                  envTmpPercent("APP_TMP_PERCENT"),
 		BuildEgressExtraDenyCIDRs:      envEgressExtraDenyCIDRs("BUILD_EGRESS_EXTRA_DENY_CIDRS"),
 		AppDomain:                      os.Getenv("APP_DOMAIN"),
 		AppIngressClass:                envOr("APP_INGRESS_CLASS", "haproxy"),

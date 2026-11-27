@@ -29,7 +29,7 @@ spec:
   template:
     metadata:
       annotations:
-        excalibase.io/app-config-hash: 2e101c14bb41e12f
+        excalibase.io/app-config-hash: be56fc895b1cca23
       labels:
         app.kubernetes.io/component: app
         app.kubernetes.io/managed-by: excalibase-provisioning
@@ -87,11 +87,19 @@ spec:
             - AUDIT_WRITE
             drop:
             - ALL
-          readOnlyRootFilesystem: false
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
       runtimeClassName: gvisor
       securityContext:
         seccompProfile:
           type: RuntimeDefault
+      volumes:
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+        name: tmp
 status: {}
 ---
 apiVersion: cilium.io/v2
