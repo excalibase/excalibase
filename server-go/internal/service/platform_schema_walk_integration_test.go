@@ -220,3 +220,30 @@ func TestPlatformSchemas_ACustomerForeignKeyIntoAPlatformTableIsClean(t *testing
 		t.Fatal("the repair removed the customer's foreign key")
 	}
 }
+
+// A customer foreign key into a platform table is clean only when the check it
+// runs uses built-in types and operators: a customer type with an implicit cast
+// to integer makes Postgres run the customer's cast as the platform table's owner.
+func TestPlatformSchemas_AForeignKeyThroughACustomerCastIsTainted(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	c.plantEvil(t)
+	mustExec(t, c.admin, `ALTER TABLE auth.users OWNER TO auth_admin`)
+	for _, statement := range []string{
+		`CREATE TYPE public.uid AS (v int)`,
+		`CREATE FUNCTION public.uid_to_int(public.uid) RETURNS integer LANGUAGE plpgsql AS $$ BEGIN PERFORM public.evil(); RETURN ($1).v; END $$`,
+		`CREATE CAST (public.uid AS integer) WITH FUNCTION public.uid_to_int(public.uid) AS IMPLICIT`,
+	} {
+		mustExec(t, c.app, statement)
+	}
+	mustExec(t, c.admin, `CREATE TABLE public.prof (u public.uid REFERENCES auth.users(id))`)
+	mustExec(t, c.admin, `ALTER TABLE public.prof OWNER TO excalibase_app`)
+	if !c.probe(t) {
+		t.Fatal("the probe did not see a foreign key that runs a customer cast")
+	}
+	err := c.registerWith(t, "")
+	if err == nil || !strings.Contains(err.Error(), platformSchemaLeftMarker) {
+		t.Fatalf("registration did not leave the table for an operator: %v", err)
+	}
+}
