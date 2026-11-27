@@ -20,6 +20,7 @@ var orgScopedPrefix = "/api/orgs/{orgId}"
 
 // notOrgScoped are the writes that need no suspended-org gate, each with why.
 var notOrgScoped = map[string]string{
+	"POST /api/credits/terms":                          "the caller's own acceptance of the credit terms; no org, and a suspended account is refused on every request",
 	"POST /api/auth/login":                             "no org in the request; a suspended account is refused at login",
 	"POST /api/auth/logout":                            "ends the caller's own session",
 	"POST /api/auth/register":                          "creates an account, no org",

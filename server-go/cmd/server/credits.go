@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 )
 
 const (
@@ -81,8 +81,8 @@ func mountCredits(d *handlerDeps) func(http.Handler) http.Handler {
 func creditsBootCheck(cfg config.AppConfig) error {
 	flags := cfg.Features()
 	ctx := context.Background()
-	if features.Enabled(ctx, flags, features.Credits) && !features.Enabled(ctx, flags, features.LimitedTrial) {
-		return errors.New("FEATURE_CREDITS is on but FEATURE_LIMITEDTRIAL is off: credit would fund containers for accounts nobody has verified; turn on the limited trial first")
+	if !features.Enabled(ctx, flags, features.Credits) {
+		return nil
 	}
-	return nil
+	return trust.RequireContainerGate(ctx, flags, "credits")
 }
