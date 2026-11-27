@@ -1224,7 +1224,7 @@ Registration enforces this. If anything in the schema belongs to a role that
 is not a superuser, or the schema itself does, or any trigger sits on a table
 there, registration drops the schema with everything in it and recreates the
 platform's objects. It logs a WARNING when it does. A clean schema is left
-alone, so the scheduler's rows survive. On a project registered before
+alone, so the scheduler's rows survive. Unlike `auth` and `excalibase_cdc` (section 6.10), which quarantine customer objects and never drop them, this rebuild drops the schema with CASCADE, which also drops anything in another schema that depends on it. On a project registered before
 EXC-623 the scheduler tables belonged to `excalibase_app`, so that rebuild
 drops pending scheduled tasks. Cron rows come back on each function's next
 deploy. An event trigger also refuses a non-superuser's `CREATE EXTENSION` /
@@ -1280,6 +1280,94 @@ service for this purpose — customer SQL runs as it — nor is the owner login,
 so both are terminated when they block the rebuild. The lockdown also takes
 USAGE on the excalibase schema's own types from PUBLIC, so a customer cannot
 type an object elsewhere on one and make it a new dependent.
+
+## 6.10. Platform-managed schemas and database passwords (EXC-821)
+
+**Rotate a database password only through Studio** (or `POST .../credentials/rotate`,
+section 6.6). That path records the new password in the vault first, applies it,
+proves it, and only then promotes it. A password changed any other way is not
+what the platform holds.
+
+**Schemas.** `excalibase`, `auth` and `excalibase_cdc` belong to the platform.
+Customer SQL (`excalibase_app`), the owner's login and every role the owner
+creates cannot create in them, rename, drop or take ownership of them, or grant
+themselves anything there; integration tests pin each statement
+(`platform_schema_drift_integration_test.go`). A customer role is any role that
+is not a superuser, not a predefined `pg_` role and not on an exact list of the
+roles the platform creates (`auth_admin`, `cdc_watcher`, `excalibase_scheduler`,
+`postgres`, `streaming_replica` and the DocumentDB roles); never a name prefix,
+since the owner can create `excalibase_helper`. A listed role that a customer
+administers or granted membership in is a customer too. `excalibase_app`,
+`excalibase_runtime` and `excalibase_reader` are customers for schema rights,
+because customers hold their passwords. `excalibase` is the superuser's,
+and registration rebuilds it if anything in it is not (section 6.9).
+The `nosql` schema is not platform-managed: the function deploy still creates it
+as `excalibase_app` (`edgefn/migrator.go`), so it is the customer's.
+
+**Drift is repaired, and customer objects are never adopted.** Every reconcile
+pass (10 minutes, leading replica, ACTIVE Postgres projects) probes each project
+in one `psql` call. It counts as drift when, in `auth` or `excalibase_cdc`:
+a customer role owns the schema; a customer role holds any privilege on the schema
+or its tables, or PUBLIC can execute a function; a customer role owns a table,
+view, sequence, composite type, function, procedure, type, domain or operator; a
+trigger on a platform table is not the platform's; or a platform table has a rule.
+Registration runs the repair as separate scripts, each its own transaction, so a
+step that refuses cannot undo an earlier one. In order: the lockdown (reclaims
+the platform's own tables a customer came to own, drops triggers and rules the
+platform did not put on its tables, revokes every grant customer roles hold and
+PUBLIC's EXECUTE; it cannot refuse), the quarantine (it skips an object it cannot
+place rather than stop), the password repair, the registration SQL (whose guards
+can refuse), and the refusal for whatever is left.
+
+- A platform table (the known list in `platformServiceSchemas`: `auth.users`,
+  `refresh_tokens`, `password_reset_tokens`, `email_verification_tokens`,
+  `email_otps`, `auth_codes`, `flow_states`, `api_keys`) that a customer role owns
+  goes back to `auth_admin` in place and is never moved. A table the auth
+  service adds later belongs in that list and in
+  `testdata/auth_migration_tables.txt`, which a test pins to the auth migrations.
+- Customer-owned routines, types, domains and operators move to
+  `excalibase_quarantine_<schema>`, the customer still the owner. The schema is
+  taken over if it exists (owner to the superuser, CREATE revoked); an object whose
+  name is taken there goes to a schema of its own, and when eight such names are
+  taken the repair refuses (alert) instead of looping. The repair scripts run with a 60 s statement_timeout. The revokes name only roles that hold a grant (read from the ACLs), so the owner creating thousands of roles does not slow them. Every revoke cascades, so a grant chain (owner to sidekick to sidekick2 with the grant option) cannot stop it, and the same revokes clear default privileges for customer roles and grants on types and domains. Any failure of the lockdown, quarantine or refusal script, a statement or lock timeout, or the reconcile deadline raises the same alert, with its own message; each script prints `excalibase-repair-stage:<name>` so the reconcile can tell which one failed. The decision fails closed: an error from the repair run alerts unless the last script named is the password repair or the registration SQL, so an error with no script named alerts. The session pins `client_min_messages=notice`, because the owner can set it on the database or its role. Default privileges to PUBLIC count as customer ones. The quarantine runs ahead of the registration SQL, and the refusal after it, so a registration the owner makes refuse for good (by creating a platform role name such as `excalibase_docbrowser` on PG16+) cannot keep the quarantine from running; after any failed run the project is probed again and alerts while drift remains, and a refused registration alerts naming the role. The probe, quarantine and refusal are built from one list of catalogs (`platform_schema_kinds.go`: routines, types, operators, operator families and classes, collations, conversions, text search configurations and dictionaries, extended statistics, extensions, relations); a test fails when a catalog with a namespace column is on neither it nor the explained exemptions. A failed run whose aftermath cannot be probed alerts too. The platform does not drop or rename a squatted role, since it may own objects and carries the owner's password and memberships: an operator drops it. Default privileges with no schema (`ALTER DEFAULT PRIVILEGES FOR ROLE auth_admin GRANT ...`) for a platform role are cleared and probed like the per-schema ones. Nothing is dropped with CASCADE.
+- Any other relation a customer role owns is not touched: registration refuses
+  ("left for an operator") after the revokes have committed, and the reconcile
+  raises a CRITICAL project alert (`project.platform-schema`, in the alerts table)
+  that resolves when a pass finds the schemas clean. An operator reviews the object.
+- A platform table is tainted, and left for an operator the same way, when anything
+  attached to it depends (by `pg_depend`) on an object outside the platform schemas,
+  `pg_catalog` and `information_schema`, or on an object a customer role owns. The
+  walk covers the table's defaults, CHECK and foreign-key constraints, indexes
+  (expressions and operator classes), column types and domains with their
+  constraints, policies, triggers (the function and any routine in the WHEN clause)
+  and rules. Members of a superuser-owned extension are exempt. The probe and the
+  repair use the same walk, so a table the probe calls clean cannot run customer
+  code. A customer publication that includes a platform table taints it too.
+  A customer table that inherits a platform table, or is a partition of one, is
+  detached (`NO INHERIT` / `DETACH PARTITION`), because its triggers would fire
+  when the platform changes the parent, as the platform's role. The link is
+  recorded child to parent, so the walk from the table does not see it; the probe
+  looks at `pg_inherits` too. Detaching keeps the child's rows and columns, so
+  nothing of the customer's is lost. A customer table that references a platform table (a profiles table with ON DELETE CASCADE) is not a taint, since the cascade runs as that table's owner, provided every column of the key is a built-in type and the check uses built-in operators (a customer type with an implicit cast would run customer code as the platform table's owner, so that key is a taint); a platform table that references a customer table still is. Views and other objects that read a platform
+  table run as their own owner, not as the platform's role, so they are not repaired.
+  Reclaimed tables get row-level security forced off, and every policy on them
+  that depends on a customer object is dropped, so customer code never runs as
+  `auth_admin`.
+
+The `excalibase` schema still uses its existing rebuild (section 6.9).
+
+**What is not prevented.** Postgres lets any role change its own password with
+`ALTER ROLE ... PASSWORD`, and has no event trigger for it, so customer SQL can do
+it for `excalibase_app`, and the owner for its own login. The platform does not stop
+this. It finds it: each pass compares the verifier Postgres stores for the owner,
+`excalibase_app`, `excalibase_reader` and `excalibase_runtime` with the password the
+vault holds, and sets the database back to the vault's password. A verifier whose
+iteration count is not the platform's 4096 is drift without being hashed, so a
+tenant cannot stall the pass with a huge count. A role with a rotation in flight (a
+`pending/<role>` entry, or a current record marked pending) is skipped. So a
+password changed in SQL stops working within one reconcile interval, and until then
+the vault's copy and the database disagree, so a platform call made as that role can
+fail. Projects that are paused, busy or failing at a pass are repaired at a later one.
 
 ## 7. Image upgrade
 

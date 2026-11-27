@@ -1850,6 +1850,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	snapshotSvc := buildSnapshotService(store, k8sClient, cfg.StoragePath, buildDocumentConnector(k8sClient, nil, vc, store))
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
+	provSvc.SetSchemaAlerts(alertSvc)
 	startPoolPressureMonitor(sqlStore, alertSvc)
 	requestMetricsSvc := newRequestMetricsService(cfg, sqlStore, store)
 	requestTotals := metricsEndpointTotals(cfg, sqlStore)

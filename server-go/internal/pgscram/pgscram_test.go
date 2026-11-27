@@ -1,8 +1,10 @@
 package pgscram
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
 
 func fixedSalt() []byte {
@@ -83,5 +85,60 @@ func TestVerifierKeepsAPasswordSASLprepEmpties(t *testing.T) {
 	}
 	if invisible == empty {
 		t.Fatal("a password of invisible characters became the empty password")
+	}
+}
+
+// Matches tells whether a stored verifier belongs to a password, which is how
+// the reconcile notices a role whose password was changed in SQL (EXC-821).
+func TestMatchesTellsTheRightPasswordFromAnother(t *testing.T) {
+	verifier, err := VerifierWithSalt("right-password", fixedSalt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !Matches(verifier, "right-password") {
+		t.Error("the password the verifier was made from did not match")
+	}
+	if Matches(verifier, "other-password") {
+		t.Error("another password matched")
+	}
+}
+
+func TestMatchesRefusesWhatIsNotAScramVerifier(t *testing.T) {
+	for _, stored := range []string{"", "md5abc", "SCRAM-SHA-256$x:y$z", "SCRAM-SHA-256$4096:@@@$a:b", "SCRAM-SHA-256$0:AAEC$a:b"} {
+		if Matches(stored, "right-password") {
+			t.Errorf("%q matched", stored)
+		}
+	}
+}
+
+// The iteration count is set by whoever set the password: a verifier that asks
+// for any other count is refused without being hashed (EXC-821).
+func TestMatchesNeverHashesWithACustomerChosenIterationCount(t *testing.T) {
+	verifier, err := VerifierWithSalt("right-password", fixedSalt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, count := range []string{"0", "1", "4095", "4097", "2000000000", "-5", "x"} {
+		forged := strings.Replace(verifier, "$4096:", "$"+count+":", 1)
+		start := time.Now()
+		if Matches(forged, "right-password") {
+			t.Errorf("iteration count %s matched", count)
+		}
+		if took := time.Since(start); took > 50*time.Millisecond {
+			t.Errorf("iteration count %s was hashed: %s", count, took)
+		}
+	}
+}
+
+// A verifier whose StoredKey is right and ServerKey is not is not the password's.
+func TestMatchesComparesTheServerKeyToo(t *testing.T) {
+	verifier, err := VerifierWithSalt("right-password", fixedSalt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _, _ := strings.Cut(strings.TrimPrefix(verifier, "SCRAM-SHA-256$4096:AAECAwQFBgcICQoLDA0ODw==$"), ":")
+	forged := "SCRAM-SHA-256$4096:AAECAwQFBgcICQoLDA0ODw==$" + stored + ":" + base64.StdEncoding.EncodeToString(make([]byte, 32))
+	if Matches(forged, "right-password") {
+		t.Fatal("a wrong ServerKey matched")
 	}
 }

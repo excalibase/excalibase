@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 	"testing"
@@ -53,7 +54,23 @@ func newPlatformSchemaCaseOn(t *testing.T, pg *rolePostgres) *platformSchemaCase
 // startup reconcile all do, then logs every platform role in.
 func (c *platformSchemaCase) register(t *testing.T) {
 	t.Helper()
-	c.pg.psql(t, mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
+	if err := c.registerWith(t, ""); err != nil {
+		t.Fatalf("registration: %v", err)
+	}
+}
+
+// registerWith runs registration the way the service does, a script at a time,
+// with passwordRepair the reconcile's repair of a changed password.
+func (c *platformSchemaCase) registerWith(t *testing.T, passwordRepair string) error {
+	t.Helper()
+	err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app",
+		registrationScripts(mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"), passwordRepair)...)
+	c.connectAll(t)
+	return err
+}
+
+func (c *platformSchemaCase) connectAll(t *testing.T) {
+	t.Helper()
 	c.app = c.pg.connect(t, roleApp, customerAppPassword)
 	c.scheduler = c.pg.connect(t, roleScheduler, platformSchedulerPassword)
 	c.authAdmin = c.pg.connect(t, roleAuthAdmin, platformAuthPassword)

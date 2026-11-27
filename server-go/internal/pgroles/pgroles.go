@@ -23,6 +23,20 @@ var reservedNames = append(slices.Clone(tenantcert.PlatformRoles),
 // platform, DocumentDB or CloudNativePG creates now or may create later.
 var reservedPrefixes = []string{"pg_", "excalibase", "documentdb", "cnpg"}
 
+// platformSchemaRoles are the exact roles the platform itself creates that may
+// own or hold rights in its auth and excalibase_cdc schemas. It is a list of
+// names, never prefixes: the project owner can create any role it likes, and
+// excalibase_app, excalibase_runtime and excalibase_reader are not here
+// because customers hold their passwords. Predefined pg_ roles are the
+// server's, which refuses to create one by that prefix.
+var platformSchemaRoles = append(slices.DeleteFunc(slices.Clone(tenantcert.PlatformRoles), func(name string) bool { return name == "excalibase_app" }),
+	"postgres", "streaming_replica",
+	config.DocumentDBGatewayRole, config.DocumentDBMongoUsersGroup, config.DocumentDBBrowserLogin,
+)
+
+// PlatformSchemaRoles returns a copy of the roles the platform's schemas trust.
+func PlatformSchemaRoles() []string { return slices.Clone(platformSchemaRoles) }
+
 // ReservedNames returns a copy of the reserved role names.
 func ReservedNames() []string { return slices.Clone(reservedNames) }
 

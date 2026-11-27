@@ -458,7 +458,7 @@ func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec proje
 	if err != nil {
 		return err
 	}
-	return runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL)
+	return runSuperuserRoleSQL(ctx, exec, spec.databaseName, registrationScripts(roleSQL, "")...)
 }
 
 // projectRoleSQL pins the search_path and refuses platform role names a

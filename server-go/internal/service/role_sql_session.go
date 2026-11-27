@@ -40,6 +40,11 @@ var pinnedSessionOptions = []string{
 	"standard_conforming_strings=on",
 	"transform_null_equals=off",
 	"plpgsql.extra_errors=none",
+	// An owner can attach either to the database or to a role. The first would
+	// hide the notices the reconcile reads to tell which script failed; the
+	// second would let a column name win over a variable in the repair's PL/pgSQL.
+	"client_min_messages=notice",
+	"plpgsql.variable_conflict=error",
 	"search_path=pg_catalog,pg_temp",
 }
 
@@ -222,4 +227,22 @@ func serviceRoleArray() string {
 // the second script refuses on it: the lockdown must land regardless.
 func reservedSchemaFirstSQL() string {
 	return reservedSchemaRebuildSQL + reservedSchemaLockdownSQL(roleApp) + reservedSchemaGuardSQL + pgroles.SquatWarningSQL()
+}
+
+// registrationScripts are the scripts one registration or reconcile runs, each
+// its own transaction, in order.
+//
+// The lockdown, the quarantine, the password repair and the trigger and rule
+// drops commit before the registration SQL, whose guards can refuse (an owner
+// can make it refuse for good by creating a platform role name), so nothing
+// they do is undone or kept from running by a later step that refuses
+// (EXC-821). The refusal comes last: a leftover customer object must not stop
+// registration, and a failed run is re-probed for it.
+func registrationScripts(roleSQL, passwordRepair string) []string {
+	lockdown, quarantine, refusal := platformSchemaScripts()
+	scripts := []string{reservedSchemaFirstSQL(), lockdown, quarantine}
+	if passwordRepair != "" {
+		scripts = append(scripts, passwordRepair)
+	}
+	return append(scripts, stageNotice("registration")+roleSQL, refusal)
 }
