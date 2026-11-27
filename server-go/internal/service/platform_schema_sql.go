@@ -21,7 +21,7 @@ func platformSchemaScripts() (lockdown, quarantine, refusal string) {
 // schemaScoped fills the fragments that depend on which schema is read.
 func schemaScoped(namespace string) *strings.Replacer {
 	scoped := strings.NewReplacer("{{NS}}", namespace, "{{QNS}}", "to_regnamespace(quarantine)")
-	return strings.NewReplacer("{{OWNED}}", scoped.Replace(ownedObjectsSQL()), "{{TAINTED_TABLES}}", taintedTables,
+	return strings.NewReplacer("{{OWNED}}", scoped.Replace(ownedObjectsSQL()), "{{TAINTED_TABLES}}", scoped.Replace(taintedTables),
 		"{{LAST_TRY}}", strconv.Itoa(quarantineNameTries-1), "{{GRANTED}}", scoped.Replace(grantedOnSchema), "{{REVOKE_HELPER}}", revokeHelperSQL,
 		"{{STAGE_LOCKDOWN}}", stageNotice("lockdown"), "{{STAGE_QUARANTINE}}", stageNotice("quarantine"), "{{STAGE_REFUSAL}}", stageNotice("refusal"), "{{MOVABLE}}", scoped.Replace(movableObjectsSQL()), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargetsSQL()))
 }
@@ -38,6 +38,7 @@ DO $excalibase_schema_lockdown$
 DECLARE
   entry record;
   item record;
+  policy record;
   schema_oid oid;
 BEGIN
   FOR entry IN SELECT * FROM (VALUES {{SERVICE_ROLES}}) AS v(schema_name, service_role, known_tables) LOOP
@@ -56,13 +57,25 @@ BEGIN
       WHERE c.relnamespace = schema_oid AND c.relkind IN ('r', 'p') AND c.relname = ANY (entry.known_tables) AND {{CUSTOMER_R}}
     LOOP
       EXECUTE format('ALTER TABLE %s OWNER TO %I', item.name, entry.service_role);
+      EXECUTE format('ALTER TABLE %s NO FORCE ROW LEVEL SECURITY', item.name);
+      FOR policy IN SELECT pl.polname FROM pg_policy pl WHERE pl.polrelid = item.name::regclass LOOP
+        EXECUTE format('DROP POLICY %I ON %s', policy.polname, item.name);
+      END LOOP;
+    END LOOP;
+    FOR item IN
+      SELECT pl.polname, pl.polrelid::regclass::text AS relation FROM pg_policy pl
+      JOIN pg_class c ON c.oid = pl.polrelid JOIN pg_roles r ON r.oid = c.relowner
+      WHERE c.relnamespace = schema_oid AND NOT {{CUSTOMER_R}}
+        AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_policy'::regclass AND d.objid = pl.oid AND {{FOREIGN_DEP}})
+    LOOP
+      EXECUTE format('DROP POLICY %I ON %s', item.polname, item.relation);
     END LOOP;
 
     FOR item IN
       SELECT t.tgname, t.tgrelid::regclass::text AS relation FROM pg_trigger t
       JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_roles r ON r.oid = c.relowner
       WHERE c.relnamespace = schema_oid AND NOT t.tgisinternal AND NOT {{CUSTOMER_R}}
-        AND NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = t.tgfoid AND NOT {{FOREIGN_PROC}})
+        AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_trigger'::regclass AND d.objid = t.oid AND {{FOREIGN_DEP}})
     LOOP
       EXECUTE format('DROP TRIGGER %I ON %s', item.tgname, item.relation);
     END LOOP;
@@ -216,7 +229,7 @@ const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
       OR EXISTS (SELECT 1 FROM {{OWNED}} o JOIN pg_roles r ON r.oid = o.owner WHERE {{CUSTOMER_R}})
       OR EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_roles r ON r.oid = c.relowner
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND NOT t.tgisinternal AND NOT {{CUSTOMER_R}}
-                   AND NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = t.tgfoid AND NOT {{FOREIGN_PROC}}))
+                   AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_trigger'::regclass AND d.objid = t.oid AND {{FOREIGN_DEP}}))
       OR EXISTS (SELECT 1 FROM pg_rewrite w JOIN pg_class c ON c.oid = w.ev_class JOIN pg_roles r ON r.oid = c.relowner
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND w.rulename <> '_RETURN' AND NOT {{CUSTOMER_R}})
       OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner

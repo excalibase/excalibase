@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -81,6 +82,7 @@ func platformSchemaFragments() *strings.Replacer {
 		"{{FOREIGN_PROC}}", foreignRoutine("p", "proowner", "pronamespace"),
 		"{{FOREIGN_OP}}", foreignRoutine("op", "oprowner", "oprnamespace"),
 		"{{FOREIGN_OPCLASS}}", foreignRoutine("oc", "opcowner", "opcnamespace"),
+		"{{FOREIGN_DEP}}", foreignDependencySQL(),
 		"{{TAINTED}}", excalibaseSchemaTaintedCondition,
 	)
 }
@@ -93,20 +95,74 @@ func typeOwnerOf(alias string) string {
       WHERE g.rngmultitypid = {{T}}.oid), {{T}}.typowner) ELSE {{T}}.typowner END)`, "{{T}}", alias)
 }
 
-// taintedTables are tables in {{NS}} with a policy, column default, CHECK or
-// index expression that calls a routine or operator, or an index that uses an
-// operator class, the platform does not own.
-const taintedTables = `(
-    SELECT x.rel FROM (
-      SELECT a.adrelid AS rel, d.refclassid, d.refobjid FROM pg_attrdef a JOIN pg_depend d ON d.classid = 'pg_attrdef'::regclass AND d.objid = a.oid
-      UNION ALL SELECT c.conrelid, d.refclassid, d.refobjid FROM pg_constraint c JOIN pg_depend d ON d.classid = 'pg_constraint'::regclass AND d.objid = c.oid WHERE c.conrelid <> 0
-      UNION ALL SELECT pl.polrelid, d.refclassid, d.refobjid FROM pg_policy pl JOIN pg_depend d ON d.classid = 'pg_policy'::regclass AND d.objid = pl.oid
-      UNION ALL SELECT i.indrelid, d.refclassid, d.refobjid FROM pg_index i JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = i.indexrelid
-    ) x
-    WHERE (x.refclassid = 'pg_proc'::regclass AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = x.refobjid AND {{FOREIGN_PROC}}))
-       OR (x.refclassid = 'pg_operator'::regclass AND EXISTS (SELECT 1 FROM pg_operator op WHERE op.oid = x.refobjid AND {{FOREIGN_OP}}))
-       OR (x.refclassid = 'pg_opclass'::regclass AND EXISTS (SELECT 1 FROM pg_opclass oc WHERE oc.oid = x.refobjid AND {{FOREIGN_OPCLASS}}))
+// platformTables are the tables in {{NS}}, and everything attached to one that
+// can run code or point elsewhere (its triggers, policies, defaults,
+// constraints, indexes and rules), each as the catalog and oid pg_depend knows it by.
+const attachedToPlatformTables = `
+      SELECT t.oid AS rel, 'pg_class'::regclass AS classid, t.oid AS objid FROM pg_class t WHERE t.relnamespace = {{NS}} AND t.relkind IN ('r', 'p')
+      UNION ALL SELECT g.tgrelid, 'pg_trigger'::regclass, g.oid FROM pg_trigger g JOIN pg_class t ON t.oid = g.tgrelid WHERE t.relnamespace = {{NS}}
+      UNION ALL SELECT pl.polrelid, 'pg_policy'::regclass, pl.oid FROM pg_policy pl JOIN pg_class t ON t.oid = pl.polrelid WHERE t.relnamespace = {{NS}}
+      UNION ALL SELECT a.adrelid, 'pg_attrdef'::regclass, a.oid FROM pg_attrdef a JOIN pg_class t ON t.oid = a.adrelid WHERE t.relnamespace = {{NS}}
+      UNION ALL SELECT k.conrelid, 'pg_constraint'::regclass, k.oid FROM pg_constraint k JOIN pg_class t ON t.oid = k.conrelid WHERE t.relnamespace = {{NS}}
+      UNION ALL SELECT i.indrelid, 'pg_class'::regclass, i.indexrelid FROM pg_index i JOIN pg_class t ON t.oid = i.indrelid WHERE t.relnamespace = {{NS}}
+      UNION ALL SELECT w.ev_class, 'pg_rewrite'::regclass, w.oid FROM pg_rewrite w JOIN pg_class t ON t.oid = w.ev_class WHERE t.relnamespace = {{NS}}`
+
+// taintedTables are tables in {{NS}} that depend on something that is not the
+// platform's, or that a customer publication includes. The dependencies are the
+// ones pg_depend records for the table and what is attached to it: a trigger's
+// function and WHEN clause, a policy's expressions and the relations it names, a
+// default, a CHECK, a foreign key's other table, a column's type and a domain's
+// own checks, an index's expressions, operator classes and collations.
+var taintedTables = `(
+    SELECT att.rel FROM (` + attachedToPlatformTables + `
+    ) att WHERE EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = att.classid AND d.objid = att.objid AND {{FOREIGN_DEP}})
+    UNION SELECT pr.prrelid FROM pg_publication_rel pr JOIN pg_publication pu ON pu.oid = pr.prpubid
+      JOIN pg_roles r ON r.oid = pu.pubowner JOIN pg_class t ON t.oid = pr.prrelid WHERE t.relnamespace = {{NS}} AND {{CUSTOMER_R}}
+    UNION SELECT t.oid FROM pg_class t JOIN pg_publication_namespace pn ON pn.pnnspid = t.relnamespace
+      JOIN pg_publication pu ON pu.oid = pn.pnpubid JOIN pg_roles r ON r.oid = pu.pubowner WHERE t.relnamespace = {{NS}} AND t.relkind IN ('r', 'p') AND {{CUSTOMER_R}}
   )`
+
+// ignoredDependencyCatalogs are the catalogs a dependency can name that are
+// nobody's object: the schema, an access method, a language.
+var ignoredDependencyCatalogs = []string{"pg_namespace", "pg_am", "pg_language"}
+
+// foreignDependencySQL is true of a pg_depend row d whose referenced object is
+// not the platform's: it sits outside the platform schemas, or a customer role
+// owns it, unless it belongs to an extension a customer does not own. A
+// referenced catalog the repair does not know is foreign too.
+// aliasRef matches a table alias used as a qualifier, never the tail of a longer name.
+func aliasRef(alias string) *regexp.Regexp {
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(alias) + `\.`)
+}
+
+func foreignDependencySQL() string {
+	platformSchemas := "(SELECT oid FROM pg_namespace WHERE nspname = ANY (" + textArraySQL(platformSchemaNames) + "))"
+	known := make([]string, 0, len(schemaObjectKinds)+len(ignoredDependencyCatalogs))
+	parts := make([]string, 0, len(schemaObjectKinds)+1)
+	for _, kind := range schemaObjectKinds {
+		alias := "ref_" + kind.alias
+		known = append(known, "'"+kind.catalog+"'")
+		foreign := alias + "." + kind.namespaceColumn + " NOT IN " + platformSchemas
+		if kind.owner != "" {
+			foreign += " OR EXISTS (SELECT 1 FROM pg_roles dep_owner WHERE dep_owner.oid = " + aliasRef(kind.alias).ReplaceAllString(kind.owner, alias+".") + " AND " + customerRolePredicate("dep_owner") + ")"
+		}
+		parts = append(parts, "(d.refclassid = '"+kind.catalog+"'::regclass AND EXISTS (SELECT 1 FROM "+kind.catalog+" "+alias+
+			" WHERE "+alias+".oid = d.refobjid AND ("+foreign+")))")
+	}
+	known = append(known, "'pg_constraint'")
+	parts = append(parts, `(d.refclassid = 'pg_constraint'::regclass AND EXISTS (SELECT 1 FROM pg_constraint ref_k
+        LEFT JOIN pg_class ref_kc ON ref_kc.oid = ref_k.conrelid LEFT JOIN pg_type ref_kt ON ref_kt.oid = ref_k.contypid
+        WHERE ref_k.oid = d.refobjid AND ((ref_kc.oid IS NOT NULL AND (ref_kc.relnamespace NOT IN `+platformSchemas+`
+          OR EXISTS (SELECT 1 FROM pg_roles dep_owner WHERE dep_owner.oid = ref_kc.relowner AND `+customerRolePredicate("dep_owner")+`)))
+          OR (ref_kt.oid IS NOT NULL AND ref_kt.typnamespace NOT IN `+platformSchemas+`))))`)
+	for _, catalog := range ignoredDependencyCatalogs {
+		known = append(known, "'"+catalog+"'")
+	}
+	parts = append(parts, "d.refclassid::regclass::text <> ALL (ARRAY["+strings.Join(known, ", ")+"])")
+	inExtension := `NOT EXISTS (SELECT 1 FROM pg_depend ext_dep JOIN pg_extension ext ON ext.oid = ext_dep.refobjid JOIN pg_roles ext_owner ON ext_owner.oid = ext.extowner
+        WHERE ext_dep.refclassid = 'pg_extension'::regclass AND ext_dep.classid = d.refclassid AND ext_dep.objid = d.refobjid AND ext_dep.deptype = 'e' AND NOT ` + customerRolePredicate("ext_owner") + `)`
+	return "((" + strings.Join(parts, "\n      OR ") + ")\n      AND " + inExtension + ")"
+}
 
 // storedRoleVerifier is one role and the verifier pg_authid holds for it.
 type storedRoleVerifier struct{ Role, Verifier string }

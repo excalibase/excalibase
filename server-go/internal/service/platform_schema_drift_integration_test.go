@@ -193,8 +193,17 @@ func TestPlatformSchemas_RulesAreDroppedAndTaintedTablesAreRefused(t *testing.T)
 		t.Fatal("a planted rule survived")
 	}
 
+	// A policy that calls customer code is dropped, not refused.
+	mustExec(t, c.admin, `CREATE POLICY planted ON auth.users USING (public.evil())`)
+	if !c.probe(t) {
+		t.Error("policy: the probe did not see it")
+	}
+	c.register(t)
+	if scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_policy WHERE polname = 'planted')`) {
+		t.Error("a planted policy survived")
+	}
+
 	for name, statement := range map[string]string{
-		"policy":  `CREATE POLICY planted ON auth.users USING (public.evil())`,
 		"default": `ALTER TABLE auth.users ADD COLUMN planted boolean DEFAULT public.evil()`,
 		"check":   `ALTER TABLE auth.users ADD CONSTRAINT planted CHECK (public.evil())`,
 	} {
@@ -207,8 +216,8 @@ func TestPlatformSchemas_RulesAreDroppedAndTaintedTablesAreRefused(t *testing.T)
 			t.Errorf("%s: registration did not refuse the table: %v", name, err)
 		}
 		mustExec(t, c.admin, map[string]string{
-			"policy": `DROP POLICY planted ON auth.users`, "default": `ALTER TABLE auth.users DROP COLUMN planted`,
-			"check": `ALTER TABLE auth.users DROP CONSTRAINT planted`}[name])
+			"default": `ALTER TABLE auth.users DROP COLUMN planted`,
+			"check":   `ALTER TABLE auth.users DROP CONSTRAINT planted`}[name])
 	}
 }
 

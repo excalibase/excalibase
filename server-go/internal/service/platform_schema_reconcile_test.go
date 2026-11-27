@@ -658,3 +658,17 @@ func TestSquattedRoles_KeepOnlyExactPlatformNames(t *testing.T) {
 		t.Fatalf("squattedRoles = %q, want only %q", got, roleApp)
 	}
 }
+
+// The dependency check names every catalog the repair knows and treats the rest
+// as foreign.
+func TestForeignDependencySQL_CoversEveryKnownCatalogAndFailsClosedOnTheRest(t *testing.T) {
+	sql := foreignDependencySQL()
+	for _, kind := range schemaObjectKinds {
+		if !strings.Contains(sql, "d.refclassid = '"+kind.catalog+"'::regclass") {
+			t.Errorf("the dependency check does not look at %s", kind.catalog)
+		}
+	}
+	if !strings.Contains(sql, "d.refclassid::regclass::text <> ALL (ARRAY[") {
+		t.Error("a catalog the repair does not know is not foreign")
+	}
+}

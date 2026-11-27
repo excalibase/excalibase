@@ -1330,12 +1330,22 @@ can refuse), and the refusal for whatever is left.
   taken over if it exists (owner to the superuser, CREATE revoked); an object whose
   name is taken there goes to a schema of its own, and when eight such names are
   taken the repair refuses (alert) instead of looping. The repair scripts run with a 60 s statement_timeout. The revokes name only roles that hold a grant (read from the ACLs), so the owner creating thousands of roles does not slow them. Every revoke cascades, so a grant chain (owner to sidekick to sidekick2 with the grant option) cannot stop it, and the same revokes clear default privileges for customer roles and grants on types and domains. Any failure of the lockdown, quarantine or refusal script, a statement or lock timeout, or the reconcile deadline raises the same alert, with its own message; each script prints `excalibase-repair-stage:<name>` so the reconcile can tell which one failed. The decision fails closed: an error from the repair run alerts unless the last script named is the password repair or the registration SQL, so an error with no script named alerts. The session pins `client_min_messages=notice`, because the owner can set it on the database or its role. Default privileges to PUBLIC count as customer ones. The quarantine runs ahead of the registration SQL, and the refusal after it, so a registration the owner makes refuse for good (by creating a platform role name such as `excalibase_docbrowser` on PG16+) cannot keep the quarantine from running; after any failed run the project is probed again and alerts while drift remains, and a refused registration alerts naming the role. The probe, quarantine and refusal are built from one list of catalogs (`platform_schema_kinds.go`: routines, types, operators, operator families and classes, collations, conversions, text search configurations and dictionaries, extended statistics, extensions, relations); a test fails when a catalog with a namespace column is on neither it nor the explained exemptions. A failed run whose aftermath cannot be probed alerts too. The platform does not drop or rename a squatted role, since it may own objects and carries the owner's password and memberships: an operator drops it. Default privileges with no schema (`ALTER DEFAULT PRIVILEGES FOR ROLE auth_admin GRANT ...`) for a platform role are cleared and probed like the per-schema ones. Nothing is dropped with CASCADE.
-- Any other relation a customer role owns, and a platform table whose policy,
-  default, CHECK or index calls a routine or operator the platform does not own,
-  is not touched: registration refuses ("left for an operator") after the
-  revokes have committed, and the reconcile raises a CRITICAL project alert
-  (`project.platform-schema`, in the alerts table) that resolves when a pass finds
-  the schemas clean. An operator reviews the object.
+- Any other relation a customer role owns is not touched: registration refuses
+  ("left for an operator") after the revokes have committed, and the reconcile
+  raises a CRITICAL project alert (`project.platform-schema`, in the alerts table)
+  that resolves when a pass finds the schemas clean. An operator reviews the object.
+- A platform table is tainted, and left for an operator the same way, when anything
+  attached to it depends (by `pg_depend`) on an object outside the platform schemas,
+  `pg_catalog` and `information_schema`, or on an object a customer role owns. The
+  walk covers the table's defaults, CHECK and foreign-key constraints, indexes
+  (expressions and operator classes), column types and domains with their
+  constraints, policies, triggers (the function and any routine in the WHEN clause)
+  and rules. Members of a superuser-owned extension are exempt. The probe and the
+  repair use the same walk, so a table the probe calls clean cannot run customer
+  code. A customer publication that includes a platform table taints it too.
+  Reclaimed tables get row-level security forced off, and every policy on them
+  that depends on a customer object is dropped, so customer code never runs as
+  `auth_admin`.
 
 The `excalibase` schema still uses its existing rebuild (section 6.9).
 
