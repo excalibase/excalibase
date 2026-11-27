@@ -112,3 +112,46 @@ func TestTheServiceCountIsALimitToo(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestARefusalReadsInTheUnitsOfTheDimensionThatIsShort(t *testing.T) {
+	ceiling := Size{CPUMilli: 1000, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, Services: 3}
+	cases := map[string]struct {
+		delta, used Size
+		want        []string
+	}{
+		"CPU":      {Size{CPUMilli: 750}, Size{CPUMilli: 500}, []string{"0.75 vCPU", "0.50 vCPU", "1.00 vCPU"}},
+		"memory":   {Size{MemoryBytes: 512 << 20}, Size{MemoryBytes: 768 << 20}, []string{"512 MiB", "256 MiB", "1 GiB"}},
+		"disk":     {Size{DiskBytes: 3 << 30}, Size{DiskBytes: 1 << 30}, []string{"3 GiB", "1 GiB", "2 GiB"}},
+		"services": {Size{Services: 2}, Size{Services: 2}, []string{"2 more services", "only 1 is left", "allows 3"}},
+	}
+	for name, c := range cases {
+		err := Decide(c.used, c.delta, ceiling)
+		var refusal *Refusal
+		if !errors.As(err, &refusal) || refusal.Dimension != name {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		for _, fragment := range c.want {
+			if !strings.Contains(err.Error(), fragment) {
+				t.Errorf("%s: %q is missing %q", name, err.Error(), fragment)
+			}
+		}
+	}
+}
+
+func TestAnOrgAlreadyOverItsPlanIsToldNothingIsLeft(t *testing.T) {
+	err := Decide(Size{CPUMilli: 2000}, Size{CPUMilli: 1}, Size{CPUMilli: 1000})
+	var refusal *Refusal
+	if !errors.As(err, &refusal) || refusal.Left.CPUMilli != 0 {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestSizeSubtractionAndEmptiness(t *testing.T) {
+	if got := (Size{CPUMilli: 5, Services: 2}).Sub(Size{CPUMilli: 3, Services: 1}); got != (Size{CPUMilli: 2, Services: 1}) {
+		t.Fatalf("%+v", got)
+	}
+	if !(Size{}).IsZero() || (Size{Services: 1}).IsZero() {
+		t.Fatal("IsZero")
+	}
+}

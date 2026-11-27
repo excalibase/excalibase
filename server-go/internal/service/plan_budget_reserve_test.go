@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -127,4 +128,60 @@ func TestAnUnreadablePlanStopsAResizeWhileTheBudgetIsOn(t *testing.T) {
 	if err == nil || putBack != nil || len(reserver.asked) != 0 {
 		t.Fatalf("flag on refuses what it cannot read: %v %+v", err, reserver.asked)
 	}
+}
+
+func TestEachPartOfAnUnreadablePlanNamesItself(t *testing.T) {
+	cases := map[string]struct {
+		plan config.TierConfig
+		disk string
+		want string
+	}{
+		"cpu":    {config.TierConfig{CPU: "lots", Memory: "1Gi", Instances: 1}, "1Gi", "plan cpu"},
+		"memory": {config.TierConfig{CPU: "1", Memory: "plenty", Instances: 1}, "1Gi", "plan memory"},
+		"disk":   {config.TierConfig{CPU: "1", Memory: "1Gi", Instances: 1}, "big", "plan disk"},
+	}
+	for name, c := range cases {
+		if _, err := resizeReservation(c.plan, c.disk); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestAPlanWithNoCopiesCountsOne(t *testing.T) {
+	got, err := resizeReservation(config.TierConfig{CPU: "1", Memory: "1Gi", Instances: 0}, "1Gi")
+	if err != nil || got.Copies != 1 {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestTheReserverIsWiredThroughItsSetter(t *testing.T) {
+	reserver := &recordingReserver{}
+	svc := &ProvisioningService{}
+	svc.SetBudgetReserver(reserver)
+	if svc.reserver != reserver {
+		t.Fatal("the setter must keep the reserver")
+	}
+}
+
+func TestAStoreFailureWhileLeavingASizeUnrecordedStopsTheResize(t *testing.T) {
+	reserver := &recordingReserver{inactive: true, err: errors.New("db down")}
+	svc := &ProvisioningService{reserver: reserver}
+	if _, err := svc.reserveResize(context.Background(), &domain.DatabaseInstance{ProjectID: "p"}, config.TierConfig{CPU: "x"}, "1Gi"); err == nil {
+		t.Fatal("a failed write must not let the resize go on")
+	}
+}
+
+type failingRestore struct{ recordingReserver }
+
+func (*failingRestore) RestoreDatabaseSize(context.Context, string, planbudget.Reservation) error {
+	return errors.New("db down")
+}
+
+func TestAFailedPutBackIsLoggedAndDoesNotPanic(t *testing.T) {
+	svc := &ProvisioningService{reserver: &failingRestore{}}
+	putBack, err := svc.reserveResize(context.Background(), &domain.DatabaseInstance{ProjectID: "p"}, standardPlan, "60Gi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putBack()
 }
