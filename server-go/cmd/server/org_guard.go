@@ -21,10 +21,12 @@ func newOrgGuard(instances storage.InstanceStore, sqlStore storage.PlatformStore
 }
 
 // projectAccess binds the path project to the caller, then refuses a write on
-// the project of a suspended owner's org (EXC-845).
+// the project of a suspended owner's org (EXC-845) and a container write on
+// a limited owner's project (EXC-899).
 func projectAccess(store storage.InstanceStore, orgs storage.OrgStore, d *handlerDeps) []func(http.Handler) http.Handler {
 	return []func(http.Handler) http.Handler{
 		custommw.RequireProjectAccess(store, orgs),
 		custommw.RefuseSuspendedWrites(d.orgGuard),
+		custommw.RequireVerifiedForContainers(d.trustGate),
 	}
 }

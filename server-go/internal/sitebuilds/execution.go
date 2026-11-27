@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
-	"github.com/excalibase/provisioning-poc/internal/orgguard"
 )
 
 // buildKind is what a site build and an app build do differently inside one run.
@@ -99,12 +98,12 @@ func (e *execution) execute(ctx context.Context) outcome {
 
 // checkNotSuspended stops a build queued before its org's owner was suspended, before any Job exists.
 func (e *execution) checkNotSuspended(ctx context.Context) *outcome {
-	err := e.dispatcher.service.options.OrgGuard.CheckProject(ctx, e.build.ProjectID)
-	switch {
+	err := e.dispatcher.service.options.checkStart(ctx, e.build.ProjectID)
+	switch reason := refusedReason(err); {
 	case err == nil:
 		return nil
-	case errors.Is(err, orgguard.ErrOrgSuspended):
-		return refuse(FailPlatform, orgguard.Message)
+	case reason != "":
+		return refuse(FailPlatform, reason)
 	default:
 		log.Printf("%s build %s: check the organisation is not suspended: %v", e.build.Kind, e.build.ID, err)
 		// A blip must not cost a legitimate build: it goes back to the queue.

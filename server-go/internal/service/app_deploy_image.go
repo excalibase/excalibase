@@ -58,7 +58,7 @@ func (s *AppDeployService) SetImageResolver(images ImageResolver) {
 // the reference as named, so the next plain deploy and the image watcher
 // follow it.
 func (s *AppDeployService) DeployImage(ctx context.Context, projectID, appID, image string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
-	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+	if err := s.checkStart(ctx, projectID); err != nil {
 		return nil, err
 	}
 	if err := apphost.ValidateImageReference(image); err != nil {

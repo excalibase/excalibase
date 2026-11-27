@@ -19,6 +19,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 	"github.com/google/uuid"
 )
 
@@ -84,6 +85,8 @@ type AppDeployService struct {
 	flags features.Flags
 	// orgGuard refuses an organisation whose owner is abuse-suspended (EXC-843); nil allows all.
 	orgGuard *orgguard.Guard
+	// containerGate refuses to start a container for a limited owner (EXC-899); nil allows all.
+	containerGate *trust.Gate
 
 	mu     sync.Mutex
 	active map[string]*activeRollout // keyed by app id
@@ -281,7 +284,7 @@ func (s *AppDeployService) GetDeploy(projectID, appID, deployID string) (*apphos
 // again to finish.
 func (s *AppDeployService) underLease(ctx context.Context, projectID, appID string,
 	apply func(*apphost.App) (*apphost.Deploy, func(), error)) (*apphost.Deploy, error) {
-	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+	if err := s.checkStart(ctx, projectID); err != nil {
 		return nil, err
 	}
 	release, err := s.holdAppForDeploy(ctx, projectID, appID)
@@ -754,3 +757,15 @@ func (s *AppDeployService) AppRestarts(ctx context.Context, projectID, appID str
 // SetOrgGuard makes every action that starts the app's pods refuse an
 // organisation whose owner is abuse-suspended (EXC-843).
 func (s *AppDeployService) SetOrgGuard(guard *orgguard.Guard) { s.orgGuard = guard }
+
+// SetContainerGate makes every path that starts a container refuse a limited owner (EXC-899).
+func (s *AppDeployService) SetContainerGate(gate *trust.Gate) { s.containerGate = gate }
+
+// checkStart is what every path that starts a container asks first: the
+// suspension of the owner, then the owner's verification.
+func (s *AppDeployService) checkStart(ctx context.Context, projectID string) error {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
+	return s.containerGate.CheckProject(ctx, projectID)
+}

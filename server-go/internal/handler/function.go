@@ -28,6 +28,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
@@ -54,6 +55,7 @@ type FunctionHandler struct {
 	store edgefn.Store
 	// orgGuard refuses deploys for an organisation whose owner is abuse-suspended (EXC-843).
 	orgGuard      *orgguard.Guard
+	containerGate *trust.Gate
 	secrets       *edgefn.SecretsStore
 	vault         vaultclient.VaultClient // optional, for reading DB_URL
 	instanceStore storage.InstanceStore
@@ -131,6 +133,10 @@ type FunctionHandler struct {
 // SetFeatures gives the handler the dark-feature switches it consults.
 // SetOrgGuard makes function deploys refuse a suspended owner's organisation.
 func (h *FunctionHandler) SetOrgGuard(guard *orgguard.Guard) { h.orgGuard = guard }
+
+// SetContainerGate refuses a limited (unverified) owner a new function runtime
+// and any push of function code into one (EXC-899); nil allows all.
+func (h *FunctionHandler) SetContainerGate(gate *trust.Gate) { h.containerGate = gate }
 
 func (h *FunctionHandler) SetFeatures(flags features.Flags) { h.flags = flags }
 
@@ -636,6 +642,10 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
 		writeOrgGuardError(w, err)
+		return
+	}
+	if err := h.containerGate.CheckProject(r.Context(), projectID); err != nil {
+		writeStartRefusal(w, err)
 		return
 	}
 	tenant, _ := custommw.TenantIDFromContext(r.Context())
@@ -1432,11 +1442,12 @@ func (h *FunctionHandler) SetSecret(w http.ResponseWriter, r *http.Request) {
 		writeSecretWriteFailure(w, err)
 		return
 	}
-	if err := h.redeployAll(r, projectID); err != nil {
+	warning, err := h.redeployAll(r, projectID)
+	if err != nil {
 		writeRedeployFailure(w, projectID, err)
 		return
 	}
-	writeJSON(w, map[string]string{"status": "set", "key": body.Key})
+	writeJSON(w, withWarning(map[string]string{"status": "set", "key": body.Key}, warning))
 }
 
 // DeleteSecret removes a secret and redeploys the project's functions.
@@ -1447,22 +1458,44 @@ func (h *FunctionHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 		writeSecretWriteFailure(w, err)
 		return
 	}
-	if err := h.redeployAll(r, projectID); err != nil {
+	warning, err := h.redeployAll(r, projectID)
+	if err != nil {
 		writeRedeployFailure(w, projectID, err)
 		return
 	}
-	writeJSON(w, map[string]string{"status": "deleted", "key": key})
+	writeJSON(w, withWarning(map[string]string{"status": "deleted", "key": key}, warning))
 }
 
 // redeployAll re-pushes every function of the project to the runtime so the
 // latest env (user secrets + builtins) is picked up. It tries every function
 // and returns what failed: a caller that saved a setting must say the running
 // functions did not pick it up. A suspended organisation is skipped, not failed.
-func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) error {
+// The warning is non-empty when the push was withheld for an unverified owner,
+// so the caller can say the saved setting is not running yet.
+func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) (warning string, err error) {
 	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
 		log.Printf("WARN: redeploy of %s skipped: %v", projectID, err)
-		return nil
+		return "", nil
 	}
+	// A limited owner's functions are not pushed into a runtime.
+	if err := h.containerGate.CheckProject(r.Context(), projectID); err != nil {
+		log.Printf("WARN: redeploy of %s skipped: %v", projectID, err)
+		return warningNotApplied, nil
+	}
+	return "", h.pushAllFunctions(r, projectID)
+}
+
+// warningNotApplied tells the caller a saved setting did not reach running functions.
+const warningNotApplied = "saved, but not applied to running functions until the account is verified"
+
+func withWarning(body map[string]string, warning string) map[string]string {
+	if warning != "" {
+		body["warning"] = warning
+	}
+	return body
+}
+
+func (h *FunctionHandler) pushAllFunctions(r *http.Request, projectID string) error {
 	list, err := h.store.List(projectID)
 	if err != nil {
 		return fmt.Errorf("list functions: %w", err)

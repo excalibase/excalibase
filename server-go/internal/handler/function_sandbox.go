@@ -85,10 +85,28 @@ func (h *FunctionHandler) ensureRuntime(ctx context.Context, projectID, namespac
 	if err := h.requireSandbox(ctx); err != nil {
 		return err
 	}
+	if err := h.refuseNewRuntime(ctx, projectID, namespace); err != nil {
+		return err
+	}
 	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID)); err != nil {
 		return fmt.Errorf("ensure deno runtime: %w", err)
 	}
 	return h.waitForRollout(ctx, namespace, budget)
+}
+
+// refuseNewRuntime stops a runtime from being created for an owner who is not
+// verified (EXC-899). A runtime that already exists is not touched here. When
+// the check or the lookup cannot be read, nothing is created.
+func (h *FunctionHandler) refuseNewRuntime(ctx context.Context, projectID, namespace string) error {
+	refusal := h.containerGate.CheckProject(ctx, projectID)
+	if refusal == nil {
+		return nil
+	}
+	exists, err := h.k8sClient.GetDeployment(ctx, namespace, "deno-runtime")
+	if err == nil && exists {
+		return nil
+	}
+	return refusal
 }
 
 // ReconcileRuntimes brings every existing function runtime to its wanted spec

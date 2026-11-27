@@ -53,6 +53,7 @@ import (
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 	"github.com/excalibase/provisioning-poc/internal/studiooauth"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/excalibase/provisioning-poc/internal/wiring"
 	"github.com/excalibase/provisioning-poc/pkg/kmsseal"
@@ -96,6 +97,9 @@ func handleCLIArgs() bool {
 	case "vault":
 		vaultCLI()
 		return true
+	case "trust-backfill":
+		trustBackfillCLI()
+		return true
 	case "help", "--help", "-h":
 		printHelp()
 		return true
@@ -105,15 +109,21 @@ func handleCLIArgs() bool {
 
 // printHelp prints CLI usage information.
 func printHelp() {
-	fmt.Println("Usage: excalibase-server [command]")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  (none)              Start the HTTP server")
-	fmt.Println("  reset-password      Reset admin password (vault-gated)")
-	fmt.Println("  recover-instances   Re-discover K8s clusters into SQLite (vault-gated)")
-	fmt.Println("  vault status        Show whether the running server's vault is sealed")
-	fmt.Println("  vault unseal        Unseal the running server's vault (prompts for the key)")
-	fmt.Println("  help                Show this help")
+	fmt.Print(helpText())
+}
+
+func helpText() string {
+	return `Usage: excalibase-server [command]
+
+Commands:
+  (none)              Start the HTTP server
+  reset-password      Reset admin password (vault-gated)
+  recover-instances   Re-discover K8s clusters into SQLite (vault-gated)
+  vault status        Show whether the running server's vault is sealed
+  vault unseal        Unseal the running server's vault (prompts for the key)
+  trust-backfill      Make accounts created before TRUST_GRANDFATHER_BEFORE full (vault-gated; run before FEATURE_LIMITEDTRIAL)
+  help                Show this help
+`
 }
 
 // runServer initialises all dependencies and starts the HTTP server.
@@ -1132,7 +1142,9 @@ func functionCronLock(cfg config.AppConfig, sqlStore storage.PlatformStore) stor
 // Centralising the bag keeps buildRouter focused on routing rather than wiring.
 type handlerDeps struct {
 	// orgGuard refuses writes on a suspended owner's projects at the project gate (EXC-845); nil allows all.
-	orgGuard          *orgguard.Guard
+	orgGuard *orgguard.Guard
+	// trustGate refuses container writes on a limited owner's projects (EXC-899); nil allows all.
+	trustGate         *trust.Gate
 	suspensions       *adminconsole.SuspensionService
 	provHandler       *handler.ProvisioningHandler
 	sdkKeysHandler    *handler.SDKKeysHandler
@@ -1337,6 +1349,7 @@ func buildFunctionHandler(
 	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
 	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
 	fnHandler.SetOrgGuard(newOrgGuard(store, sqlStore))
+	fnHandler.SetContainerGate(newTrustGate(cfg, store, sqlStore))
 	if cfg.ProvisionerMode != "docker" {
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
@@ -1789,6 +1802,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	appDeploySvc.SetProxyGuard(newProxyGuard(cfg, sqlStore))
 	appDeploySvc.SetOrgGuard(newOrgGuard(store, sqlStore))
+	appDeploySvc.SetContainerGate(newTrustGate(cfg, store, sqlStore))
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
 	appDeploySvc.SetNamespaceQuotaTiers(provSvc)
 	provSvc.SetProjectQuotaSync(appDeploySvc.SyncProjectQuota)
@@ -1993,6 +2007,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	suspensions.AddServingSteps(service.NewSuspendedSites(sitesSvc, store, servingGuard), service.NewSuspendedWorkloads(appDeploySvc, store, servingGuard))
 	return &handlerDeps{
 		orgGuard:              newOrgGuard(store, sqlStore),
+		trustGate:             newTrustGate(cfg, store, sqlStore),
 		suspensions:           suspensions,
 		appRegistry:           appRegistry,
 		siteBuilds:            builds,
@@ -2050,6 +2065,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appTemplateHandler: newAppTemplateHandler(appTemplateArgs{
 			sqlStore: sqlStore, projects: store, deployer: appDeploySvc, tiers: provSvc, disks: appDiskLimits,
 			budget: a.budget, network: appNetworkSvc, vault: vc, claimer: a.claimer, flags: cfg.Features(),
+			gate: newTrustGate(cfg, store, sqlStore),
 		}),
 		tierHandler:      tierHandler,
 		pgCatalogHandler: handler.NewPostgresCatalogHandler(cfg.DocumentDBEnabled),

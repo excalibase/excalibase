@@ -11,6 +11,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 	"github.com/google/uuid"
 )
 
@@ -78,6 +79,8 @@ type Options struct {
 	// OrgGuard refuses deploys and rollbacks of an organisation whose owner is
 	// abuse-suspended (EXC-843); nil allows all.
 	OrgGuard *orgguard.Guard
+	// ContainerGate refuses a limited (unverified) owner's server site: it runs customer code as a Worker (EXC-899); nil allows all.
+	ContainerGate *trust.Gate
 	// MaxPreviews caps live previews across the install, each one Worker script; 0 is DefaultMaxPreviews.
 	MaxPreviews int
 }
@@ -132,6 +135,15 @@ func (s *Service) ServerSitesOn(ctx context.Context) bool {
 }
 
 // requireKind refuses work on a server site while server sites are off.
+// requireTrusted refuses a server site's publish for an owner who is not
+// verified. A static site runs no code and is never refused.
+func (s *Service) requireTrusted(ctx context.Context, projectID, kind string) error {
+	if kind != KindServer {
+		return nil
+	}
+	return s.options.ContainerGate.CheckProject(ctx, projectID)
+}
+
 func (s *Service) requireKind(ctx context.Context, kind string) error {
 	if kind == KindServer && !s.serverSitesOn(ctx) {
 		return ErrServerSitesOff
