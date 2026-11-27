@@ -23,7 +23,9 @@ func (s *ProvisioningService) SetBudgetReserver(reserver storage.ProjectBudgetSt
 // back when the change fails afterwards. A refusal is a *planbudget.Refusal.
 func (s *ProvisioningService) reserveResize(ctx context.Context, inst *domain.DatabaseInstance, plan config.TierConfig, disk string) (func(), error) {
 	if s.reserver == nil {
-		return func() {}, nil
+		return func() {
+			// Nothing was reserved, so there is nothing to put back.
+		}, nil
 	}
 	next, err := resizeReservation(plan, disk)
 	if err != nil {

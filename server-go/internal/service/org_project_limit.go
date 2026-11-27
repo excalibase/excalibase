@@ -191,4 +191,4 @@ func isPlanBudgetRefusal(err error) bool {
 type ProjectCap func(ctx context.Context, tier domain.TierType) (limit int, ok bool)
 
 // SetProjectCap wires the plan budget's project count over the tier row's.
-func (s *ProvisioningService) SetProjectCap(cap ProjectCap) { s.projectCap = cap }
+func (s *ProvisioningService) SetProjectCap(projectCap ProjectCap) { s.projectCap = projectCap }

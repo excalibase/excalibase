@@ -49,22 +49,36 @@ var neverGrowWriters = map[string]string{
 
 var writerStatements = []string{"INSERT INTO database_instances", "UPDATE database_instances", "INSERT INTO apps", "UPDATE apps"}
 
-func TestEveryWriterOfAServiceIsAdmittedOrCannotGrowIt(t *testing.T) {
-	found := map[string]bool{}
+// productionFiles lists the non-test Go files of the packages that write services.
+func productionFiles(t *testing.T) []string {
+	t.Helper()
+	var out []string
 	for _, dir := range []string{".", "../../apphost"} {
 		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, file := range files {
-			if strings.HasSuffix(file, "_test.go") {
-				continue
-			}
-			for _, name := range writersIn(t, file) {
-				found[trimPath(file)+":"+name] = true
+			if !strings.HasSuffix(file, "_test.go") {
+				out = append(out, file)
 			}
 		}
 	}
+	return out
+}
+
+func foundWriters(t *testing.T) map[string]bool {
+	t.Helper()
+	found := map[string]bool{}
+	for _, file := range productionFiles(t) {
+		for _, name := range writersIn(t, file) {
+			found[trimPath(file)+":"+name] = true
+		}
+	}
+	return found
+}
+
+func unlistedWriters(found map[string]bool) []string {
 	var unknown []string
 	for key := range found {
 		if admittedWriters[key] == "" && neverGrowWriters[key] == "" {
@@ -72,7 +86,12 @@ func TestEveryWriterOfAServiceIsAdmittedOrCannotGrowIt(t *testing.T) {
 		}
 	}
 	sort.Strings(unknown)
-	if len(unknown) > 0 {
+	return unknown
+}
+
+func TestEveryWriterOfAServiceIsAdmittedOrCannotGrowIt(t *testing.T) {
+	found := foundWriters(t)
+	if unknown := unlistedWriters(found); len(unknown) > 0 {
 		t.Fatalf("these functions write a service's size or state with no admission decision; admit them or name why they cannot grow: %v", unknown)
 	}
 	for _, list := range []map[string]string{admittedWriters, neverGrowWriters} {
@@ -148,15 +167,9 @@ var admissionCalls = map[string]bool{"Admit": true, "admitApp": true, "admitInse
 
 func TestEveryAdmittingWriterReallyCallsTheGate(t *testing.T) {
 	calls := map[string]bool{}
-	for _, dir := range []string{".", "../../apphost"} {
-		files, _ := filepath.Glob(filepath.Join(dir, "*.go"))
-		for _, file := range files {
-			if strings.HasSuffix(file, "_test.go") {
-				continue
-			}
-			for name := range callersIn(t, file) {
-				calls[trimPath(file)+":"+name] = true
-			}
+	for _, file := range productionFiles(t) {
+		for name := range callersIn(t, file) {
+			calls[trimPath(file)+":"+name] = true
 		}
 	}
 	for key := range mustAdmit {
@@ -164,6 +177,20 @@ func TestEveryAdmittingWriterReallyCallsTheGate(t *testing.T) {
 			t.Errorf("%s no longer calls the plan budget gate", key)
 		}
 	}
+}
+
+func isAdmissionCall(node ast.Node) bool {
+	call, ok := node.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	switch fn := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return admissionCalls[fn.Sel.Name]
+	case *ast.Ident:
+		return admissionCalls[fn.Name]
+	}
+	return false
 }
 
 func callersIn(t *testing.T, file string) map[string]bool {
@@ -183,19 +210,8 @@ func callersIn(t *testing.T, file string) map[string]bool {
 			continue
 		}
 		ast.Inspect(function.Body, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			switch fn := call.Fun.(type) {
-			case *ast.SelectorExpr:
-				if admissionCalls[fn.Sel.Name] {
-					out[function.Name.Name] = true
-				}
-			case *ast.Ident:
-				if admissionCalls[fn.Name] {
-					out[function.Name.Name] = true
-				}
+			if isAdmissionCall(node) {
+				out[function.Name.Name] = true
 			}
 			return true
 		})

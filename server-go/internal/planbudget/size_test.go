@@ -70,35 +70,25 @@ func TestSizeArithmetic(t *testing.T) {
 }
 
 func TestParseQuantities(t *testing.T) {
-	cases := map[string]int64{"0.5": 500, "1": 1000, "250m": 250, "2": 2000}
-	for in, want := range cases {
-		if got, err := ParseCPUMilli(in); err != nil || got != want {
-			t.Errorf("cpu %q: %d %v", in, got, err)
-		}
-	}
-	mem := map[string]int64{"512Mi": 512 << 20, "1Gi": gib, "5Gi": 5 * gib, "1024": 1024}
-	for in, want := range mem {
-		if got, err := ParseBytes(in); err != nil || got != want {
-			t.Errorf("bytes %q: %d %v", in, got, err)
-		}
-	}
+	expectQuantities(t, "cpu", ParseCPUMilli, map[string]int64{"0.5": 500, "1": 1000, "250m": 250, "2": 2000})
+	expectQuantities(t, "bytes", ParseBytes, map[string]int64{"512Mi": 512 << 20, "1Gi": gib, "5Gi": 5 * gib, "1024": 1024})
 	// Anything the admin tier editor stores (resource.ParseQuantity) is a size here too.
-	editor := map[string]int64{"1.5Gi": gib + gib/2, "4G": 4_000_000_000, "500M": 500_000_000, "2e3": 2000, "1k": 1000}
-	for in, want := range editor {
-		if got, err := ParseBytes(in); err != nil || got != want {
-			t.Errorf("bytes %q: %d %v", in, got, err)
-		}
-	}
-	for in, want := range map[string]int64{"1.5": 1500, "100m": 100, "1500m": 1500, "0.25": 250} {
-		if got, err := ParseCPUMilli(in); err != nil || got != want {
-			t.Errorf("cpu %q: %d %v", in, got, err)
-		}
-	}
+	expectQuantities(t, "bytes", ParseBytes, map[string]int64{"1.5Gi": gib + gib/2, "4G": 4_000_000_000, "500M": 500_000_000, "2e3": 2000, "1k": 1000})
+	expectQuantities(t, "cpu", ParseCPUMilli, map[string]int64{"1.5": 1500, "100m": 100, "1500m": 1500, "0.25": 250})
 	if _, err := ParseBytes("lots"); err == nil {
 		t.Error("garbage must be refused, not read as zero")
 	}
 	if _, err := ParseCPUMilli("-1"); err == nil {
 		t.Error("negative cpu")
+	}
+}
+
+func expectQuantities(t *testing.T, kind string, parse func(string) (int64, error), cases map[string]int64) {
+	t.Helper()
+	for in, want := range cases {
+		if got, err := parse(in); err != nil || got != want {
+			t.Errorf("%s %q: %d %v", kind, in, got, err)
+		}
 	}
 }
 
