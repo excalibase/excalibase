@@ -35,7 +35,7 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 		orgProjectLimitLockSpace, inst.OrgID); err != nil {
 		return fmt.Errorf("lock org project slots: %w", err)
 	}
-	if err := insertInstance(tx, inst); err != nil {
+	if err := s.admitInsert(context.Background(), tx, inst); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -173,12 +173,24 @@ func (s *Store) UpdateParametersIfStatus(projectID string, parameters map[string
 }
 
 // UpdateStorageSizeIfStatus records the project's disk. See
-// storage.ProjectDiskStore.
+// storage.ProjectDiskStore. Growing the disk is admitted against the org's
+// budget under the org lock; shrinking, which puts a refused growth back, always passes.
 func (s *Store) UpdateStorageSizeIfStatus(projectID, size, expected string) error {
 	if expected == "" {
 		return fmt.Errorf("%w: no expected status given for %s", storage.ErrProjectStatusChanged, projectID)
 	}
-	res, err := s.db.Exec(`
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin project disk update: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+	if s.budget.Active(ctx) {
+		if err := s.admitDiskChange(ctx, tx, projectID, size); err != nil {
+			return err
+		}
+	}
+	res, err := tx.ExecContext(ctx, `
 		UPDATE database_instances SET storage_size = $2, updated_at = now()
 		WHERE project_id = $1 AND status = $3 AND status <> ALL($4)`,
 		projectID, size, expected, pq.Array(deletionStatuses))
@@ -190,15 +202,40 @@ func (s *Store) UpdateStorageSizeIfStatus(projectID, size, expected string) erro
 		return err
 	}
 	if affected == 0 {
-		return s.explainRefusedUpdate(projectID, expected)
+		return explainRefusedUpdate(tx, projectID, expected)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // update writes the row. expectedStatus empty means "any status the door
 // allows"; a non-empty one additionally pins the write to that status.
 func (s *Store) update(inst *domain.DatabaseInstance, expectedStatus string) error {
-	return updateInstance(s.db, inst, expectedStatus)
+	ctx := context.Background()
+	if !s.budget.Active(ctx) {
+		return updateInstance(s.db, inst, expectedStatus)
+	}
+	return s.updateAdmitted(ctx, inst, expectedStatus)
+}
+
+// updateAdmitted is update with the growth it causes admitted under the org lock
+// first: a paused database that resumes takes its CPU and memory back.
+func (s *Store) updateAdmitted(ctx context.Context, inst *domain.DatabaseInstance, expectedStatus string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin project update: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+	orgID, err := projectOrg(tx, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	if err := s.admitStatusChange(ctx, tx, orgID, inst); err != nil {
+		return err
+	}
+	if err := updateInstance(tx, inst, expectedStatus); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // updateInstance is the general update on either the store's pool or an open
@@ -294,7 +331,7 @@ func updateInstance(q execQuerier, inst *domain.DatabaseInstance, expectedStatus
 	if affected == 0 {
 		return explainRefusedUpdate(q, inst.ProjectID, expectedStatus)
 	}
-	return nil
+	return releaseSettledReservation(q, inst)
 }
 
 // deletionStatuses are the statuses a general Update may not write over. The

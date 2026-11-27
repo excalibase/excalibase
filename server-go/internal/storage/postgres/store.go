@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/planbudget"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -29,6 +30,8 @@ type Store struct {
 	leaders          *LeaderSession
 	// lockDB is a small pool kept for project lifecycle locks only; see LifecycleLock.
 	lockDB *sql.DB
+	// budget admits the steps that grow an org's services (EXC-901); nil checks nothing.
+	budget *planbudget.Gate
 }
 
 // lifecycleLockShare is the share of the main pool's size given to the lock

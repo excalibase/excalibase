@@ -212,6 +212,8 @@ var darkWork = map[features.Feature]string{
 	features.BehaviourReview: "TestBehaviourSampler_OffWhileTheFlagIsOff",
 	// Admin-only routes: probed with an admin session, which this harness does not carry (cmd/server).
 	features.AdminAnalytics: "TestAdminAnalytics_RoutesFollowTheirFlagOnTheRealRouter",
+	// Off, no budget is read and no growth step is checked (internal/storage/postgres, internal/planbudget).
+	features.PlanBudget: "TestAdmissionIsOffWhileTheFlagIsOff",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }

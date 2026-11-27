@@ -344,6 +344,8 @@ type AppConfig struct {
 	Trust TrustConfig
 	// Credits is the sign-up credit's settings (EXC-866).
 	Credits CreditsConfig
+	// PlanBudget is the plan table of the CPU/RAM budget (EXC-901).
+	PlanBudget PlanBudgetConfig
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -477,6 +479,7 @@ func (c AppConfig) Validate() error {
 		func() error { return validateRequestMetricsTargets(c.RequestMetricsTargets) },
 		c.validateSites,
 		c.validateTrust,
+		c.validatePlanBudget,
 		c.validateCredits,
 		c.validateSiteGit,
 		c.validateScheduler,
@@ -514,6 +517,7 @@ func Load() AppConfig {
 	cfg.SelfHealAlertAfter = envInt("EXCALIBASE_SELFHEAL_ALERT_AFTER", 5)
 	cfg.Trust = loadTrust()
 	cfg.Credits = loadCredits()
+	cfg.PlanBudget = loadPlanBudget()
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"

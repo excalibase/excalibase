@@ -650,6 +650,9 @@ func (h *AppHandler) writeReferenceError(w http.ResponseWriter, err error) {
 // the project's state refused it — while anything else is an internal error
 // whose detail is not shown to the caller.
 func (h *AppHandler) writeStoreError(w http.ResponseWriter, err error) {
+	if writePlanBudgetRefusal(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, apphost.ErrAppNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)

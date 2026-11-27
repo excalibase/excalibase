@@ -1,11 +1,14 @@
 package apphost
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/planbudget"
 )
 
 // deployLockSpace is distinct from appLimitLockSpace (378) so a deploy and
@@ -14,10 +17,15 @@ const deployLockSpace = 386
 
 type PostgresDeployStore struct {
 	db *sql.DB
+	// budget admits the steps that grow an org's services (EXC-901); nil checks nothing.
+	budget *planbudget.Gate
 }
 
+// SetPlanBudget wires the gate a deploy and a plan-driven resize pass.
+func (s *PostgresDeployStore) SetPlanBudget(gate *planbudget.Gate) { s.budget = gate }
+
 func NewPostgresDeployStore(db *sql.DB) *PostgresDeployStore {
-	return &PostgresDeployStore{db: db}
+	return &PostgresDeployStore{db: db, budget: defaultBudget}
 }
 
 func (s *PostgresDeployStore) Create(deploy *Deploy) error {
@@ -35,6 +43,9 @@ func (s *PostgresDeployStore) Create(deploy *Deploy) error {
 		return fmt.Errorf("lock app deploy slot: %w", err)
 	}
 	if err := lockAppForDeploy(tx, deploy.ProjectID, deploy.AppID); err != nil {
+		return err
+	}
+	if err := s.admitDeploy(tx, deploy.ProjectID, deploy.AppID); err != nil {
 		return err
 	}
 
@@ -105,6 +116,9 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
 	if _, err := tx.Exec(q, resize.ID, resize.AppID, resize.ProjectID, resize.Revision, resize.Image, spec, config,
 		resize.Status, resize.CreatedBy, resize.CreatedAt, resize.FinishedAt, resize.Kind); err != nil {
 		return fmt.Errorf("record resize: %w", err)
+	}
+	if err := s.admitResize(tx, resize.ProjectID, resize.AppID, string(resize.Config.Tier)); err != nil {
+		return err
 	}
 	// The recorded size follows the plan, not a developer's edit, so the version stays.
 	if _, err := tx.Exec(`UPDATE apps SET doc = jsonb_set(doc, '{tier}', to_jsonb($3::text)) WHERE project_id = $1 AND id = $2`,
@@ -348,4 +362,48 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 		d.FinishedAt = &finishedAt.Time
 	}
 	return &d, nil
+}
+
+// admitDeploy admits a deploy as the app running at its record's replicas: a
+// stopped app that is deployed takes its CPU and memory back, a running one costs nothing more.
+func (s *PostgresDeployStore) admitDeploy(tx *sql.Tx, projectID, appID string) error {
+	return admitApp(context.Background(), s.budget, tx, projectID, func(ctx context.Context) (planbudget.Size, error) {
+		var doc []byte
+		var deploying bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT doc, EXISTS (SELECT 1 FROM app_deploys r WHERE r.project_id = apps.project_id AND r.app_id = apps.id AND r.status IN ($3, $4))
+			FROM apps WHERE project_id = $1 AND id = $2`, projectID, appID, DeployStatusPending, DeployStatusRolling).Scan(&doc, &deploying); err != nil {
+			return planbudget.Size{}, fmt.Errorf("read app for deploy: %w", err)
+		}
+		held, err := planbudget.ReservedAppNow(doc, deploying)
+		if err != nil {
+			return planbudget.Size{}, err
+		}
+		next, err := planbudget.ReservedAppAs(doc, StatusRunning)
+		if err != nil {
+			return planbudget.Size{}, err
+		}
+		return next.Sub(held), nil
+	})
+}
+
+// admitResize admits the size a plan change gives the app: a bigger tier is growth.
+func (s *PostgresDeployStore) admitResize(tx *sql.Tx, projectID, appID, tier string) error {
+	return admitApp(context.Background(), s.budget, tx, projectID, func(ctx context.Context) (planbudget.Size, error) {
+		var doc, resized []byte
+		if err := tx.QueryRowContext(ctx,
+			`SELECT doc, jsonb_set(doc, '{tier}', to_jsonb($3::text)) FROM apps WHERE project_id = $1 AND id = $2`,
+			projectID, appID, tier).Scan(&doc, &resized); err != nil {
+			return planbudget.Size{}, fmt.Errorf("read app for resize: %w", err)
+		}
+		held, err := planbudget.ReservedApp(doc)
+		if err != nil {
+			return planbudget.Size{}, err
+		}
+		next, err := planbudget.ReservedApp(resized)
+		if err != nil {
+			return planbudget.Size{}, err
+		}
+		return next.Sub(held), nil
+	})
 }

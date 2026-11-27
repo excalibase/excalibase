@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/planbudget"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -96,6 +97,11 @@ func (s *ProvisioningService) orgProjectLimit(ctx context.Context, tierType doma
 	if s.selfHostedMode {
 		return 0, nil
 	}
+	if s.projectCap != nil {
+		if limit, ok := s.projectCap(ctx, tierType); ok {
+			return limit, nil
+		}
+	}
 	tier, err := s.tierConfig(ctx, tierType)
 	if err != nil {
 		return 0, err
@@ -118,6 +124,8 @@ func (s *ProvisioningService) createProjectRow(ctx context.Context, inst *domain
 	case errors.Is(err, storage.ErrOrgProjectLimitReached):
 		return &OrgProjectLimitError{Limit: limit, Tier: tierType}
 	case errors.Is(err, storage.ErrProjectExists):
+		return err
+	case isPlanBudgetRefusal(err):
 		return err
 	default:
 		return fmt.Errorf("%w: create instance: %v", ErrProjectStoreUnavailable, err)
@@ -171,3 +179,16 @@ func (s *ProvisioningService) orgTier(ctx context.Context, orgID string) (domain
 	}
 	return org.Tier, nil
 }
+
+// isPlanBudgetRefusal reports whether err says a step did not fit the org's plan budget.
+func isPlanBudgetRefusal(err error) bool {
+	var refusal *planbudget.Refusal
+	return errors.As(err, &refusal)
+}
+
+// ProjectCap says how many projects a plan holds while the plan budget is on;
+// ok is false when the budget is off or the plan has no number of its own.
+type ProjectCap func(ctx context.Context, tier domain.TierType) (limit int, ok bool)
+
+// SetProjectCap wires the plan budget's project count over the tier row's.
+func (s *ProvisioningService) SetProjectCap(projectCap ProjectCap) { s.projectCap = projectCap }

@@ -120,6 +120,9 @@ func writeRuntimeFailure(w http.ResponseWriter, action string, err error) bool {
 
 // writeRuntimeUnavailable answers a runtime that could not be resolved.
 func writeRuntimeUnavailable(w http.ResponseWriter, action string, err error) {
+	if writePlanBudgetRefusal(w, err) {
+		return
+	}
 	if writeRuntimeFailure(w, action, err) {
 		return
 	}

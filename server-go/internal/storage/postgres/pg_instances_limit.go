@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -56,7 +57,7 @@ func (s *Store) CreateWithinOrgLimit(inst *domain.DatabaseInstance, maxProjects 
 	if err := storage.CheckOrgProjectSlot(held, maxProjects); err != nil {
 		return err
 	}
-	if err := insertInstance(tx, inst); err != nil {
+	if err := s.admitInsert(context.Background(), tx, inst); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -89,6 +90,9 @@ func (s *Store) UpdateIfStatusWithinOrgLimit(inst *domain.DatabaseInstance, expe
 		return fmt.Errorf("lock org project slots: %w", err)
 	}
 	if err := admitSlotTakingUpdate(tx, inst.ProjectID, orgID, maxProjects); err != nil {
+		return err
+	}
+	if err := s.admitStatusChange(context.Background(), tx, orgID, inst); err != nil {
 		return err
 	}
 	if err := updateInstance(tx, inst, expected); err != nil {

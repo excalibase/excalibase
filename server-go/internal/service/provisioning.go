@@ -31,6 +31,10 @@ import (
 const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
+	// projectCap is the plan budget's project count per plan (EXC-901); nil leaves the tier row's.
+	projectCap ProjectCap
+	// reserver admits and records a database resize before the cluster changes (EXC-901); nil skips it.
+	reserver storage.ProjectBudgetStore
 	// orgGuard refuses new projects and databases for an organisation whose
 	// owner is abuse-suspended (EXC-843); nil allows all.
 	orgGuard *orgguard.Guard
