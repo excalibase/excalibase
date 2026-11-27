@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { loginAs, mockSchemaEndpoints } from './helpers';
+import { FORCED_V2, loginAs, mockSchemaEndpoints } from './helpers';
 
 // ADR 0041: MySQL projects ship dark behind the mysql feature.
 const FIRST_RENDER = 20_000;
@@ -54,9 +54,18 @@ test.describe('MySQL projects', () => {
       namespace: 'org-1-shop-mysql', status: 'ACTIVE', currentStage: 'COMPLETED', host: HOST, port: 3306,
       databaseName: 'app', createdAt: '2026-10-11T00:00:00Z', updatedAt: '2026-10-11T00:00:00Z',
     });
-    await page.goto(`/project/${PROJECT_ID}`);
-    await expect(page.getByTestId('service-database-mysql-endpoint')).toContainText('Not reachable from the internet', { timeout: FIRST_RENDER });
-    await expect(page.getByTestId('service-database-mysql-endpoint')).not.toContainText('svc.cluster.local');
+    if (FORCED_V2) {
+      await json(page, `**/api/provision/${PROJECT_ID}/credentials`, { projectId: PROJECT_ID, engine: 'mysql', host: HOST, port: 3306, databaseName: 'app', username: 'app' });
+      await json(page, `**/api/projects/${PROJECT_ID}/db-endpoint`, {
+        projectId: PROJECT_ID, publicOffered: true, publicEnabled: false, available: false, host: '', port: 0, requireTls: true,
+        database: 'app', username: 'app', connectionStrings: { requireTls: '', allowPlaintext: '' }, caCertificate: '',
+      });
+    }
+    // v1 prints the endpoint note on the overview card; v2 shows the same note on the panel's Connect tab.
+    const endpoint = FORCED_V2 ? page.getByTestId('db-connect') : page.getByTestId('service-database-mysql-endpoint');
+    await page.goto(FORCED_V2 ? `/project/${PROJECT_ID}?service=database&tab=connect` : `/project/${PROJECT_ID}`);
+    await expect(endpoint).toContainText('Not reachable from the internet', { timeout: FIRST_RENDER });
+    await expect(endpoint).not.toContainText('svc.cluster.local');
     await expect(page.getByTestId('nav-settings')).toBeVisible();
     // ADR 0041 decision 9: the engine-aware pages are listed, the Postgres-only ones are not.
     await expect(page.getByTestId('nav-sql')).toBeVisible();

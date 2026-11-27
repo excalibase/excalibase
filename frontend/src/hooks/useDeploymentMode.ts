@@ -57,6 +57,13 @@ interface ConfigResponse {
   adminConsole?: boolean;
 }
 
+// Browser tests start the dev server with VITE_FORCE_V2=1 to run the whole suite on
+// the new layout; a production build ignores it, so it can never ship on.
+function withForcedStudioV2(config: ConfigResponse): ConfigResponse {
+  if (!import.meta.env.DEV || import.meta.env.VITE_FORCE_V2 !== '1') return config;
+  return { ...config, features: { ...config.features, studio_v2: true } };
+}
+
 function useStudioConfig() {
   return useQuery<ConfigResponse>({
     queryKey: ['config'],
@@ -64,6 +71,7 @@ function useStudioConfig() {
       const { data } = await api.get<ConfigResponse>('/config');
       return data;
     },
+    select: withForcedStudioV2,
     staleTime: Infinity, // mode doesn't change at runtime
   });
 }

@@ -277,3 +277,10 @@ export async function mockPermissionsApi(
 
 /** Where the permission specs leave their screenshots. */
 export const SHOTS_DIR = process.env.STUDIO_SHOTS_DIR ?? 'test-results/shots';
+
+/**
+ * True when the run serves Studio with studio_v2 on (STUDIO_FORCE_V2=1, the
+ * "chromium-v2" CI job). A spec that has to name something only one layout
+ * has branches on this; a spec that asserts the flag-off layout skips itself.
+ */
+export const FORCED_V2 = process.env.STUDIO_FORCE_V2 === '1';

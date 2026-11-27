@@ -62,7 +62,7 @@ test.describe('Create project with no organization', () => {
     await expect(page).toHaveURL(new RegExp(`/orgs/${NEW_ORG.id}$`));
 
     await page.goto('/provision');
-    await expect(page.getByLabel('Organization')).toHaveValue(NEW_ORG.id, { timeout: FIRST_RENDER });
+    await expect(page.getByLabel('Organization', { exact: true })).toHaveValue(NEW_ORG.id, { timeout: FIRST_RENDER });
     await expect(page.getByTestId('provision-no-orgs')).toHaveCount(0);
   });
 });

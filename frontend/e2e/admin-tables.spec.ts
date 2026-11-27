@@ -4,6 +4,8 @@ import { loginAs, SHOTS_DIR } from './helpers';
 // EXC-762 step 4: the admin console's lists behind studio_v2, driven against a
 // stub that pages, sorts, searches and filters like the server does.
 
+// The first render waits for the dev server to compile the admin chunks, which can take well over the 5 s default when the machine is busy.
+const FIRST_RENDER = 20_000;
 const ADMIN = { id: 'boss', username: 'boss', email: 'boss@test.com', role: 'platform_admin' };
 const json = (body: unknown, status = 200) => ({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
@@ -58,18 +60,18 @@ test.describe('admin console tables (studio_v2)', () => {
     const { requests } = await stubAdmin(page);
     await page.goto('/admin?tab=projects');
     const table = page.getByTestId('projects-admin-table');
-    await expect(table.getByText('1–25 of 90')).toBeVisible();
+    await expect(table.getByText('1–25 of 90')).toBeVisible({ timeout: FIRST_RENDER });
     await expect(table.getByRole('row')).toHaveCount(26);
     await page.screenshot({ path: `${SHOTS_DIR}/admin-projects-90.png`, fullPage: true });
 
     await table.getByRole('button', { name: 'Next page' }).click();
     await expect(table.getByText('26–50 of 90')).toBeVisible();
-    expect(requests.at(-1)?.get('offset')).toBe('25');
+    await expect.poll(() => requests.at(-1)?.get('offset')).toBe('25');
 
     await table.getByRole('combobox', { name: 'Plan' }).selectOption('STANDARD');
     await expect(table.getByText('1–25 of 30')).toBeVisible();
-    expect(requests.at(-1)?.get('plan')).toBe('STANDARD');
-    expect(requests.at(-1)?.get('offset')).toBe('0');
+    await expect.poll(() => requests.at(-1)?.get('plan')).toBe('STANDARD');
+    await expect.poll(() => requests.at(-1)?.get('offset')).toBe('0');
 
     await table.getByRole('combobox', { name: 'Owner' }).selectOption('suspended');
     await expect(table.getByText(/of 15$/)).toBeVisible();
@@ -77,7 +79,7 @@ test.describe('admin console tables (studio_v2)', () => {
     await table.getByRole('searchbox', { name: /filter projects/i }).fill('project 03');
     await expect(table.getByText('1–1 of 1')).toBeVisible();
     await expect(table.getByRole('cell', { name: /^Project 03 proj-03/ })).toBeVisible();
-    expect(requests.at(-1)?.get('q')).toBe('project 03');
+    await expect.poll(() => requests.at(-1)?.get('q')).toBe('project 03');
 
     await table.getByRole('searchbox', { name: /filter projects/i }).fill('');
     await table.getByRole('button', { name: 'Remove filter Plan: Standard' }).click();
@@ -86,15 +88,15 @@ test.describe('admin console tables (studio_v2)', () => {
     await expect(table.getByRole('row').nth(1)).toContainText('Project 00');
     await table.getByRole('button', { name: 'Project', exact: true }).click();
     await expect(table.getByRole('row').nth(1)).toContainText('Project 89');
-    expect(requests.at(-1)?.get('sort')).toBe('name');
-    expect(requests.at(-1)?.get('order')).toBe('desc');
+    await expect.poll(() => requests.at(-1)?.get('sort')).toBe('name');
+    await expect.poll(() => requests.at(-1)?.get('order')).toBe('desc');
   });
 
   test('a bulk delete will not go until a reason is written, and sends it', async ({ page }) => {
     const { drops } = await stubAdmin(page);
     await page.goto('/admin?tab=projects');
     const table = page.getByTestId('projects-admin-table');
-    await table.getByRole('checkbox', { name: 'Select Project 89' }).check();
+    await table.getByRole('checkbox', { name: 'Select Project 89' }).check({ timeout: FIRST_RENDER });
     await table.getByRole('checkbox', { name: 'Select Project 88' }).check();
     await expect(table.getByText('2 selected')).toBeVisible();
     await table.getByRole('button', { name: 'Delete…' }).click();
@@ -122,10 +124,10 @@ test.describe('admin console tables (studio_v2)', () => {
       return route.fulfill(json({ items: users.slice(offset, offset + Number(params.get('limit') ?? 25)), total: users.length }));
     });
     await page.goto('/admin');
-    await expect(page.getByRole('tab', { name: 'Needs attention' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('tab', { name: 'Needs attention' })).toHaveAttribute('aria-selected', 'true', { timeout: FIRST_RENDER });
     await page.getByRole('tab', { name: 'Users' }).click();
     const table = page.getByTestId('users-table');
-    await expect(table.getByText('1–25 of 60')).toBeVisible();
+    await expect(table.getByText('1–25 of 60')).toBeVisible({ timeout: FIRST_RENDER });
     await table.getByRole('button', { name: 'Next page' }).click();
     await expect(table.getByText('26–50 of 60')).toBeVisible();
     await expect(table.getByText('user25@acme.test')).toBeVisible();
@@ -134,7 +136,7 @@ test.describe('admin console tables (studio_v2)', () => {
   test('a signed-in customer cannot reach /admin', async ({ page }) => {
     await stubAdmin(page, 'user');
     await page.goto('/admin');
-    await expect(page).not.toHaveURL(/\/admin/);
+    await expect(page).not.toHaveURL(/\/admin/, { timeout: FIRST_RENDER });
     await expect(page.getByTestId('projects-admin-table')).toHaveCount(0);
     await expect(page.getByRole('tab', { name: 'Projects' })).toHaveCount(0);
   });
@@ -143,7 +145,7 @@ test.describe('admin console tables (studio_v2)', () => {
     await stubAdmin(page);
     await page.setViewportSize({ width: 390, height: 800 });
     await page.goto('/admin?tab=projects');
-    await expect(page.getByTestId('projects-admin-table').getByText('1–25 of 90')).toBeVisible();
+    await expect(page.getByTestId('projects-admin-table').getByText('1–25 of 90')).toBeVisible({ timeout: FIRST_RENDER });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(0);
     await page.screenshot({ path: `${SHOTS_DIR}/admin-projects-phone.png` });

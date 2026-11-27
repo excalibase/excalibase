@@ -112,9 +112,11 @@ test.describe('Project Pause / Resume', () => {
     await expect(pauseBtn).toBeEnabled();
     await expect(page.getByTestId('resume-project-btn')).not.toBeVisible();
 
+    // Listen before the click: a fast answer would be gone by the time a later waitForResponse looks.
+    const paused = page.waitForResponse(`**/api/provision/${PROJECT}/pause`);
     await pauseBtn.click();
+    await paused;
     // The mutation hook fires; assert the POST body is the documented shape.
-    await page.waitForResponse(`**/api/provision/${PROJECT}/pause`);
     const body = captured.body as { reason?: string } | undefined;
     expect(body?.reason).toBe('manual');
   });

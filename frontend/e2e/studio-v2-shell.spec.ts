@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { loginAs } from './helpers';
+import { loginAs, FORCED_V2 } from './helpers';
 
 // EXC-762 step 1: the console layout behind the studio_v2 flag.
 
@@ -34,6 +34,7 @@ async function mockConsole(page: Page, flag: boolean) {
 
 test.describe('Studio v2 shell', () => {
   test('flag off keeps the current layout', async ({ page }) => {
+    test.skip(FORCED_V2, 'asserts the flag-off layout; the run forces studio_v2 on');
     await mockConsole(page, false);
     await page.goto('/instances');
     await expect(page.getByTestId('platform-nav')).toBeVisible();
