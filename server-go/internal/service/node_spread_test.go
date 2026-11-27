@@ -157,35 +157,31 @@ func TestRequireNodeCount_SingleHostIsOneNode(t *testing.T) {
 	}
 }
 
-// A plan is a CPU/RAM budget, not a topology: with the plan budget on, no tier is refused for its node count.
-func TestPlanBudgetOnDropsTheNodeCountRule(t *testing.T) {
+// A plan with several copies runs them on separate nodes (the database operator requires anti-affinity on the
+// hostname), so the node-count rule holds with the plan budget on exactly as with it off. Only a plan with
+// one copy has nothing to spread.
+func TestPlanBudgetOnKeepsTheNodeCountRuleForAPlanWithSeveralCopies(t *testing.T) {
 	ctx := context.Background()
 	standard, _ := config.GetTierConfig(domain.Standard)
-	for name, setup := range map[string]func(*ProvisioningService, *k8s.MockClient){
-		"two nodes":   func(_ *ProvisioningService, m *k8s.MockClient) { m.Capacity = roomyNodes(2) },
-		"unreadable":  func(_ *ProvisioningService, m *k8s.MockClient) { m.CapacityError = errors.New("down") },
-		"single host": func(s *ProvisioningService, _ *k8s.MockClient) { s.k8sClient = nil },
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc, _, mock := setupProvisioningTest(t)
-			setup(svc, mock)
-			svc.SetFeatures(features.NewStatic(features.PlanBudget))
-			if err := svc.RequireNodeCount(ctx, domain.Standard, 3); err != nil {
-				t.Errorf("RequireNodeCount: %v", err)
-			}
-			if err := svc.RequireNodesForTier(ctx, domain.Standard); err != nil {
-				t.Errorf("RequireNodesForTier: %v", err)
-			}
-			if err := svc.RequireNodeSpread(ctx, domain.Standard, standard); err != nil {
-				t.Errorf("RequireNodeSpread: %v", err)
-			}
-		})
+	for _, flags := range []features.Flags{features.NewStatic(), features.NewStatic(features.PlanBudget)} {
+		svc, _, mock := setupProvisioningTest(t)
+		svc.SetFeatures(flags)
+		mock.Capacity = roomyNodes(2)
+		assertTooFewNodes(t, svc.RequireNodeCount(ctx, domain.Standard, 3), 3, 2)
+		assertTooFewNodes(t, svc.RequireNodesForTier(ctx, domain.Standard), 3, 2)
+		assertTooFewNodes(t, svc.RequireNodeSpread(ctx, domain.Standard, standard), 3, 2)
+		mock.Capacity = roomyNodes(3)
+		if err := svc.RequireNodeCount(ctx, domain.Standard, 3); err != nil {
+			t.Errorf("3 copies on 3 nodes: %v", err)
+		}
 	}
 }
 
-func TestPlanBudgetOffKeepsTheNodeCountRule(t *testing.T) {
+func TestAPlanWithOneCopyNeedsNoNodeLookupWithThePlanBudgetOn(t *testing.T) {
 	svc, _, mock := setupProvisioningTest(t)
-	mock.Capacity = roomyNodes(2)
-	svc.SetFeatures(features.NewStatic())
-	assertTooFewNodes(t, svc.RequireNodeCount(context.Background(), domain.Standard, 3), 3, 2)
+	svc.SetFeatures(features.NewStatic(features.PlanBudget))
+	mock.CapacityError = errors.New("down")
+	if err := svc.RequireNodeCount(context.Background(), domain.Free, 1); err != nil {
+		t.Fatalf("one copy: %v", err)
+	}
 }
