@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/mount"
+
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
@@ -129,14 +131,14 @@ func TestLoweringCopiesOntoANewGenerationAndRepoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := h.engine.appContainers("app-01")[0]
-	if c.host.Mounts[0].Source != "excalibase-vol-"+claim || c.config.Labels[labelDisk] != claim {
+	if !slices.ContainsFunc(c.host.Mounts, func(m mount.Mount) bool { return m.Source == "excalibase-vol-"+claim }) || c.config.Labels[labelDisk] != claim {
 		t.Fatalf("mount %+v label %q", c.host.Mounts, c.config.Labels[labelDisk])
 	}
 	if err := h.rt.DeleteOtherAppDisks(ctx, testDB, "app-01", 1, time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if _, old := h.engine.volumes["excalibase-vol-app-disk-app-01"]; old || len(h.engine.volumes) != 1 {
-		t.Fatalf("volumes after the move %v", h.engine.volumes)
+	if _, old := h.engine.volumes["excalibase-vol-app-disk-app-01"]; old || len(h.engine.ownedVolumes()) != 1 {
+		t.Fatalf("volumes after the move %v", h.engine.ownedVolumes())
 	}
 }
 

@@ -140,7 +140,7 @@ func TestApplyRunsTheAppOnItsProjectNetworkUnderTheSandbox(t *testing.T) {
 	if string(host.NetworkMode) != testNet || !slices.Equal(c.networks, []string{testNet}) {
 		t.Fatalf("network mode %q networks %v", host.NetworkMode, c.networks)
 	}
-	if string(c.files[probePath]) != "probe" {
+	if string(h.engine.fileBody(c, probePath)) != "probe" {
 		t.Fatalf("probe not copied in: %v", c.files)
 	}
 	if c.config.Image != "docker.io/library/busybox:1.37" || !slices.Contains(h.engine.pulled, c.config.Image) {

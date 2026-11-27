@@ -37,7 +37,7 @@ func TestK3sAppEnvSecret(t *testing.T) {
 	app.Env = []apphost.EnvVar{{Name: "API_KEY", Kind: apphost.KindSecret, Secret: &secret}}
 
 	workload, err := RenderAppWorkload(namespace, app, staticResolver{},
-		AppRenderOptions{RuntimeClass: gvisorRuntimeClass, Route: liveRoute, EnvRevision: "1", DeployID: liveDeployID})
+		AppRenderOptions{TmpPercent: 25, RuntimeClass: gvisorRuntimeClass, Route: liveRoute, EnvRevision: "1", DeployID: liveDeployID})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}

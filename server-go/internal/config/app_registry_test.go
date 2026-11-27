@@ -25,7 +25,7 @@ func TestLoadAppRegistry_ReadsTheHostAndTheKeyFile(t *testing.T) {
 	if registry.Host != "registry.excalibase.internal" || !strings.HasPrefix(string(registry.TokenKeyPEM), "-----BEGIN") {
 		t.Fatalf("%+v", registry)
 	}
-	if err := (AppConfig{AppRegistry: registry}).validateAppRegistry(); err != nil {
+	if err := (AppConfig{AppTmpPercent: 25, AppRegistry: registry}).validateAppRegistry(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -54,10 +54,10 @@ func TestValidateAppRegistry(t *testing.T) {
 	if err := (AppConfig{}).validateAppRegistry(); err != nil {
 		t.Errorf("no registry is valid: %v", err)
 	}
-	if err := (AppConfig{AppRegistry: AppRegistryConfig{Host: "registry.excalibase.internal"}}).validateAppRegistry(); err != nil {
+	if err := (AppConfig{AppTmpPercent: 25, AppRegistry: AppRegistryConfig{Host: "registry.excalibase.internal"}}).validateAppRegistry(); err != nil {
 		t.Errorf("the host alone guards user images with builds off: %v", err)
 	}
-	full := AppConfig{DarkFeatures: on, AppRegistry: AppRegistryConfig{Host: "registry.excalibase.internal", URL: "http://zot:5000", TokenKeyPEM: []byte("k")}}
+	full := AppConfig{AppTmpPercent: 25, DarkFeatures: on, AppRegistry: AppRegistryConfig{Host: "registry.excalibase.internal", URL: "http://zot:5000", TokenKeyPEM: []byte("k")}}
 	if err := full.validateAppRegistry(); err != nil {
 		t.Errorf("builds on with a key and a URL: %v", err)
 	}
@@ -66,11 +66,11 @@ func TestValidateAppRegistry(t *testing.T) {
 // Git builds push to and pull from the platform's registry: the flag with no host must stop the boot, not start half-wired.
 func TestValidateAppRegistry_GitBuildsNeedAHost(t *testing.T) {
 	on := []features.Feature{features.AppGitBuilds}
-	err := (AppConfig{DarkFeatures: on}).validateAppRegistry()
+	err := (AppConfig{AppTmpPercent: 25, DarkFeatures: on}).validateAppRegistry()
 	if err == nil || !strings.Contains(err.Error(), "APP_REGISTRY_HOST") || !strings.Contains(err.Error(), "FEATURE_APPGITBUILDS") {
 		t.Fatalf("err = %v", err)
 	}
-	if err := (AppConfig{DarkFeatures: on, AppRegistry: AppRegistryConfig{Host: "r.internal", URL: "http://zot:5000", TokenKeyPEM: []byte("k")}}).validateAppRegistry(); err != nil {
+	if err := (AppConfig{AppTmpPercent: 25, DarkFeatures: on, AppRegistry: AppRegistryConfig{Host: "r.internal", URL: "http://zot:5000", TokenKeyPEM: []byte("k")}}).validateAppRegistry(); err != nil {
 		t.Errorf("host, key and URL with builds on: %v", err)
 	}
 }
@@ -78,10 +78,10 @@ func TestValidateAppRegistry_GitBuildsNeedAHost(t *testing.T) {
 // Single-host shows git-build plan limits only (EXC-677 builds come later), so the flag boots there with no registry.
 func TestValidateAppRegistry_SingleHostGitBuildsBootWithoutAHost(t *testing.T) {
 	on := []features.Feature{features.AppGitBuilds}
-	if err := (AppConfig{ProvisionerMode: "docker", DarkFeatures: on}).validateAppRegistry(); err != nil {
+	if err := (AppConfig{AppTmpPercent: 25, ProvisionerMode: "docker", DarkFeatures: on}).validateAppRegistry(); err != nil {
 		t.Errorf("single host with builds on and no host: %v", err)
 	}
-	err := (AppConfig{ProvisionerMode: "k8s", DarkFeatures: on}).validateAppRegistry()
+	err := (AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s", DarkFeatures: on}).validateAppRegistry()
 	if err == nil || !strings.Contains(err.Error(), "APP_REGISTRY_HOST") {
 		t.Errorf("cluster with builds on and no host: err = %v", err)
 	}

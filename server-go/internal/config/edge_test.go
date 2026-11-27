@@ -38,7 +38,7 @@ func TestParseEdgePodPorts(t *testing.T) {
 }
 
 func edgeConfig() AppConfig {
-	return AppConfig{
+	return AppConfig{AppTmpPercent: 25,
 		ProvisionerMode: "k8s", DeploymentMode: "cloud",
 		EdgeNamespace: "haproxy-controller", EdgePodLabels: map[string]string{"app.kubernetes.io/name": "kubernetes-ingress"},
 		EdgePodPorts: []int{8080, 8443},
@@ -47,7 +47,7 @@ func edgeConfig() AppConfig {
 
 // The edge is all three settings or none: a namespace alone would open every pod in it.
 func TestValidateEdgeIsAllOrNothing(t *testing.T) {
-	if err := (AppConfig{ProvisionerMode: "k8s", DeploymentMode: "cloud"}).Validate(); err != nil {
+	if err := (AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s", DeploymentMode: "cloud"}).Validate(); err != nil {
 		t.Fatalf("no edge at all must pass: %v", err)
 	}
 	cases := map[string]struct {

@@ -19,13 +19,13 @@ func TestCheckDenoRuntimeImage(t *testing.T) {
 		cfg     AppConfig
 		wantErr string
 	}{
-		"k8s with a release tag":    {cfg: AppConfig{ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: pinnedDenoImage}},
-		"k8s without an image":      {cfg: AppConfig{ProvisionerMode: "k8s", DenoRuntimeSecret: "s"}, wantErr: "DENO_RUNTIME_IMAGE"},
-		"k8s latest":                {cfg: AppConfig{ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: "excalibase/deno-runtime:latest"}, wantErr: "accepted"},
-		"k8s untagged":              {cfg: AppConfig{ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: "excalibase/deno-runtime"}, wantErr: "tag"},
-		"docker mode runs no pod":   {cfg: AppConfig{ProvisionerMode: "docker"}},
-		"docker mode, bad override": {cfg: AppConfig{ProvisionerMode: "docker", DenoRuntimeImage: "x:latest"}, wantErr: "accepted"},
-		"no functions secret":       {cfg: AppConfig{ProvisionerMode: "k8s"}},
+		"k8s with a release tag":    {cfg: AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: pinnedDenoImage}},
+		"k8s without an image":      {cfg: AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s", DenoRuntimeSecret: "s"}, wantErr: "DENO_RUNTIME_IMAGE"},
+		"k8s latest":                {cfg: AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: "excalibase/deno-runtime:latest"}, wantErr: "accepted"},
+		"k8s untagged":              {cfg: AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s", DenoRuntimeSecret: "s", DenoRuntimeImage: "excalibase/deno-runtime"}, wantErr: "tag"},
+		"docker mode runs no pod":   {cfg: AppConfig{AppTmpPercent: 25, ProvisionerMode: "docker"}},
+		"docker mode, bad override": {cfg: AppConfig{AppTmpPercent: 25, ProvisionerMode: "docker", DenoRuntimeImage: "x:latest"}, wantErr: "accepted"},
+		"no functions secret":       {cfg: AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

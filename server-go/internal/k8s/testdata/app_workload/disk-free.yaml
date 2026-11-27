@@ -26,7 +26,7 @@ spec:
   template:
     metadata:
       annotations:
-        excalibase.io/app-config-hash: 89bb5c0c1fb14699
+        excalibase.io/app-config-hash: 5177bc87551d1a1e
       labels:
         app.kubernetes.io/component: app
         app.kubernetes.io/managed-by: excalibase-provisioning
@@ -84,10 +84,12 @@ spec:
             - AUDIT_WRITE
             drop:
             - ALL
-          readOnlyRootFilesystem: false
+          readOnlyRootFilesystem: true
         volumeMounts:
         - mountPath: /var/lib/redis
           name: disk
+        - mountPath: /tmp
+          name: tmp
       runtimeClassName: gvisor
       securityContext:
         seccompProfile:
@@ -96,6 +98,10 @@ spec:
       - name: disk
         persistentVolumeClaim:
           claimName: app-disk-app-01h
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 64Mi
+        name: tmp
 status: {}
 ---
 apiVersion: cilium.io/v2

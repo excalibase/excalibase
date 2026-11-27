@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/logsafe"
@@ -107,36 +108,11 @@ func (h *Handler) authorize(r *http.Request) error {
 		return refuse("path %q is not canonical", r.URL.EscapedPath())
 	}
 	api := stripVersion(raw)
-	switch {
-	case api == "/_ping" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+	if isPlainRead(r.Method, api) {
 		return nil
-	case api == "/version" && r.Method == http.MethodGet:
-		return nil
-	case api == "/images/json" && r.Method == http.MethodGet:
-		return nil
-	case api == "/images/create" && r.Method == http.MethodPost:
-		return nil
-	case api == "/containers/create" && r.Method == http.MethodPost:
-		names := r.URL.Query()["name"]
-		if len(names) != 1 {
-			return refuse("a container create names exactly one container")
-		}
-		return h.checkBody(r, func(body []byte) error {
-			if err := h.policy.CheckCreate(names[0], body); err != nil {
-				return err
-			}
-			var volumes createVolumes
-			if err := json.Unmarshal(body, &volumes); err != nil {
-				return refuse("container create body: %v", err)
-			}
-			if err := h.requireOwnVolumes(r.Context(), volumes); err != nil {
-				return err
-			}
-			if err := h.requireManagedJoin(r.Context(), body); err != nil {
-				return err
-			}
-			return h.holdRestartPolicy(r, body)
-		})
+	}
+	if api == "/containers/create" && r.Method == http.MethodPost {
+		return h.authorizeCreate(r)
 	}
 	if handled, err := h.authorizeApps(r, api); handled {
 		return err
@@ -150,6 +126,45 @@ func (h *Handler) authorize(r *http.Request) error {
 	return refuse("%s %s is not a call provisioning makes", r.Method, api)
 }
 
+// isPlainRead is the engine calls that carry no body to check and name no container.
+func isPlainRead(method, api string) bool {
+	switch {
+	case api == "/_ping":
+		return method == http.MethodGet || method == http.MethodHead
+	case api == "/version" || api == "/images/json":
+		return method == http.MethodGet
+	case api == "/images/create":
+		return method == http.MethodPost
+	default:
+		return method == http.MethodGet && isImageInspect(api)
+	}
+}
+
+// authorizeCreate checks a container create: its body, the volumes it mounts, any container whose
+// network it joins and its restart policy.
+func (h *Handler) authorizeCreate(r *http.Request) error {
+	names := r.URL.Query()["name"]
+	if len(names) != 1 {
+		return refuse("a container create names exactly one container")
+	}
+	return h.checkBody(r, func(body []byte) error {
+		if err := h.policy.CheckCreate(names[0], body); err != nil {
+			return err
+		}
+		var volumes createVolumes
+		if err := json.Unmarshal(body, &volumes); err != nil {
+			return refuse("container create body: %v", err)
+		}
+		if err := h.requireOwnVolumes(r.Context(), volumes); err != nil {
+			return err
+		}
+		if err := h.requireManagedJoin(r.Context(), body); err != nil {
+			return err
+		}
+		return h.holdRestartPolicy(r, body)
+	})
+}
+
 func (h *Handler) authorizeContainer(r *http.Request, id, action string) error {
 	if id == "create" || id == "json" {
 		return refuse("%s /containers/%s is not a call provisioning makes", r.Method, id)
@@ -161,8 +176,12 @@ func (h *Handler) authorizeContainer(r *http.Request, id, action string) error {
 	if kind == routeStats {
 		return h.authorizeStats(r, id)
 	}
-	if err := h.requireManaged(r.Context(), id); err != nil {
+	labels, err := h.managedLabels(r.Context(), id)
+	if err != nil {
 		return err
+	}
+	if r.Method == http.MethodPost && action == "/start" && labels[SharedFillLabel] == "true" {
+		return refuse("container %s fills a shared volume and is never started", id)
 	}
 	switch kind {
 	case routeExecCreate:
@@ -199,16 +218,22 @@ func (h *Handler) authorizeExec(r *http.Request, id, action string) error {
 }
 
 func (h *Handler) requireManaged(ctx context.Context, id string) error {
+	_, err := h.managedLabels(ctx, id)
+	return err
+}
+
+// managedLabels are the labels of a container provisioning manages; any other is refused.
+func (h *Handler) managedLabels(ctx context.Context, id string) (map[string]string, error) {
 	var container struct {
 		Config struct{ Labels map[string]string }
 	}
 	if err := h.inspect(ctx, "/containers/"+url.PathEscape(id)+"/json", &container); err != nil {
-		return err
+		return nil, err
 	}
 	if container.Config.Labels[h.policy.ManagedLabel] != "true" {
-		return fmt.Errorf("%w: %s", errNotManaged, id)
+		return nil, fmt.Errorf("%w: %s", errNotManaged, id)
 	}
-	return nil
+	return container.Config.Labels, nil
 }
 
 // requireManagedJoin refuses a create that joins the network namespace of a
@@ -284,4 +309,11 @@ func stripVersion(raw string) string {
 		return match[1]
 	}
 	return raw
+}
+
+// isImageInspect is GET /images/{name}/json: what an image declares, such as its VOLUMEs.
+func isImageInspect(api string) bool {
+	name, found := strings.CutPrefix(api, "/images/")
+	name, suffixed := strings.CutSuffix(name, "/json")
+	return found && suffixed && name != "" && !strings.Contains(name, "..")
 }

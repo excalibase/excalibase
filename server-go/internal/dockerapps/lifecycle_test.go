@@ -59,7 +59,7 @@ func TestResumeAtAnotherPlanRecreatesTheContainerAtItsSize(t *testing.T) {
 	if len(after) != 1 || after[0].id == before.id || after[0].name != before.name {
 		t.Fatalf("not recreated under its name: before %s after %+v", before.id, after)
 	}
-	if after[0].host.Memory != 1<<30 || after[0].config.Labels[labelTier] != "standard" || string(after[0].files[probePath]) != "probe" {
+	if after[0].host.Memory != 1<<30 || after[0].config.Labels[labelTier] != "standard" || string(h.engine.fileBody(after[0], probePath)) != "probe" {
 		t.Fatalf("recreated at memory %d tier %q", after[0].host.Memory, after[0].config.Labels[labelTier])
 	}
 	if strings.Join(after[0].config.Env, ",") != strings.Join(before.config.Env, ",") || after[0].config.Image != before.config.Image {
@@ -163,8 +163,8 @@ func TestDeleteRemovesEverythingAndTheNetworkWithTheLastApp(t *testing.T) {
 	if err := h.rt.DeleteAppWorkload(ctx, testDB, "app-01", time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.engine.appContainers("app-01")) != 0 || h.route() != "" || len(h.engine.volumes) != 0 {
-		t.Fatalf("left behind: containers %d route %q volumes %v", len(h.engine.appContainers("app-01")), h.route(), h.engine.volumes)
+	if len(h.engine.appContainers("app-01")) != 0 || h.route() != "" || len(h.engine.ownedVolumes()) != 0 {
+		t.Fatalf("left behind: containers %d route %q volumes %v", len(h.engine.appContainers("app-01")), h.route(), h.engine.ownedVolumes())
 	}
 	if _, ok := h.engine.networks[testNet]; ok {
 		t.Fatal("the project's network outlived its last app")

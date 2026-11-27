@@ -193,7 +193,7 @@ func (lab *egressLab) fencedTargets(t *testing.T) []string {
 // applyEdgeFences applies both fences through the code paths a deploy uses.
 func (lab *egressLab) applyEdgeFences(t *testing.T, app *apphost.App, edge EdgePeer) {
 	t.Helper()
-	options := AppRenderOptions{RuntimeClass: gvisorRuntimeClass, Edge: edge, Route: liveRoute, EnvRevision: "1", DeployID: liveDeployID}
+	options := AppRenderOptions{TmpPercent: 25, RuntimeClass: gvisorRuntimeClass, Edge: edge, Route: liveRoute, EnvRevision: "1", DeployID: liveDeployID}
 	workload, err := RenderAppWorkload(egressNamespaceA, app, &fakeResolver{namespace: egressNamespaceA}, options)
 	if err != nil {
 		t.Fatalf("render app: %v", err)

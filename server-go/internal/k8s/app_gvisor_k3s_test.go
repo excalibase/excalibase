@@ -12,10 +12,22 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 )
 
-// Its master runs as root on :80, chowns its cache and drops workers to another user.
-const rootImage = "nginx:1.27"
+// rootImage runs as root and serves :80 from /tmp, so it holds up under the read-only root every app gets
+// (stock nginx writes /var/cache/nginx and crashloops there, EXC-732).
+const rootImage = "busybox:1.36"
+
+const rootPage = "Welcome to the root app"
+
+// rootApp is rootImage serving rootPage as root on :80.
+func rootApp(name string) *apphost.App {
+	app := liveApp(name, rootImage, 80)
+	app.Args = []string{"sh", "-c", "echo '" + rootPage + "' > /tmp/index.html && exec httpd -f -p 80 -h /tmp"}
+	return app
+}
 
 const (
 	capChown  = 0
@@ -34,7 +46,7 @@ func TestK3sGVisor(t *testing.T) {
 func proveGVisor(t *testing.T, platform string) {
 	g := startGVisorK3s(t, platform)
 	namespace := g.createNamespace(t, "org1-proj1")
-	rooted := liveApp("rooted", rootImage, 80)
+	rooted := rootApp("rooted")
 	rooted.HealthCheckPath = "/"
 	if err := g.deployApp(t, namespace, rooted, 4*time.Minute); err != nil {
 		t.Fatalf("root image: want a rollout, got %v", err)
@@ -54,8 +66,8 @@ func assertServesAsRoot(t *testing.T, g *gvisorCluster, pod corev1.Pod) {
 		t.Fatalf("uid inside = %q, want 0", uid)
 	}
 	page := g.nodeShell(t, "wget -qO- http://"+pod.Status.PodIP+":80/")
-	if !strings.Contains(page, "Welcome to nginx!") {
-		t.Fatalf("GET :80 from the node = %q, want the nginx welcome page", page)
+	if !strings.Contains(page, rootPage) {
+		t.Fatalf("GET :80 from the node = %q, want %q", page, rootPage)
 	}
 }
 
@@ -105,7 +117,7 @@ func (g *gvisorCluster) startControlPod(t *testing.T, namespace string) corev1.P
 	ctx := context.Background()
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "control", Namespace: namespace},
-		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "control", Image: rootImage}}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "control", Image: rootImage, Command: []string{"sleep", "3600"}}}},
 	}
 	if _, err := g.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create control pod: %v", err)
@@ -143,7 +155,7 @@ done`)
 }
 
 func assertHostInvisible(t *testing.T, g *gvisorCluster, pod corev1.Pod) {
-	if init := g.exec(t, pod, "tr '\\0' ' ' < /proc/1/cmdline"); !strings.HasPrefix(init, "nginx: master process") {
+	if init := g.exec(t, pod, "tr '\\0' ' ' < /proc/1/cmdline"); !strings.HasPrefix(init, "httpd") {
 		t.Errorf("pid 1 inside = %q, want the app's own process", init)
 	}
 	processes := g.exec(t, pod, "cat /proc/[0-9]*/cmdline | tr '\\0' ' '")
@@ -163,7 +175,7 @@ func assertUnschedulableFailsFast(t *testing.T, g *gvisorCluster, namespace stri
 	g.setGVisorLabel(t, false)
 	t.Cleanup(func() { g.setGVisorLabel(t, true) })
 	start := time.Now()
-	err := g.deployApp(t, namespace, liveApp("stranded", rootImage, 80), 5*time.Minute)
+	err := g.deployApp(t, namespace, rootApp("stranded"), 5*time.Minute)
 	t.Logf("unschedulable after %s: %v", time.Since(start).Round(time.Second), err)
 	if !errors.Is(err, ErrAppRollout) || !strings.Contains(err.Error(), "Unschedulable") ||
 		!strings.Contains(err.Error(), `"`+gvisorRuntimeClass+`"`) {

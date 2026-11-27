@@ -37,72 +37,83 @@ func TestK3sAppDiskUnderGVisor(t *testing.T) {
 	g.exec(t, pod, "echo kept-across-restarts > /data/proof.txt && sync")
 	g.assertProof(t, namespace, app, "first write")
 
-	t.Run("survives a pod restart", func(t *testing.T) {
-		if err := g.clientset.CoreV1().Pods(namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{}); err != nil {
-			t.Fatalf("delete pod: %v", err)
-		}
-		g.waitForReplacement(t, namespace, app, pod.Name)
-		g.assertProof(t, namespace, app, "after a restart")
-	})
+	t.Run("survives a pod restart", func(t *testing.T) { g.survivesAPodRestart(t, namespace, app, pod) })
 	t.Run("survives a redeploy", func(t *testing.T) {
 		app.Env = []apphost.EnvVar{{Name: "REVISION", Kind: apphost.KindLiteral, Value: stringPointer("2")}}
 		deploy("dep-2")
 		g.assertProof(t, namespace, app, "after a redeploy")
 	})
-	t.Run("survives a pause and a resume", func(t *testing.T) {
-		ctx := context.Background()
-		if err := g.client.PauseAppWorkload(ctx, namespace, app.ID); err != nil {
-			t.Fatalf("pause: %v", err)
-		}
-		if err := g.client.WaitForAppPodsGone(ctx, namespace, app.ID, 2*time.Minute); err != nil {
-			t.Fatalf("pods after pause: %v", err)
-		}
-		if err := g.client.ResumeAppWorkload(ctx, namespace, app.ID, app.Name, app.Tier, 4*time.Minute); err != nil {
-			t.Fatalf("resume: %v", err)
-		}
-		g.assertProof(t, namespace, app, "after a pause and resume")
-	})
+	t.Run("survives a pause and a resume", func(t *testing.T) { g.survivesAPauseAndResume(t, namespace, app) })
 	t.Run("survives a rename", func(t *testing.T) {
-		ctx := context.Background()
 		app.Name = "keeper-renamed"
-		if err := g.client.PruneAppWorkload(ctx, namespace, app.ID, app.Name, 2*time.Minute); err != nil {
+		if err := g.client.PruneAppWorkload(context.Background(), namespace, app.ID, app.Name, 2*time.Minute); err != nil {
 			t.Fatalf("stop the old name: %v", err)
 		}
 		deploy("dep-3")
 		g.assertProof(t, namespace, app, "after a rename")
 	})
-	t.Run("a grow on local-path is refused, the disk untouched", func(t *testing.T) {
-		class, err := g.clientset.StorageV1().StorageClasses().Get(context.Background(), liveDiskStorageClass, metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("read storage class: %v", err)
-		}
-		if class.AllowVolumeExpansion != nil && *class.AllowVolumeExpansion {
-			t.Fatalf("fixture: %s allows expansion here; the refusal cannot be exercised", liveDiskStorageClass)
-		}
-		if err := g.client.GrowAppDisk(context.Background(), namespace, app.ID, 0, "2Gi"); !errors.Is(err, ErrAppDiskNotExpandable) {
-			t.Fatalf("grow: got %v, want ErrAppDiskNotExpandable", err)
-		}
-		g.assertProof(t, namespace, app, "after a refused grow")
-	})
-	t.Run("deleting the app deletes the disk", func(t *testing.T) {
-		volume := g.boundVolume(t, namespace, app)
-		if err := g.client.DeleteAppWorkload(context.Background(), namespace, app.ID, 3*time.Minute); err != nil {
-			t.Fatalf("delete: %v", err)
-		}
-		g.assertNothingOwned(t, namespace, app.ID)
-		claims, err := g.clientset.CoreV1().PersistentVolumeClaims(namespace).List(context.Background(), metav1.ListOptions{})
-		if err != nil || len(claims.Items) != 0 {
-			t.Fatalf("claims left: %v %v", claims, err)
-		}
-		g.waitForVolumeGone(t, volume)
-	})
+	t.Run("a grow on local-path is refused, the disk untouched", func(t *testing.T) { g.refusesAGrow(t, namespace, app) })
+	t.Run("deleting the app deletes the disk", func(t *testing.T) { g.deletesTheDisk(t, namespace, app) })
+}
+
+func (g *gvisorCluster) survivesAPodRestart(t *testing.T, namespace string, app *apphost.App, pod corev1.Pod) {
+	t.Helper()
+	if err := g.clientset.CoreV1().Pods(namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+	g.waitForReplacement(t, namespace, app, pod.Name)
+	g.assertProof(t, namespace, app, "after a restart")
+}
+
+func (g *gvisorCluster) survivesAPauseAndResume(t *testing.T, namespace string, app *apphost.App) {
+	t.Helper()
+	ctx := context.Background()
+	if err := g.client.PauseAppWorkload(ctx, namespace, app.ID); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if err := g.client.WaitForAppPodsGone(ctx, namespace, app.ID, 2*time.Minute); err != nil {
+		t.Fatalf("pods after pause: %v", err)
+	}
+	if err := g.client.ResumeAppWorkload(ctx, namespace, app.ID, app.Name, app.Tier, 4*time.Minute); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	g.assertProof(t, namespace, app, "after a pause and resume")
+}
+
+func (g *gvisorCluster) refusesAGrow(t *testing.T, namespace string, app *apphost.App) {
+	t.Helper()
+	class, err := g.clientset.StorageV1().StorageClasses().Get(context.Background(), liveDiskStorageClass, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read storage class: %v", err)
+	}
+	if class.AllowVolumeExpansion != nil && *class.AllowVolumeExpansion {
+		t.Fatalf("fixture: %s allows expansion here; the refusal cannot be exercised", liveDiskStorageClass)
+	}
+	if err := g.client.GrowAppDisk(context.Background(), namespace, app.ID, 0, "2Gi"); !errors.Is(err, ErrAppDiskNotExpandable) {
+		t.Fatalf("grow: got %v, want ErrAppDiskNotExpandable", err)
+	}
+	g.assertProof(t, namespace, app, "after a refused grow")
+}
+
+func (g *gvisorCluster) deletesTheDisk(t *testing.T, namespace string, app *apphost.App) {
+	t.Helper()
+	volume := g.boundVolume(t, namespace, app)
+	if err := g.client.DeleteAppWorkload(context.Background(), namespace, app.ID, 3*time.Minute); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	g.assertNothingOwned(t, namespace, app.ID)
+	claims, err := g.clientset.CoreV1().PersistentVolumeClaims(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil || len(claims.Items) != 0 {
+		t.Fatalf("claims left: %v %v", claims, err)
+	}
+	g.waitForVolumeGone(t, volume)
 }
 
 func stringPointer(value string) *string { return &value }
 
 func (g *gvisorCluster) deployDiskApp(t *testing.T, namespace string, app *apphost.App, deployID string) error {
 	t.Helper()
-	workload, err := RenderAppWorkload(namespace, app, nil, AppRenderOptions{
+	workload, err := RenderAppWorkload(namespace, app, nil, AppRenderOptions{TmpPercent: 25,
 		RuntimeClass: gvisorRuntimeClass, Route: liveRoute, DeployID: deployID, DiskStorageClass: liveDiskStorageClass})
 	if err != nil {
 		t.Fatalf("render: %v", err)

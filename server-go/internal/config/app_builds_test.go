@@ -30,7 +30,7 @@ func TestLoadAppBuilds_DefaultsToThePinnedImagesAndItsOwnNamespace(t *testing.T)
 
 // A namespace that cannot exist stops the boot, but only where app git builds are on.
 func TestValidateAppBuilds(t *testing.T) {
-	bad := AppConfig{AppBuild: AppBuildConfig{Namespace: "Not_A_Namespace"}}
+	bad := AppConfig{AppTmpPercent: 25, AppBuild: AppBuildConfig{Namespace: "Not_A_Namespace"}}
 	if err := bad.validateAppBuilds(); err != nil {
 		t.Errorf("flag off: %v", err)
 	}
@@ -38,11 +38,11 @@ func TestValidateAppBuilds(t *testing.T) {
 	if err := bad.validateAppBuilds(); err == nil {
 		t.Error("flag on with a bad namespace")
 	}
-	relative := AppConfig{DarkFeatures: bad.DarkFeatures, AppBuild: AppBuildConfig{Namespace: "app-builds", SpoolPath: "spool"}}
+	relative := AppConfig{AppTmpPercent: 25, DarkFeatures: bad.DarkFeatures, AppBuild: AppBuildConfig{Namespace: "app-builds", SpoolPath: "spool"}}
 	if err := relative.validateAppBuilds(); err == nil {
 		t.Error("a relative spool path")
 	}
-	good := AppConfig{DarkFeatures: bad.DarkFeatures, AppBuild: loadAppBuilds()}
+	good := AppConfig{AppTmpPercent: 25, DarkFeatures: bad.DarkFeatures, AppBuild: loadAppBuilds()}
 	if err := good.validateAppBuilds(); err != nil {
 		t.Errorf("defaults: %v", err)
 	}

@@ -1,8 +1,6 @@
 package dockerapps
 
 import (
-	"archive/tar"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +21,7 @@ import (
 )
 
 const (
-	// probePath is where the readiness probe is copied in before a container starts.
+	// probePath is where the readiness probe is mounted, read-only, from the platform's probe volume.
 	probeDir  = ".excalibase"
 	probePath = "/" + probeDir + "/probe"
 	// edgeCAPath holds the edge's own CA root in an app when the edge issues locally; Node reads it
@@ -104,7 +102,11 @@ var unsandboxedCapabilities = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUI
 
 // hostConfig is the app's isolation: its sandbox, its project's network, its
 // tier's limits, and nothing of the host's.
-func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
+func (r *Runtime) hostConfig(spec containerSpec, probeVolume string, imageVolumes []string) (*container.HostConfig, error) {
+	tmpfs, err := r.scratchMounts(spec, imageVolumes)
+	if err != nil {
+		return nil, err
+	}
 	pids := appPidsLimit
 	host := &container.HostConfig{
 		NetworkMode:   container.NetworkMode(r.networkName(spec.Project)),
@@ -117,6 +119,14 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 		Resources: container.Resources{
 			Memory: spec.MemoryBytes, MemorySwap: spec.MemoryBytes, NanoCPUs: spec.NanoCPUs, PidsLimit: &pids,
 		},
+		// The root is read-only, so an app writes only /tmp and the image's own VOLUME paths (capped
+		// tmpfs, in memory) and its disk, whatever storage engine or sandbox sits under it (EXC-732).
+		ReadonlyRootfs: true,
+		Tmpfs:          tmpfs,
+		LogConfig:      r.logConfig(),
+		// The probe and the edge CA arrive read-only from a volume of the platform's own.
+		Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: probeVolume, Target: "/" + probeDir, ReadOnly: true,
+			VolumeOptions: &mount.VolumeOptions{NoCopy: true}}},
 	}
 	// Inside the sandbox an app keeps what Kubernetes gives it; without one it keeps
 	// only what an image needs to step down from root and to bind a low port.
@@ -129,9 +139,9 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 		host.UsernsMode = spec.Userns.mode()
 	}
 	if spec.DiskClaim != "" {
-		host.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: r.volumeName(spec.DiskClaim), Target: spec.DiskMountPath}}
+		host.Mounts = append(host.Mounts, mount.Mount{Type: mount.TypeVolume, Source: r.volumeName(spec.DiskClaim), Target: spec.DiskMountPath})
 	}
-	return host
+	return host, nil
 }
 
 // serviceAlias is the name the app's siblings reach it by; one of the
@@ -161,13 +171,22 @@ func (r *Runtime) createAppContainer(ctx context.Context, spec containerSpec, re
 	endpoints := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
 		r.networkName(spec.Project): {Aliases: []string{alias}},
 	}}
+	probeVolume, err := r.probeVolume(ctx, edgeCA)
+	if err != nil {
+		return "", err
+	}
+	imageVolumes, err := r.imageVolumes(ctx, spec.Image)
+	if err != nil {
+		return "", err
+	}
+	host, err := r.hostConfig(spec, probeVolume, imageVolumes)
+	if err != nil {
+		return "", err
+	}
 	name := appContainerName(spec.Project, spec.AppID, spec.DeployID, replica)
-	created, err := r.engine.ContainerCreate(ctx, config, r.hostConfig(spec), endpoints, nil, name)
+	created, err := r.engine.ContainerCreate(ctx, config, host, endpoints, nil, name)
 	if err != nil {
 		return "", fmt.Errorf("create %s: %w", name, err)
-	}
-	if err := r.injectProbe(ctx, created.ID, edgeCA); err != nil {
-		return "", errors.Join(err, r.remove(ctx, created.ID))
 	}
 	return created.ID, nil
 }
@@ -190,39 +209,6 @@ func withEdgeCA(env []string, edgeCA []byte) []string {
 		return env
 	}
 	return append(slices.Clone(env), nodeExtraCAs+"="+edgeCAPath)
-}
-
-func (r *Runtime) injectProbe(ctx context.Context, id string, edgeCA []byte) error {
-	var archive bytes.Buffer
-	writer := tar.NewWriter(&archive)
-	entries := []struct {
-		header tar.Header
-		body   []byte
-	}{
-		{tar.Header{Name: probeDir + "/", Mode: 0o755, Typeflag: tar.TypeDir}, nil},
-		{tar.Header{Name: probeDir + "/probe", Mode: 0o755, Typeflag: tar.TypeReg, Size: int64(len(r.opts.ProbeBinary))}, r.opts.ProbeBinary},
-	}
-	if edgeCA != nil {
-		entries = append(entries, struct {
-			header tar.Header
-			body   []byte
-		}{tar.Header{Name: probeDir + "/edge-ca.crt", Mode: 0o644, Typeflag: tar.TypeReg, Size: int64(len(edgeCA))}, edgeCA})
-	}
-	for _, entry := range entries {
-		if err := writer.WriteHeader(&entry.header); err != nil {
-			return fmt.Errorf("pack the readiness probe: %w", err)
-		}
-		if _, err := writer.Write(entry.body); err != nil {
-			return fmt.Errorf("pack the readiness probe: %w", err)
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("pack the readiness probe: %w", err)
-	}
-	if err := r.engine.CopyToContainer(ctx, id, "/", &archive, container.CopyToContainerOptions{}); err != nil {
-		return fmt.Errorf("copy the readiness probe into %s: %w", id, err)
-	}
-	return nil
 }
 
 // probeReady runs the probe inside the container; any failure to run it is "not ready".
@@ -279,7 +265,8 @@ func (r *Runtime) stop(ctx context.Context, id string) error {
 }
 
 func (r *Runtime) remove(ctx context.Context, id string) error {
-	if err := r.engine.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+	// RemoveVolumes takes the container's anonymous volumes (the probe's) and never a named one: the app's disk stays.
+	if err := r.engine.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
 		return fmt.Errorf("remove %s: %w", id, err)
 	}
 	return nil

@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -16,7 +19,13 @@ const (
 	appSandboxOptOut      = "none"
 	defaultAppProbeBinary = "/usr/local/bin/excalibase-app-probe"
 	defaultAppUserns      = "auto"
+	// defaultAppLogMaxSize and defaultAppLogMaxFiles cap one app container's log at 15 MiB (EXC-732).
+	defaultAppLogMaxSize  = "5m"
+	defaultAppLogMaxFiles = 3
 )
+
+// appLogSize is the engine's log size: digits and k, m or g.
+var appLogSize = regexp.MustCompile(`^[1-9][0-9]*[kmg]$`)
 
 // SingleHostAppsConfig is how apps run on a single Docker or Podman host (EXC-575).
 type SingleHostAppsConfig struct {
@@ -30,7 +39,12 @@ type SingleHostAppsConfig struct {
 	EgressInvalid string
 	// Userns is APP_USERNS (auto, per-app or shared): whether unsandboxed apps on rootless
 	// Podman each get their own user range (EXC-682). Validate refuses any other value.
-	Userns                      string
+	Userns string
+	// LogMaxSize and LogMaxFiles are APP_LOG_MAX_SIZE and APP_LOG_MAX_FILES: each app container's log
+	// is rotated at that size and keeps that many files. LogMaxFiles is -1 for a value that is not a
+	// whole number, for Validate to refuse.
+	LogMaxSize                  string
+	LogMaxFiles                 int
 	NetworkPrefix, VolumePrefix string
 	EdgeContainer               string
 	EdgeRoutesDir               string
@@ -65,6 +79,15 @@ func loadSingleHostApps() SingleHostAppsConfig {
 	if cfg.SandboxRuntime == appSandboxOptOut {
 		cfg.SandboxRuntime = ""
 	}
+	cfg.LogMaxSize = envOr("APP_LOG_MAX_SIZE", defaultAppLogMaxSize)
+	cfg.LogMaxFiles = defaultAppLogMaxFiles
+	if raw := strings.TrimSpace(os.Getenv("APP_LOG_MAX_FILES")); raw != "" {
+		files, err := strconv.Atoi(raw)
+		if err != nil {
+			files = -1
+		}
+		cfg.LogMaxFiles = files
+	}
 	cfg.AcceptUnguardedEgress = os.Getenv("APP_EGRESS_UNGUARDED") == "accept"
 	switch egress := envOr("APP_EGRESS", "none"); egress {
 	case "none":
@@ -87,6 +110,12 @@ func (c AppConfig) validateSingleHostApps() error {
 	case "", "auto", "per-app", "shared":
 	default:
 		return fmt.Errorf("APP_USERNS %q must be auto, per-app or shared", apps.Userns)
+	}
+	if !appLogSize.MatchString(apps.LogMaxSize) {
+		return fmt.Errorf("APP_LOG_MAX_SIZE %q must be a whole number and k, m or g, such as 5m", apps.LogMaxSize)
+	}
+	if apps.LogMaxFiles < 1 || apps.LogMaxFiles > 100 {
+		return errors.New("APP_LOG_MAX_FILES must be a whole number from 1 to 100")
 	}
 	required := []struct{ env, value string }{
 		{"APP_DOMAIN", c.AppDomain}, {"APP_NETWORK_PREFIX", apps.NetworkPrefix}, {"APP_VOLUME_PREFIX", apps.VolumePrefix},

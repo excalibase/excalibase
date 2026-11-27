@@ -142,6 +142,7 @@ func TestHandlerForwardsTheCallsTheProvisionerMakes(t *testing.T) {
 		{http.MethodHead, "/_ping"},
 		{http.MethodGet, "/v1.47/version"},
 		{http.MethodGet, "/v1.47/images/json"},
+		{http.MethodGet, "/v1.47/images/ghcr.io/acme/web:1.2/json"},
 		{http.MethodPost, "/v1.47/images/create?fromImage=postgres&tag=17"},
 		{http.MethodGet, "/v1.47/containers/excalibase-p1-postgres/json"},
 		{http.MethodPost, "/v1.47/containers/excalibase-p1-postgres/start"},
@@ -167,6 +168,9 @@ func TestHandlerRefusesEverythingElse(t *testing.T) {
 	engine, proxy := newProxy(t)
 	refused := []struct{ method, path string }{
 		{http.MethodGet, "/v1.47/containers/json"},
+		{http.MethodDelete, "/v1.47/images/ghcr.io/acme/web:1.2"},
+		{http.MethodPost, "/v1.47/images/ghcr.io/acme/web:1.2/json"},
+		{http.MethodGet, "/v1.47/images//json"},
 		{http.MethodPost, "/v1.47/containers/excalibase-provisioning/stop"},
 		{http.MethodDelete, "/v1.47/containers/excalibase-provisioning"},
 		{http.MethodGet, "/v1.47/containers/excalibase-provisioning/archive?path=/var/lib/excalibase"},

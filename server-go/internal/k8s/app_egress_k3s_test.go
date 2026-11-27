@@ -4,8 +4,8 @@ package k8s
 
 import (
 	"context"
-	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/k3smirror"
 	"maps"
 	"strings"
 	"testing"
@@ -225,7 +225,7 @@ func (lab *egressLab) render(t *testing.T, pod string) *AppWorkload {
 	t.Helper()
 	client := lab.clients[pod]
 	// Only the policy is applied here, so the runtime class never reaches a node.
-	options := AppRenderOptions{RuntimeClass: gvisorRuntimeClass, ExtraDenyCIDRs: client.extra, Route: liveRoute, EnvRevision: "1", DeployID: liveDeployID}
+	options := AppRenderOptions{TmpPercent: 25, RuntimeClass: gvisorRuntimeClass, ExtraDenyCIDRs: client.extra, Route: liveRoute, EnvRevision: "1", DeployID: liveDeployID}
 	workload, err := RenderAppWorkload(egressNamespaceA, client.app, &fakeResolver{namespace: egressNamespaceA}, options)
 	if err != nil {
 		t.Fatalf("render %s: %v", pod, err)
