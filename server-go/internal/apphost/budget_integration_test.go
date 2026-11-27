@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -188,3 +189,27 @@ func TestAppAdmissionIsOffWhileTheFlagIsOff(t *testing.T) {
 		f.add(t, fmt.Sprintf("free%d", i), 3, apphost.StatusRunning)
 	}
 }
+
+// A plan change that gives an app a bigger tier is growth like any other.
+func TestAppResizeOnAPlanChangeIsAdmittedLikeGrowth(t *testing.T) {
+	f := newBudgetFixture(t, "appplan", 1500)
+	small := sampleApp(f.project, "tiny", "tiny")
+	small.Tier = "FREE"
+	small.Replicas, small.Status = 1, apphost.StatusRunning
+	if err := f.apps.Create(small, 100); err != nil {
+		t.Fatal(err)
+	}
+	resize := &apphost.Deploy{ID: "rz1", AppID: "tiny", ProjectID: f.project, Kind: apphost.DeployKindResize, Status: apphost.DeployStatusSucceeded,
+		Config: apphost.DeployConfig{Tier: "ENTERPRISE", Replicas: 1}}
+	done := timeNow()
+	resize.FinishedAt = &done
+	if err := f.deploys.RecordResize(resize); !isBudgetRefusal(err) {
+		t.Fatalf("a Free app moving to a 2 vCPU tier on 1.5 vCPU: %v", err)
+	}
+	resize.ID, resize.Config.Tier = "rz2", "STANDARD"
+	if err := f.deploys.RecordResize(resize); err != nil {
+		t.Fatalf("1 vCPU fits: %v", err)
+	}
+}
+
+func timeNow() time.Time { return time.Now().UTC() }
