@@ -522,6 +522,7 @@ func (matrixAnalytics) TrafficAnalytics(context.Context, int) (*adminconsole.Tra
 func TestForeignPlatformAdminGetsNothingFromOrgRoutes(t *testing.T) {
 	router, _, admins, _ := buildMatrixPlatform(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(deps *handlerDeps, platform *fakePlatform) {
 		deps.orgHandler = handler.NewOrgHandler(platform, nil)
+		configureOrgHandler(deps.orgHandler, nil, goodStandingGuard(nil), nil, nil)
 	})
 	mux, ok := router.(*chi.Mux)
 	if !ok {
