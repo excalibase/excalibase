@@ -213,3 +213,20 @@ func TestAppResizeOnAPlanChangeIsAdmittedLikeGrowth(t *testing.T) {
 }
 
 func timeNow() time.Time { return time.Now().UTC() }
+
+// With the budget on and credits off, the apps a Free org runs today fit the default Free plan.
+func TestEveryCurrentFreeAppShapeIsAdmittedUnderTheDefaultPlan(t *testing.T) {
+	f := newBudgetFixture(t, "freeshape", 1)
+	if _, err := sharedDB.Exec(`UPDATE orgs SET tier = 'FREE' WHERE id = 'org-freeshape'`); err != nil {
+		t.Fatal(err)
+	}
+	gate := planbudget.NewGate(func(context.Context) bool { return true }, config.Load().PlanBudget)
+	f.apps.SetPlanBudget(gate)
+	for i := 0; i < 5; i++ {
+		app := sampleApp(f.project, fmt.Sprintf("free%d", i), fmt.Sprintf("free%d", i))
+		app.Tier, app.Replicas = "FREE", 1
+		if err := f.apps.Create(app, 100); err != nil {
+			t.Fatalf("free app %d: %v", i, err)
+		}
+	}
+}

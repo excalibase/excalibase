@@ -134,6 +134,7 @@ var mustAdmit = map[string]bool{
 	"storage/postgres/pg_instances_limit.go:CreateWithinOrgLimit":         true,
 	"storage/postgres/pg_instances_limit.go:UpdateIfStatusWithinOrgLimit": true,
 	"storage/postgres/pg_instances_no_database.go:RecordDatabaseChoices":  true,
+	"storage/postgres/pg_instances_no_database.go:admitAddedDatabase":     true,
 	"storage/postgres/pg_budget.go:EnsureFunctionsRuntime":                true,
 	"storage/postgres/pg_budget.go:ReserveDatabaseSize":                   true,
 	"apphost/postgres_store.go:Create":                                    true,
@@ -143,7 +144,7 @@ var mustAdmit = map[string]bool{
 	"apphost/postgres_deploy_store.go:RecordResize":                       true,
 }
 
-var admissionCalls = map[string]bool{"Admit": true, "admitApp": true, "admitInsert": true, "admitStatusChange": true, "admitDiskChange": true, "admitDeploy": true, "admitResize": true, "updateAdmitted": true}
+var admissionCalls = map[string]bool{"Admit": true, "admitApp": true, "admitInsert": true, "admitStatusChange": true, "admitDiskChange": true, "admitDeploy": true, "admitResize": true, "updateAdmitted": true, "admitAddedDatabase": true}
 
 func TestEveryAdmittingWriterReallyCallsTheGate(t *testing.T) {
 	calls := map[string]bool{}
