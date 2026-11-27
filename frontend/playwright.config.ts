@@ -2,7 +2,9 @@ import { defineConfig, devices } from '@playwright/test';
 
 // STUDIO_E2E_PORT moves the local dev server off 5173 when that port is taken.
 // STUDIO_LIVE_URL points the run at a real Studio (e2e/live/*): no dev server.
-const port = Number(process.env.STUDIO_E2E_PORT ?? 5173);
+// STUDIO_FORCE_V2=1 serves Studio with studio_v2 on whatever each spec mocks for /api/config.
+const forceV2 = process.env.STUDIO_FORCE_V2 === '1';
+const port = Number(process.env.STUDIO_E2E_PORT ?? (forceV2 ? 5174 : 5173));
 const localUrl = `http://localhost:${port}`;
 const liveUrl = process.env.STUDIO_LIVE_URL;
 
@@ -32,7 +34,7 @@ export default defineConfig({
   webServer: liveUrl
     ? undefined
     : {
-        command: `npm run dev -- --port ${port} --strictPort`,
+        command: `${forceV2 ? 'VITE_FORCE_V2=1 ' : ''}npm run dev -- --port ${port} --strictPort`,
         url: localUrl,
         reuseExistingServer: !process.env.CI,
         timeout: 30000,

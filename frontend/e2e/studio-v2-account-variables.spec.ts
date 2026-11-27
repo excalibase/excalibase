@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { loginAs } from './helpers';
+import { loginAs, FORCED_V2 } from './helpers';
 
 // EXC-853: the Account page and the project Variables page of the console layout (studio_v2 on).
 
@@ -67,6 +67,7 @@ test.describe('Studio v2 account and variables', () => {
   });
 
   test('with the flag off neither page is served', async ({ page }) => {
+    test.skip(FORCED_V2, 'asserts the flag-off layout; the run forces studio_v2 on');
     await loginAs(page, USER);
     await mockConsole(page, false);
     await page.goto('/account');

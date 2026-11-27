@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { loginAs } from './helpers';
+import { loginAs, FORCED_V2 } from './helpers';
 
 // EXC-762 step 3: the project's Services tab with a side panel per service, behind studio_v2.
 
@@ -189,6 +189,7 @@ test.describe('Studio v2 services', () => {
   });
 
   test('flag off keeps the old overview', async ({ page }) => {
+    test.skip(FORCED_V2, 'asserts the flag-off layout; the run forces studio_v2 on');
     await mockWorld(page, FULL);
     await page.route('**/api/config', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ deploymentMode: 'cloud', appHosting: true, features: { studio_v2: false } }) }));

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loginAs, mockInstances } from './helpers';
+import { FORCED_V2, loginAs, mockInstances } from './helpers';
 
 function mockConfig(page: import('@playwright/test').Page, mode: 'selfhosted' | 'cloud') {
   return page.route('**/api/config', (route) =>
@@ -11,6 +11,11 @@ function mockConfig(page: import('@playwright/test').Page, mode: 'selfhosted' | 
   );
 }
 
+// v1 has the platform-nav rail (Dashboard, Provision); v2 has a Main navigation (Home, Projects).
+const platformNav = (page: import('@playwright/test').Page) =>
+  FORCED_V2 ? page.getByRole('navigation', { name: 'Main' }) : page.getByTestId('platform-nav');
+const HOME_LINK = FORCED_V2 ? 'Home' : 'Dashboard';
+
 test.describe('Self-hosted mode', () => {
   test.beforeEach(async ({ page }) => {
     await loginAs(page);
@@ -19,16 +24,16 @@ test.describe('Self-hosted mode', () => {
   });
 
   test('hides Organizations nav item', async ({ page }) => {
+    test.fixme(FORCED_V2, 'v2 gap (EXC-859): shellNav lists Organizations in a self-hosted install; v1 hides it');
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    const nav = page.getByTestId('platform-nav');
+    const nav = platformNav(page);
     await expect(nav).toBeVisible();
-    // Organizations should NOT be visible
-    await expect(nav.getByText('Organizations')).not.toBeVisible();
-    // Dashboard and Projects should still be visible
-    await expect(nav.getByText('Dashboard')).toBeVisible();
+    // The home and projects links show once the nav is up; only then is a missing Organizations link meaningful.
+    await expect(nav.getByText(HOME_LINK)).toBeVisible();
     await expect(nav.getByText('Projects')).toBeVisible();
-    await expect(nav.getByText('Provision')).toBeVisible();
+    if (!FORCED_V2) await expect(nav.getByText('Provision')).toBeVisible();
+    await expect(nav.getByText('Organizations')).not.toBeVisible();
   });
 
   test('navigating to /orgs redirects or shows nothing', async ({ page }) => {
@@ -50,11 +55,11 @@ test.describe('Cloud mode', () => {
   test('shows Organizations nav item', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    const nav = page.getByTestId('platform-nav');
+    const nav = platformNav(page);
     await expect(nav).toBeVisible();
     await expect(nav.getByText('Organizations')).toBeVisible();
-    await expect(nav.getByText('Dashboard')).toBeVisible();
+    await expect(nav.getByText(HOME_LINK)).toBeVisible();
     await expect(nav.getByText('Projects')).toBeVisible();
-    await expect(nav.getByText('Provision')).toBeVisible();
+    if (!FORCED_V2) await expect(nav.getByText('Provision')).toBeVisible();
   });
 });
