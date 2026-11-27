@@ -178,4 +178,21 @@ describe('Home', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Resume mcp-test' }));
     expect(await screen.findByRole('status')).toHaveTextContent(/resuming mcp-test/i);
   });
+
+  test('a limited account is asked to verify on Home, a verified one is not', async () => {
+    const status = (state: string) => ({ state, emailVerified: true, githubConfigured: true, policy: { minAgeDays: 90, minPublicEvents: 5, activityWindowDays: 90, minRepos: 3, repoMinAgeDays: 30 } });
+    for (const [state, shown] of [['limited', true], ['full', false]] as const) {
+      mountWith({ projects: [project('p1')], features: { limitedtrial: true } }, <HomePage />);
+      const base = vi.mocked(api.get).getMockImplementation()!;
+      vi.mocked(api.get).mockImplementation(((url: string) => (url === '/trust/' ? Promise.resolve({ data: status(state) }) : base(url))) as never);
+      await screen.findByRole('region', { name: 'Health' });
+      if (shown) {
+        expect(await screen.findByRole('region', { name: 'Verify your account' })).toBeInTheDocument();
+      } else {
+        await waitFor(() => expect(api.get).toHaveBeenCalledWith('/trust/'));
+        expect(screen.queryByRole('region', { name: 'Verify your account' })).not.toBeInTheDocument();
+      }
+      document.body.innerHTML = '';
+    }
+  });
 });

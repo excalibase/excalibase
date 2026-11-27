@@ -8,6 +8,8 @@ import {
   PartialSaveError,
   type AppSubmission,
 } from '../api/apps';
+import { isTrustRequired } from '../api/trust';
+import { VerifyAccountCard } from '../components/trust/VerifyAccountCard';
 import { useInstance } from '../hooks/useProvisioning';
 import { isMySQLProject } from '../utils/engine';
 import { AppForm } from '../components/containers/AppForm';
@@ -44,6 +46,7 @@ function CreateForm({ projectId, tier, databaseName, mysql }: FormProps) {
         title="New container"
         subtitle="An image, the port it listens on, and any variables it needs."
       />
+      {isTrustRequired(create.error) && <div className="mb-4"><VerifyAccountCard /></div>}
       <AppForm
         registryCredentialsHref={`/project/${projectId}/containers#registry-credentials`}
         tier={tier}

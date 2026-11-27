@@ -26,10 +26,18 @@ const existing: App = {
   updatedAt: '',
 };
 
+const limitedStatus = {
+  state: 'limited',
+  emailVerified: true,
+  githubConfigured: true,
+  policy: { minAgeDays: 90, minPublicEvents: 5, activityWindowDays: 90, minRepos: 3, repoMinAgeDays: 30 },
+};
+
 function renderAt(path: string) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config')
-      return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting: true } } as never);
+      return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting: true, features: { limitedtrial: true } } } as never);
+    if (url === '/trust/') return Promise.resolve({ data: limitedStatus } as never);
     if (url === '/provision/proj-1') {
       return Promise.resolve({
         data: { projectId: 'proj-1', tier: 'STANDARD', databaseName: 'appdb' },
@@ -110,6 +118,27 @@ describe('ContainerFormPage', () => {
     await user.click(screen.getByTestId('app-submit'));
     expect(await screen.findByRole('alert')).toHaveTextContent('project already has an app');
     expect(screen.queryByTestId('detail')).not.toBeInTheDocument();
+  });
+
+  test('a refusal for an unverified account shows the verify card', async () => {
+    vi.mocked(api.post).mockRejectedValue({
+      response: { status: 403, data: { error: 'Running containers needs a verified account.', code: 'trust_required' } },
+    });
+    const user = renderAt('/project/proj-1/containers/new');
+    await user.type(await screen.findByTestId('app-image'), 'nginx:1.27');
+    expect(screen.queryByRole('region', { name: 'Verify your account' })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('app-submit'));
+    expect(await screen.findByRole('region', { name: 'Verify your account' })).toHaveTextContent('Verify with GitHub');
+    expect(screen.getByText('Running containers needs a verified account.')).toBeInTheDocument();
+  });
+
+  test('another refusal does not show the verify card', async () => {
+    vi.mocked(api.post).mockRejectedValue({ response: { status: 403, data: { error: 'no', code: 'something_else' } } });
+    const user = renderAt('/project/proj-1/containers/new');
+    await user.type(await screen.findByTestId('app-image'), 'nginx:1.27');
+    await user.click(screen.getByTestId('app-submit'));
+    expect(await screen.findByText('no')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Verify your account' })).not.toBeInTheDocument();
   });
 
   test('saves an edit against the version it was read at', async () => {

@@ -47,7 +47,7 @@ type Policy struct {
 
 // Message tells a limited account what verifies it and how.
 func (p Policy) Message() string {
-	return fmt.Sprintf("Running containers needs a verified account. Verify with your GitHub account in Studio, then try again. "+
+	return fmt.Sprintf("Running containers needs a verified account. Verify with GitHub from the Verify your account card on Home in Studio, then try again. "+
 		"The GitHub account must be at least %d days old and show activity: %d public events in the last %d days, "+
 		"or %d public repositories, one of them older than %d days. Databases are not affected.",
 		p.MinAgeDays, p.MinPublicEvents, p.ActivityWindowDays, p.MinRepos, p.RepoMinAgeDays)

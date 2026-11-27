@@ -43,8 +43,27 @@ func (s *Store) SaveUserTrust(ctx context.Context, record trust.Record, actor st
 	if err := lockUserTrust(ctx, tx, record.UserID); err != nil {
 		return err
 	}
+	if err := writeUserTrust(ctx, tx, record, actor); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// storedTrust is the account's decision inside a transaction, with empty fields when it has none.
+func storedTrust(ctx context.Context, tx *sql.Tx, userID string) (trust.State, trust.Method, error) {
+	var state, method sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT state, method FROM user_trust WHERE user_id = $1`, userID).Scan(&state, &method)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+	return trust.State(state.String), trust.Method(method.String), nil
+}
+
+// writeUserTrust upserts the decision and appends its audit entry inside a
+// transaction that already holds the account's lock.
+func writeUserTrust(ctx context.Context, tx *sql.Tx, record trust.Record, actor string) error {
 	var previous sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT state FROM user_trust WHERE user_id = $1`, record.UserID).Scan(&previous)
+	err := tx.QueryRowContext(ctx, `SELECT state FROM user_trust WHERE user_id = $1`, record.UserID).Scan(&previous)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("save trust: read previous: %w", err)
 	}
@@ -62,7 +81,7 @@ func (s *Store) SaveUserTrust(ctx context.Context, record trust.Record, actor st
 		record.UserID, previous, record.State, record.Method, record.Reason, actor); err != nil {
 		return fmt.Errorf("save trust: audit: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 // trustLockSpace namespaces the per-account advisory lock a decision is saved under.

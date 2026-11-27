@@ -16,6 +16,8 @@ import {
   type TemplateVar,
 } from '../api/appTemplates';
 import { apiErrorMessage } from '../api/apps';
+import { isTrustRequired } from '../api/trust';
+import { VerifyAccountCard } from '../components/trust/VerifyAccountCard';
 import {
   ContainersHeader,
   HostingGate,
@@ -265,6 +267,7 @@ function TemplateCard({ projectId, template }: { readonly projectId: string; rea
           ))}
         </ul>
       )}
+      {isTrustRequired(deploy.error) && <div className="mt-2"><VerifyAccountCard /></div>}
       {deploy.data && <Deployed projectId={projectId} result={deploy.data} />}
       <div className="mt-3 flex gap-2">
         <button
