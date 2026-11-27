@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Button } from '../Button';
 
 // An admin action on a customer's data or account is logged with a written
@@ -21,6 +21,8 @@ interface ReasonDialogProps {
 export function ReasonDialog({ title, confirmLabel, description, busy, error, danger, onConfirm, onCancel, children }: ReasonDialogProps) {
   const [reason, setReason] = useState('');
   const trimmed = reason.trim();
+  const hintId = useId();
+  const missing = MIN_REASON_LENGTH - trimmed.length;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
@@ -34,9 +36,11 @@ export function ReasonDialog({ title, confirmLabel, description, busy, error, da
             rows={3}
             value={reason}
             maxLength={500}
+            aria-describedby={missing > 0 ? hintId : undefined}
             onChange={(event) => setReason(event.target.value)}
           />
         </label>
+        {missing > 0 && <p id={hintId} className="text-xs text-amber-400">{`At least ${MIN_REASON_LENGTH} characters (${missing} more)`}</p>}
         <p className="text-xs text-text-tertiary">Written to the audit log with your name.</p>
         {error && (
           <p role="alert" className="text-sm text-red-400">
@@ -47,7 +51,7 @@ export function ReasonDialog({ title, confirmLabel, description, busy, error, da
           <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
             Cancel
           </Button>
-          <Button variant={danger ? 'danger' : 'primary'} size="sm" disabled={busy || trimmed.length < MIN_REASON_LENGTH} onClick={() => onConfirm(trimmed)}>
+          <Button variant={danger ? 'danger' : 'primary'} size="sm" disabled={busy || missing > 0} title={missing > 0 ? `Write a reason of at least ${MIN_REASON_LENGTH} characters` : undefined} onClick={() => onConfirm(trimmed)}>
             {confirmLabel}
           </Button>
         </div>
