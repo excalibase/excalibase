@@ -8,6 +8,7 @@ import type { OrgUsage } from '../usage/usageModel';
 import { projectsValue } from '../usage/UsageParts';
 import type { CreditOverview } from '../../api/credits';
 import { dollars, daysLeft } from '../usage/creditsFormat';
+import { cpuText, memoryText, type PlanBudget } from '../../api/planBudget';
 
 export function Widget({ title, children }: { readonly title: string; readonly children: ReactNode }) {
   return (
@@ -89,9 +90,11 @@ interface CreditsWidgetProps {
   // Present only while the credits feature is on and the balance was read.
   readonly credit?: CreditOverview;
   readonly creditFailed?: boolean;
+  // Present only while the plan budget is on and was read.
+  readonly budget?: PlanBudget;
 }
 
-export function CreditsWidget({ planName, projects, limitsKnown, credit, creditFailed }: CreditsWidgetProps) {
+export function CreditsWidget({ planName, projects, limitsKnown, credit, creditFailed, budget }: CreditsWidgetProps) {
   const notes = credit ? creditNotes(credit, new Date()) : undefined;
   return (
     <Widget title="Credits & usage">
@@ -101,6 +104,8 @@ export function CreditsWidget({ planName, projects, limitsKnown, credit, creditF
           {notes?.expires && <Row label="Credit lasts another" value={notes.expires} />}
           <Row label="Plan" value={planLabel(planName)} />
           <Row label="Projects" value={projectsValue(projects, limitsKnown)} />
+          {budget && <Row label="CPU" value={`${cpuText(budget.used.cpuMilli)} of ${cpuText(budget.budget.cpuMilli)}`} warn={budget.left.cpuMilli <= 0} />}
+          {budget && <Row label="Memory" value={`${memoryText(budget.used.memoryBytes)} of ${memoryText(budget.budget.memoryBytes)}`} warn={budget.left.memoryBytes <= 0} />}
         </div>
       ) : (
         <p className="text-text-secondary">Your plan and usage appear once you have an organization.</p>

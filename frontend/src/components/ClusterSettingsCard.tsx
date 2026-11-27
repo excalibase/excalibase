@@ -11,6 +11,7 @@ import {
 } from '../api/clusterSettings';
 import type { DatabaseInstance } from '../types';
 import { formatBytes } from '../utils/formatBytes';
+import { PlanBudgetLeft } from './PlanBudgetLeft';
 
 interface ClusterSettingsCardProps {
   readonly project: DatabaseInstance;
@@ -53,7 +54,7 @@ export function ClusterSettingsCard({ project }: ClusterSettingsCardProps) {
         <p className="text-xs text-color-error">{refusalMessage(settings.error)}</p>
       )}
       {active && settings.data && (
-        <ClusterSettingsBody projectId={project.projectId} settings={settings.data} />
+        <ClusterSettingsBody projectId={project.projectId} orgId={project.orgId} settings={settings.data} />
       )}
     </div>
   );
@@ -61,10 +62,11 @@ export function ClusterSettingsCard({ project }: ClusterSettingsCardProps) {
 
 interface BodyProps {
   readonly projectId: string;
+  readonly orgId?: string;
   readonly settings: ClusterSettings;
 }
 
-function ClusterSettingsBody({ projectId, settings }: BodyProps) {
+function ClusterSettingsBody({ projectId, orgId, settings }: BodyProps) {
   const resize = useResizeStorage(projectId);
   const tier = useChangeTier(projectId);
   const tune = useTuneParameters(projectId);
@@ -144,6 +146,7 @@ function ClusterSettingsBody({ projectId, settings }: BodyProps) {
         onSave={(parameters) => tune.mutate(parameters)}
       />
 
+      <PlanBudgetLeft orgId={orgId} />
       {failed && (
         <p className="text-color-error" data-testid="cluster-settings-error">
           {refusalMessage(failed.error)}

@@ -344,3 +344,45 @@ func (s *Store) BudgetActive(ctx context.Context) bool { return s.budget.Active(
 func (s *Store) PlanBudgetReport(ctx context.Context, orgID string) (planbudget.Report, error) {
 	return s.budget.Report(ctx, s.db, orgID)
 }
+
+// OverBudgetOrg is an org whose recorded services already hold more than its plan allows.
+type OverBudgetOrg struct {
+	OrgID  string
+	Used   planbudget.Size
+	Budget planbudget.Size
+}
+
+// OrgsOverBudget lists the orgs whose recorded usage passes their plan, so the
+// ones the backfill grandfathered above the ceiling are found at boot. It reads
+// the platform's records only, never a cluster. An org it cannot read is
+// skipped here and refused on its next growth.
+func (s *Store) OrgsOverBudget(ctx context.Context) ([]OverBudgetOrg, error) {
+	if !s.budget.Active(ctx) {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT org_id FROM database_instances WHERE org_id IS NOT NULL AND org_id <> ''`)
+	if err != nil {
+		return nil, fmt.Errorf("list orgs with databases: %w", err)
+	}
+	var orgs []string
+	for rows.Next() {
+		var orgID string
+		if err := rows.Scan(&orgID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		orgs = append(orgs, orgID)
+	}
+	rows.Close()
+	var over []OverBudgetOrg
+	for _, orgID := range orgs {
+		report, err := s.budget.Report(ctx, s.db, orgID)
+		if err != nil || report.Budget.IsZero() {
+			continue
+		}
+		if report.Left.CPUMilli < 0 || report.Left.MemoryBytes < 0 || report.Left.DiskBytes < 0 || report.Left.Services < 0 {
+			over = append(over, OverBudgetOrg{OrgID: orgID, Used: report.Used, Budget: report.Budget})
+		}
+	}
+	return over, rows.Err()
+}

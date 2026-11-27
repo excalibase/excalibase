@@ -4,6 +4,7 @@ import { planLabel, useCurrentOrg } from '../hooks/useMemberOrgs';
 import { useOrgUsage } from './usage/useOrgUsage';
 import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { CreditsSection } from './usage/CreditsSection';
+import { PlanBudgetSection } from './usage/PlanBudgetSection';
 import { appsValue, gib, Line, projectsValue, Section } from './usage/UsageParts';
 
 const CELL = 'px-3 py-2 text-left';
@@ -21,6 +22,7 @@ export function UsagePage() {
       {isLoading && <p className="text-sm text-text-secondary">Loading usage…</p>}
       {!failed && !isLoading && !tierName && <p className="text-sm text-text-secondary">You are not in an organization yet. <Link to="/instances" className="text-purple-400 hover:underline">See your projects</Link></p>}
       {credits && org && <CreditsSection orgId={org.id} />}
+      <PlanBudgetSection orgId={org?.id} />
       {tierName && (
         <Section title="Plan">
           <Line label={orgName ?? 'Organization'} value={planLabel(tierName)} />
