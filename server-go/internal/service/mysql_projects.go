@@ -301,16 +301,23 @@ func (s *ProvisioningService) applyMySQLTier(ctx context.Context, inst *domain.D
 	if err != nil {
 		return err
 	}
+	putBack, err := s.reserveResize(ctx, inst, tierPlan, planDiskOf(inst, tierPlan))
+	if err != nil {
+		return err
+	}
 	if err := s.reserveMySQLPlan(ctx, inst, mysql, orgTier, plan); err != nil {
+		putBack()
 		return err
 	}
 	previous, previousSchedule := inst.Tier, inst.BackupSchedule
 	if err := s.moveMySQLBackupPlan(ctx, inst, mysql, orgTier, plan); err != nil {
+		putBack()
 		return err
 	}
 	inst.Tier = orgTier
 	if err := s.store.UpdateIfStatus(inst, inst.Status); err != nil {
 		inst.Tier, inst.BackupSchedule = previous, previousSchedule
+		putBack()
 		return fmt.Errorf("record the %s plan: %w", orgTier, err)
 	}
 	namespace, projectID, instances := inst.Namespace, inst.ProjectID, plan.Instances
@@ -406,4 +413,13 @@ func (s *ProvisioningService) mysqlClusterSettings(ctx context.Context, inst *do
 		Instances: instances, CPU: cpu, Memory: memory,
 		Parameters: map[string]string{}, TunableParameters: []string{},
 	}, nil
+}
+
+// planDiskOf is the disk a MySQL plan change keeps reserved: the one recorded
+// for the project, or the plan's start when none is.
+func planDiskOf(inst *domain.DatabaseInstance, plan config.TierConfig) string {
+	if inst.StorageSize != "" {
+		return inst.StorageSize
+	}
+	return plan.StorageSize
 }

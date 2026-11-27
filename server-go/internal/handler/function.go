@@ -62,6 +62,9 @@ type FunctionHandler struct {
 	orgStore      storage.OrgStore
 	publicBaseURL string
 
+	// runtimeBudget admits a project's functions runtime against its org's plan (EXC-901); nil admits all.
+	runtimeBudget storage.FunctionsRuntimeStore
+
 	// Per-project runtime fan-out
 	k8sClient     k8s.KubeClient
 	runtimeImage  string
@@ -349,6 +352,13 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	namespace := inst.Namespace
 	if namespace == "" {
 		return nil, fmt.Errorf("no namespace for project %s", projectID)
+	}
+	// The runtime is a service of its own against the plan's budget (EXC-901):
+	// admitted the first time a project needs one, before the pod is created.
+	if h.runtimeBudget != nil {
+		if err := h.runtimeBudget.EnsureFunctionsRuntime(ctx, projectID); err != nil {
+			return nil, err
+		}
 	}
 	// EnsureDenoRuntime may have just created the runtime or rolled its pod
 	// (EXC-569). Until the rollout finishes, the pod answering can be the old
@@ -1868,4 +1878,10 @@ func (h *FunctionHandler) sharedFilesFor(projectID string) []edgefn.File {
 		return nil
 	}
 	return files
+}
+
+// SetRuntimeBudget wires the store that admits a project's functions runtime
+// against the plan budget the first time it is needed.
+func (h *FunctionHandler) SetRuntimeBudget(store storage.FunctionsRuntimeStore) {
+	h.runtimeBudget = store
 }

@@ -1,6 +1,7 @@
 package apphost
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/planbudget"
 	"github.com/lib/pq"
 )
 
@@ -31,10 +33,15 @@ const uniqueViolation = "23505"
 // limit count.
 type PostgresAppStore struct {
 	db *sql.DB
+	// budget admits the steps that grow an org's services (EXC-901); nil checks nothing.
+	budget *planbudget.Gate
 }
 
+// SetPlanBudget wires the gate app creates, edits and status changes pass.
+func (s *PostgresAppStore) SetPlanBudget(gate *planbudget.Gate) { s.budget = gate }
+
 func NewPostgresAppStore(db *sql.DB) *PostgresAppStore {
-	return &PostgresAppStore{db: db}
+	return &PostgresAppStore{db: db, budget: defaultBudget}
 }
 
 // Create inserts the app only while the project has a free app slot.
@@ -85,6 +92,11 @@ func (s *PostgresAppStore) Create(app *App, maxApps int) error {
 	blob, err := json.Marshal(app)
 	if err != nil {
 		return fmt.Errorf("marshal app: %w", err)
+	}
+	if err := admitApp(context.Background(), s.budget, tx, app.ProjectID, func(context.Context) (planbudget.Size, error) {
+		return planbudget.ReservedApp(blob)
+	}); err != nil {
+		return err
 	}
 	const q = `
 INSERT INTO apps (project_id, id, name, status, version, doc, created_at, updated_at)
@@ -177,10 +189,10 @@ func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 	var version int
 	var createdAt time.Time
 	var status string
-	var failure, suspension []byte
+	var failure, suspension, held []byte
 	err = tx.QueryRow(
-		`SELECT version, created_at, status, doc->'lifecycleFailure', doc->'suspension' FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
-		app.ProjectID, app.ID).Scan(&version, &createdAt, &status, &failure, &suspension)
+		`SELECT version, created_at, status, doc->'lifecycleFailure', doc->'suspension', doc FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
+		app.ProjectID, app.ID).Scan(&version, &createdAt, &status, &failure, &suspension, &held)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrAppNotFound
 	}
@@ -218,6 +230,11 @@ func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 		return fmt.Errorf("marshal app: %w", err)
 	}
 
+	if err := admitApp(context.Background(), s.budget, tx, app.ProjectID, func(context.Context) (planbudget.Size, error) {
+		return growth(held, blob, status)
+	}); err != nil {
+		return err
+	}
 	const q = `
 UPDATE apps SET name = $3, status = $4, version = $5, doc = $6, updated_at = $7
 WHERE project_id = $1 AND id = $2`
@@ -261,6 +278,11 @@ func (s *PostgresAppStore) Transition(projectID, id string, from []string, to st
 	}
 	if !slices.Contains(from, status) {
 		return nil, fmt.Errorf("%w: it is %s", ErrAppStatusConflict, status)
+	}
+	if err := admitApp(context.Background(), s.budget, tx, projectID, func(context.Context) (planbudget.Size, error) {
+		return growth(blob, blob, to)
+	}); err != nil {
+		return nil, err
 	}
 	if _, err := tx.Exec(
 		`UPDATE apps SET status = $3, doc = jsonb_set(doc, '{status}', to_jsonb($3::text))

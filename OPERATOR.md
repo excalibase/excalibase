@@ -1555,6 +1555,20 @@ Sign-up: Studio's sign-up form (email and OAuth) shows a credit terms checkbox w
 - **Admin:** `POST /api/admin/console/orgs/{orgId}/credits` with `{amountMicros, reason, expiresAt?}` and an `Idempotency-Key` header. Session only, `manage_orgs`, reason 8 to 500 characters, at most the cap per action; a negative amount takes credit back and is refused below zero. Its audit row is written in the same transaction as the ledger entry.
 - **Reads:** `GET /api/orgs/{orgId}/credits/` (balance, lots, recent entries), `.../credits/entries`, `.../credits/statement?month=YYYY-MM[&format=csv]`; org members only. Billing runs in UTC; Studio shows local time.
 
+## Plan budget (EXC-901)
+
+`FEATURE_PLANBUDGET` (off by default, cloud only) makes every plan a CPU, memory and disk budget plus a service count, and admits each step that grows an org's services against it. A refused step answers 409 `plan_budget_exceeded` with `need`, `left` and `budget` in the org's own numbers (never the platform's capacity). Off, nothing is read or checked and today's behaviour is unchanged. Self-hosted installs have no budget.
+
+What counts is the size picked for each service times its copies or replicas: a database's CPU, memory and disk per copy; an app's tier limits per replica plus its disk; a project's functions runtime once its first function is deployed. A paused database or stopped app releases CPU and memory and keeps its disk. ENTERPRISE has no budget.
+
+Plan numbers are settings: `PLANBUDGET_FREE_*` and `PLANBUDGET_STANDARD_*` for `CPU_MILLI`, `MEMORY_MIB`, `DISK_GIB`, `MAX_PROJECTS`, `MAX_SERVICES`. Defaults are Free 2 vCPU, 4 GiB, 20 GiB, one project (the owner's), six services; Standard 4 vCPU, 8 GiB, 30 GiB, 20 projects, 50 services. A bad value stops the boot. While the flag is on, the project count here replaces the plan row's.
+
+Admission runs inside the writer's own transaction under the existing per-org lock: lock, sum, the writer's own state change, commit. The paths are project and database create, add-database, restore (new project and cancelling a deletion), database copy, plan resize, `/storage` disk growth, resume and its retry, app create, edit, scale, deploy and resume, a project's first function, and templates and MCP tools, which call the same services. Shrinking, deleting, pausing and resizing down always pass, even for an org already over its budget.
+
+Every boot records the size each database already holds (from the plan it was created under) and marks projects that already run functions. That backfill writes only the platform's own rows: it never reads, resizes or restarts a cluster, container or workload, and is safe with the flag off. Turn the flag on only after one boot has run it.
+
+`FEATURE_CREDITS` with `FEATURE_PLANBUDGET` off is allowed (the ledger without a ceiling). With the budget on and credits off the ceiling is the plan's budget, which every current Free shape fits.
+
 ## Limited trial until verified (EXC-899, in progress)
 
 Off until `FEATURE_LIMITEDTRIAL=true` (Helm `env.FEATURE_LIMITEDTRIAL`, or `.env` on a single host; same on both). With it off every account behaves as it does today and nothing is read.

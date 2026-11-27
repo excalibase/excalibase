@@ -163,6 +163,7 @@ func runServer(cfg config.AppConfig) {
 	if err := creditsBootCheck(cfg); err != nil {
 		log.Fatal(err)
 	}
+	wirePlanBudget(cfg, sqlStore)
 
 	// Use platform store as InstanceStore (same interface)
 	var store storage.InstanceStore = sqlStore
@@ -1364,6 +1365,10 @@ func buildFunctionHandler(
 	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
 	fnHandler.SetOrgGuard(newOrgGuard(store, sqlStore))
 	fnHandler.SetContainerGate(newTrustGate(cfg, store, sqlStore))
+	if pg, ok := sqlStore.(*pgstore.Store); ok {
+		fnHandler.SetRuntimeBudget(pg)
+		recordFunctionRuntimes(cfg, pg, fnStore)
+	}
 	if cfg.ProvisionerMode != "docker" {
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
@@ -1512,6 +1517,9 @@ func buildProvisioningService(
 		provSvc.SetAppPurger(apphost.NewPostgresAppStore(pg.DB()))
 		// Kept backups of a deleted project are dated for purging.
 		provSvc.SetRetainedBackupStore(pg)
+		// A resize is admitted against the plan before the cluster moves (EXC-901).
+		provSvc.SetBudgetReserver(pg)
+		provSvc.SetProjectCap(planProjectCap(cfg))
 	}
 
 	if err := provSvc.SetBackupDefaults(backupDefaults(cfg)); err != nil {

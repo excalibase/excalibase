@@ -94,7 +94,14 @@ func writeJSONStatus(w http.ResponseWriter, code int, v interface{}) {
 // writeIfPoolBusy answers 503 with Retry-After when err says the platform
 // database could not give the operation a connection in time; the request was
 // not judged, so it is neither a conflict nor a server fault.
+//
+// It also answers a step the org's plan budget has no room for (EXC-901): every
+// handler that grows a service checks this first, so the 409 that names what
+// is left is one answer in one place.
 func writeIfPoolBusy(w http.ResponseWriter, err error) bool {
+	if writePlanBudgetRefusal(w, err) {
+		return true
+	}
 	if !errors.Is(err, storage.ErrPoolBusy) {
 		return false
 	}
@@ -180,6 +187,7 @@ const errBackupsUnavailable = "backups cannot be set up right now; try again lat
 func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 	var limitErr *service.OrgProjectLimitError
 	switch {
+	case writePlanBudgetRefusal(w, err):
 	case orgguard.IsRefusal(err):
 		writeOrgGuardError(w, err)
 	case errors.As(err, &limitErr):

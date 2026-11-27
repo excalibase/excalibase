@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/planbudget"
 )
 
 // ErrProjectExists is returned by InstanceStore.Create when the project id is
@@ -110,6 +111,20 @@ type ProjectParametersStore interface {
 // and only while the row still holds expected.
 type ProjectDiskStore interface {
 	UpdateStorageSizeIfStatus(projectID, size, expected string) error
+}
+
+// ProjectBudgetStore admits and records what a database reserves against its
+// org's plan budget (EXC-901), before the cluster is changed. Growth the org's
+// budget cannot hold is refused with a *planbudget.Refusal; a resize down passes.
+type ProjectBudgetStore interface {
+	// It returns what the database held before, so a change that fails afterwards can put it back.
+	ReserveDatabaseSize(ctx context.Context, projectID string, next planbudget.Reservation) (planbudget.Reservation, error)
+}
+
+// FunctionsRuntimeStore admits a project's functions runtime the first time one
+// is needed and records that it exists (EXC-901).
+type FunctionsRuntimeStore interface {
+	EnsureFunctionsRuntime(ctx context.Context, projectID string) error
 }
 
 // ProjectDatabaseStore records a database being added to a project that was

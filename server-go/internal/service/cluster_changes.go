@@ -259,17 +259,23 @@ func (s *ProvisioningService) applyOrgTier(ctx context.Context, projectID string
 		return err
 	}
 	retiered := k8s.WithTier(cluster, plan, disk)
+	putBack, err := s.reserveResize(ctx, inst, plan, disk)
+	if err != nil {
+		return err
+	}
 	if err := s.reserveClusterChange(ctx, cluster, retiered, "moving the database onto the "+string(orgTier)+" plan", func() error {
 		return s.growDisk(ctx, inst, disk, func() error {
 			return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, retiered)
 		})
 	}); err != nil {
+		putBack()
 		return fmt.Errorf("apply the %s plan to the cluster: %w", orgTier, err)
 	}
 	previousTier := inst.Tier
 	inst.Tier = orgTier
 	if err := s.store.UpdateIfStatus(inst, inst.Status); err != nil {
 		inst.Tier = previousTier
+		putBack()
 		return errors.Join(fmt.Errorf("record the %s plan: %w", orgTier, err), s.restoreSizing(ctx, inst, cluster))
 	}
 	return nil

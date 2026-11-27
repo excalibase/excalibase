@@ -178,6 +178,10 @@ const (
 	// balance in Studio and the statement (EXC-866). Off: no route, no
 	// sweeper, no grant, and Studio shows today's Usage page.
 	Credits Feature = "credits"
+	// PlanBudget is the CPU/RAM/disk budget of a plan: every step that grows an
+	// org's services is admitted against it under the org lock, and refused with
+	// a 409 naming what is left (EXC-901). Off: no budget is read or enforced.
+	PlanBudget Feature = "planbudget"
 	// StudioV2 is the cloud-console layout of Studio: new top bar, navigation
 	// and shared tables. Frontend only; the server just reports it (EXC-762).
 	StudioV2 Feature = "studio_v2"
@@ -185,7 +189,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails, SelfHeal, NetMeter, LimitedTrial, BehaviourReview, AdminAnalytics, Credits}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails, SelfHeal, NetMeter, LimitedTrial, BehaviourReview, AdminAnalytics, Credits, PlanBudget}
 }
 
 type Flags interface {
