@@ -36,6 +36,7 @@ func TestContainerWriteClassification(t *testing.T) {
 		// An escaped slash stays inside its segment, as the router reads it.
 		{http.MethodPost, base + "/apps/a1%2Fpause", true},
 		{http.MethodPost, base + "/apps/a1%2Fx/pause", false},
+		{http.MethodPost, base + "/apps/x%2Fdomains/deploy", true},
 		{http.MethodPut, base + "/functions/egress", false},
 		{http.MethodPost, base + "/functions/secrets", false},
 		{http.MethodPut, base + "/sites/s1/git", true},
@@ -116,5 +117,16 @@ func TestRequireVerifiedForContainersReadsTheEscapedPath(t *testing.T) {
 	limited.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("an escaped-slash deploy path: %d, want 403", w.Code)
+	}
+}
+
+// Decoded, this path reads as the allowed /apps/x/domains/deploy; only the
+// escaped form shows it is a deploy of an app named "x/domains".
+func TestRequireVerifiedForContainersRefusesAPathThatOnlyLooksAllowedWhenDecoded(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/p1/apps/x%2Fdomains/deploy", nil)
+	w := httptest.NewRecorder()
+	gateRouter(trust.Limited).ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("a path that only looks allowed once decoded: %d, want 403", w.Code)
 	}
 }

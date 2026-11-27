@@ -34,9 +34,8 @@ func parseGoFiles(t *testing.T, root string, keep func(path string) bool) []*ast
 	return files
 }
 
-func TestEveryContainerGateConsumerIsWiredByTheServer(t *testing.T) {
-	var setters, fields int
-	for _, file := range parseGoFiles(t, filepath.Join("..", "..", "internal"), func(string) bool { return true }) {
+func countDeclared(files []*ast.File) (setters, fields int) {
+	for _, file := range files {
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.FuncDecl:
@@ -44,23 +43,32 @@ func TestEveryContainerGateConsumerIsWiredByTheServer(t *testing.T) {
 					setters++
 				}
 			case *ast.StructType:
-				for _, field := range n.Fields.List {
-					for _, name := range field.Names {
-						if name.Name == "ContainerGate" {
-							fields++
-						}
-					}
-				}
+				fields += countFieldsNamed(n, "ContainerGate")
 			}
 			return true
 		})
 	}
-	var calls, keyed int
-	for _, file := range parseGoFiles(t, ".", func(string) bool { return true }) {
+	return setters, fields
+}
+
+func countFieldsNamed(st *ast.StructType, want string) int {
+	count := 0
+	for _, field := range st.Fields.List {
+		for _, name := range field.Names {
+			if name.Name == want {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func countWired(files []*ast.File) (calls, keyed int) {
+	for _, file := range files {
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.CallExpr:
-				if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "SetContainerGate" {
+				if isSelectorNamed(n.Fun, "SetContainerGate") {
 					calls++
 				}
 			case *ast.KeyValueExpr:
@@ -71,6 +79,18 @@ func TestEveryContainerGateConsumerIsWiredByTheServer(t *testing.T) {
 			return true
 		})
 	}
+	return calls, keyed
+}
+
+func isSelectorNamed(expr ast.Expr, name string) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == name
+}
+
+func TestEveryContainerGateConsumerIsWiredByTheServer(t *testing.T) {
+	all := func(string) bool { return true }
+	setters, fields := countDeclared(parseGoFiles(t, filepath.Join("..", "..", "internal"), all))
+	calls, keyed := countWired(parseGoFiles(t, ".", all))
 	if setters == 0 || fields == 0 {
 		t.Fatalf("found no consumers (setters=%d fields=%d): the walk is broken", setters, fields)
 	}

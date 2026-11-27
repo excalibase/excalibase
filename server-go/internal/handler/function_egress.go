@@ -29,6 +29,7 @@ type egressResponse struct {
 	AllowedHosts   []string `json:"allowedHosts"`
 	DefaultHosts   []string `json:"defaultHosts"`
 	EffectiveHosts []string `json:"effectiveHosts"`
+	Warning        string   `json:"warning,omitempty"`
 }
 
 // SetEgressStore wires the per-project outbound allowlist store (EXC-348).
@@ -167,11 +168,14 @@ func (h *FunctionHandler) PutEgress(w http.ResponseWriter, r *http.Request) {
 		// replay. Surface the rollout failure without failing the write.
 		log.Printf("WARN: render egress for %s: %v", projectID, err)
 	}
-	if err := h.redeployAll(r, projectID); err != nil {
+	warning, err := h.redeployAll(r, projectID)
+	if err != nil {
 		writeRedeployFailure(w, projectID, err)
 		return
 	}
-	writeJSON(w, h.egressResponseFor(hosts))
+	resp := h.egressResponseFor(hosts)
+	resp.Warning = warning
+	writeJSON(w, resp)
 }
 
 func (h *FunctionHandler) egressResponseFor(projectHosts []string) egressResponse {

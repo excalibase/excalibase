@@ -193,6 +193,25 @@ func TestGrandfatherUsersBeforeTheCutoffOnly(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	cutoff := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	seedGrandfatherUsers(t, store, cutoff)
+
+	granted, err := store.GrandfatherUsersBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGrandfatherOutcome(t, store)
+	if granted < 1 {
+		t.Errorf("granted %d, want at least the one account", granted)
+	}
+	again, err := store.GrandfatherUsersBefore(ctx, cutoff)
+	if err != nil || again != 0 {
+		t.Errorf("a second run granted %d %v, want 0", again, err)
+	}
+}
+
+func seedGrandfatherUsers(t *testing.T, store *Store, cutoff time.Time) {
+	t.Helper()
+	ctx := context.Background()
 	for id, created := range map[string]time.Time{
 		"gf-old":      cutoff.Add(-24 * time.Hour),
 		"gf-boundary": cutoff,
@@ -207,11 +226,11 @@ func TestGrandfatherUsersBeforeTheCutoffOnly(t *testing.T) {
 	if err := store.SaveUserTrust(ctx, trustRecord("gf-decided", trust.Limited, trust.MethodAdmin, trust.ReasonAdminOverride), "admin-1"); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	granted, err := store.GrandfatherUsersBefore(ctx, cutoff)
-	if err != nil {
-		t.Fatal(err)
-	}
+func assertGrandfatherOutcome(t *testing.T, store *Store) {
+	t.Helper()
+	ctx := context.Background()
 	old, _ := store.FindUserTrust(ctx, "gf-old")
 	if old == nil || old.State != trust.Full || old.Method != trust.MethodGrandfathered || old.Reason != trust.ReasonGrandfathered {
 		t.Errorf("an account before the cutoff: %+v", old)
@@ -226,12 +245,5 @@ func TestGrandfatherUsersBeforeTheCutoffOnly(t *testing.T) {
 	}
 	if audit := auditRows(t, store, "gf-old"); len(audit) != 1 || audit[0] != [3]string{"", "full", "backfill"} {
 		t.Errorf("audit trail %v", audit)
-	}
-	if granted < 1 {
-		t.Errorf("granted %d, want at least the one account", granted)
-	}
-	again, err := store.GrandfatherUsersBefore(ctx, cutoff)
-	if err != nil || again != 0 {
-		t.Errorf("a second run granted %d %v, want 0", again, err)
 	}
 }

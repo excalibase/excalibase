@@ -109,14 +109,20 @@ func TestRedeployAll_NotRunForALimitedOwner(t *testing.T) {
 		Files: []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('x')"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.redeployAll(httptest.NewRequest("POST", "/", nil), "proj_p1"); err != nil {
+	warning, err := h.redeployAll(httptest.NewRequest("POST", "/", nil), "proj_p1")
+	if err != nil {
 		t.Errorf("a skipped redeploy reported a failure: %v", err)
+	}
+	if warning == "" {
+		t.Error("a withheld redeploy gave no warning")
 	}
 	if runtimeCalls.Load() != 0 {
 		t.Errorf("redeployAll called the runtime %d times, want none", runtimeCalls.Load())
 	}
 	h.SetContainerGate(trustGateOf(trust.Full))
-	_ = h.redeployAll(httptest.NewRequest("POST", "/", nil), "proj_p1")
+	if warning, _ := h.redeployAll(httptest.NewRequest("POST", "/", nil), "proj_p1"); warning != "" {
+		t.Errorf("a verified owner got a warning: %q", warning)
+	}
 	if runtimeCalls.Load() == 0 {
 		t.Error("a verified owner's functions were not redeployed")
 	}
@@ -153,5 +159,39 @@ func TestCreateFunction_RefusedForALimitedOwner(t *testing.T) {
 	}
 	if runtimeCalls.Load() != 0 {
 		t.Errorf("the runtime was called %d times", runtimeCalls.Load())
+	}
+}
+
+// A save that the runtime did not receive says so instead of answering plain success.
+func TestSecretAndEgressSaves_TellALimitedOwnerTheyAreNotApplied(t *testing.T) {
+	var failDeploys atomic.Bool
+	h, _, router := secretHandler(t, &failDeploys)
+	h.SetEgressStore(&memEgressStore{hosts: map[string][]string{}})
+	chiRouter := router.(*chi.Mux)
+	chiRouter.Put("/api/projects/{projectId}/functions/egress", h.PutEgress)
+	h.SetContainerGate(trustGateOf(trust.Limited))
+
+	set := postSecret(router)
+	del := httptest.NewRecorder()
+	router.ServeHTTP(del, httptest.NewRequest("DELETE", secretsPath+"/API_KEY", nil))
+	egress := httptest.NewRecorder()
+	router.ServeHTTP(egress, httptest.NewRequest("PUT", "/api/projects/proj_p1/functions/egress", strings.NewReader(`{"allowedHosts":["api.example.com"]}`)))
+
+	for name, w := range map[string]*httptest.ResponseRecorder{"set": set, "delete": del, "egress": egress} {
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: status %d, want 200: %s", name, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "not applied to running functions until the account is verified") {
+			t.Errorf("%s: no warning in %s", name, w.Body.String())
+		}
+	}
+}
+
+func TestSecretSave_AVerifiedOwnerGetsNoWarning(t *testing.T) {
+	var failDeploys atomic.Bool
+	h, _, router := secretHandler(t, &failDeploys)
+	h.SetContainerGate(trustGateOf(trust.Full))
+	if w := postSecret(router); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "warning") {
+		t.Fatalf("verified owner: %d %s", w.Code, w.Body.String())
 	}
 }
