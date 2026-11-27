@@ -52,7 +52,7 @@ func TestVerificationPassMakesTheAccountFullAndClaimsTheGitHubAccount(t *testing
 	if got == nil || got.State != trust.Full || got.Method != trust.MethodGitHub || got.Reason != trust.ReasonOK || got.CheckVersion != trust.RuleVersion {
 		t.Fatalf("decision %+v", got)
 	}
-	if user, released := claimRow(t, store, "github:4242"); user == nil || *user != "v1" || released != nil {
+	if user, released := claimRow(t, store, trust.ClaimKey("4242")); user == nil || *user != "v1" || released != nil {
 		t.Errorf("claim %v %v", user, released)
 	}
 	latest, err := verifications(store).Latest(ctx, "v1")
@@ -78,7 +78,7 @@ func TestVerificationFailureKeepsTheAccountLimitedAndClaimsNothing(t *testing.T)
 		t.Fatalf("decision %+v", got)
 	}
 	var claims int
-	_ = store.db.QueryRow(`SELECT count(*) FROM trust_claims WHERE claim_key = 'github:5'`).Scan(&claims)
+	_ = store.db.QueryRow(`SELECT count(*) FROM trust_claims WHERE claim_key = $1`, trust.ClaimKey("5")).Scan(&claims)
 	if claims != 0 {
 		t.Errorf("a failed attempt claimed the GitHub account")
 	}
@@ -141,13 +141,13 @@ func TestAReleasedClaimIsClosedForTheCooldown(t *testing.T) {
 	if _, err := store.db.Exec(`DELETE FROM users WHERE id = 'gone'`); err != nil {
 		t.Fatal(err)
 	}
-	if user, released := claimRow(t, store, "github:999"); user != nil || released == nil {
+	if user, released := claimRow(t, store, trust.ClaimKey("999")); user != nil || released == nil {
 		t.Fatalf("after the delete: %v %v", user, released)
 	}
 	if err := verifications(store).Record(ctx, passing("later", "999")); !errors.Is(err, trust.ErrGitHubClaimed) {
 		t.Fatalf("inside the cooldown: %v", err)
 	}
-	if _, err := store.db.Exec(`UPDATE trust_claims SET released_at = now() - interval '31 days' WHERE claim_key = 'github:999'`); err != nil {
+	if _, err := store.db.Exec(`UPDATE trust_claims SET released_at = now() - interval '31 days' WHERE claim_key = $1`, trust.ClaimKey("999")); err != nil {
 		t.Fatal(err)
 	}
 	if err := verifications(store).Record(ctx, passing("later", "999")); err != nil {
@@ -223,7 +223,7 @@ func TestRecordRefusesAnAdminHoldAndLeavesItAlone(t *testing.T) {
 		}
 	}
 	var claims int
-	_ = store.db.QueryRow(`SELECT count(*) FROM trust_claims WHERE claim_key = 'github:2020'`).Scan(&claims)
+	_ = store.db.QueryRow(`SELECT count(*) FROM trust_claims WHERE claim_key = $1`, trust.ClaimKey("2020")).Scan(&claims)
 	if claims != 0 {
 		t.Error("a held account claimed a GitHub account")
 	}

@@ -29,7 +29,7 @@ function Result({ status, returned }: { readonly status: TrustStatus; readonly r
   const note = returned ? RETURNED[returned] : undefined;
   return (
     <>
-      {note && <p role="status" className="text-text-secondary">{note}</p>}
+      {note && <output className="block text-text-secondary">{note}</output>}
       {attempt && !attempt.passed && attempt.missing.length > 0 && (
         <div role="alert" className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-300">
           <p className="font-medium">Not verified yet</p>
