@@ -2,12 +2,19 @@ const MICROS_PER_DOLLAR = 1_000_000;
 const DAY_MS = 86_400_000;
 const AMOUNT = /^(\d{1,7})(?:\.(\d{1,6}))?$/;
 
+// The text without its trailing zeros, in one pass, whatever its length.
+export function trimTrailingZeros(text: string): string {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === '0') end -= 1;
+  return text.slice(0, end);
+}
+
 // Dollars with at least two decimals and no trailing zeros beyond them, from whole micros.
 export function dollars(micros: number): string {
   const sign = micros < 0 ? '-' : '';
   const abs = Math.abs(micros);
   const whole = Math.floor(abs / MICROS_PER_DOLLAR);
-  const fraction = String(abs % MICROS_PER_DOLLAR).padStart(6, '0').replace(/0+$/, '').padEnd(2, '0');
+  const fraction = trimTrailingZeros(String(abs % MICROS_PER_DOLLAR).padStart(6, '0')).padEnd(2, '0');
   return `${sign}$${whole.toLocaleString('en-US')}.${fraction}`;
 }
 

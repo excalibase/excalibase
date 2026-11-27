@@ -331,20 +331,12 @@ func findCreditEntryByKey(ctx context.Context, tx *sql.Tx, key string) (credits.
 	return entry, err == nil, err
 }
 
-// creditWatermarkBound is the watermark an org with no meter row is read at: the clock, or, once a meter
-// runs, nothing, so the org keeps its lots until the meter has started on it.
-func creditWatermarkBound(requireWatermark bool, clock string) string {
-	if requireWatermark {
-		return "w.watermark"
-	}
-	return "COALESCE(w.watermark, " + clock + ")"
-}
-
 func (s *Store) ExpireCreditLots(ctx context.Context, now time.Time, requireWatermark bool) (int, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT l.id, l.org_id FROM credit_lots l LEFT JOIN credit_meter_watermarks w ON w.org_id = l.org_id
-		 WHERE l.remaining_micros > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= $1 AND l.expires_at <= `+creditWatermarkBound(requireWatermark, "$1")+`
-		 ORDER BY l.expires_at, l.id LIMIT $2`, now.UTC(), creditExpiryBatch)
+		 WHERE l.remaining_micros > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= $1
+		   AND l.expires_at <= CASE WHEN $3::boolean THEN w.watermark ELSE COALESCE(w.watermark, $1) END
+		 ORDER BY l.expires_at, l.id LIMIT $2`, now.UTC(), creditExpiryBatch, requireWatermark)
 	if err != nil {
 		return 0, err
 	}
@@ -386,8 +378,9 @@ func (s *Store) expireCreditLot(ctx context.Context, lotID int64, orgID string, 
 		var remaining int64
 		err := tx.QueryRowContext(ctx,
 			`SELECT l.remaining_micros FROM credit_lots l LEFT JOIN credit_meter_watermarks w ON w.org_id = l.org_id
-			 WHERE l.id = $1 AND l.remaining_micros > 0 AND l.expires_at <= $2 AND l.expires_at <= `+creditWatermarkBound(requireWatermark, "$2")+` FOR UPDATE OF l`,
-			lotID, now.UTC()).Scan(&remaining)
+			 WHERE l.id = $1 AND l.remaining_micros > 0 AND l.expires_at <= $2
+			   AND l.expires_at <= CASE WHEN $3::boolean THEN w.watermark ELSE COALESCE(w.watermark, $2) END FOR UPDATE OF l`,
+			lotID, now.UTC(), requireWatermark).Scan(&remaining)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}

@@ -1,9 +1,8 @@
 import { Link } from 'react-router-dom';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { planLabel } from '../hooks/useMemberOrgs';
+import { planLabel, useCurrentOrg } from '../hooks/useMemberOrgs';
 import { useOrgUsage } from './usage/useOrgUsage';
 import { useFeatureEnabled } from '../hooks/useDeploymentMode';
-import { useCurrentOrg } from '../hooks/useMemberOrgs';
 import { CreditsSection } from './usage/CreditsSection';
 import { appsValue, gib, Line, projectsValue, Section } from './usage/UsageParts';
 

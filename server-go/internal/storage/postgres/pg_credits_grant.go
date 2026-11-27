@@ -102,7 +102,7 @@ func (s *Store) GrantCreditTrial(ctx context.Context, userID string, rules credi
 		result.Outcome = credits.OutcomeWaitlisted
 		return result, commitUnless(tx, err)
 	}
-	entryID, err := writeTrialGrant(ctx, tx, userID, plan.orgID, rules, candidate, plan.identities, now)
+	entryID, err := writeTrialGrant(ctx, tx, trialGrantParams{userID: userID, orgID: plan.orgID, rules: rules, candidate: candidate, identities: plan.identities, now: now})
 	if err != nil {
 		return result, err
 	}
@@ -258,7 +258,17 @@ func mustWait(ctx context.Context, tx *sql.Tx, userID string, rules credits.Rule
 	return holders >= rules.TrialCap || ahead >= rules.TrialCap-holders, nil
 }
 
-func writeTrialGrant(ctx context.Context, tx *sql.Tx, userID, orgID string, rules credits.Rules, candidate grantCandidate, identities []claimKey, now time.Time) (int64, error) {
+// trialGrantParams is everything a trial grant writes: who gets it, under which rules, and the claims it takes.
+type trialGrantParams struct {
+	userID, orgID string
+	rules         credits.Rules
+	candidate     grantCandidate
+	identities    []claimKey
+	now           time.Time
+}
+
+func writeTrialGrant(ctx context.Context, tx *sql.Tx, grant trialGrantParams) (int64, error) {
+	userID, orgID, rules, candidate, identities, now := grant.userID, grant.orgID, grant.rules, grant.candidate, grant.identities, grant.now
 	if _, err := lockCreditAccount(ctx, tx, orgID, now); err != nil {
 		return 0, err
 	}

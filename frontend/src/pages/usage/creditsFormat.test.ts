@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { dollars, microsFromDollars, daysLeft, recentMonths } from './creditsFormat';
+import { dollars, microsFromDollars, daysLeft, recentMonths, trimTrailingZeros } from './creditsFormat';
 
 describe('credit amounts', () => {
   test('write whole dollars, cents and sub-cent amounts exactly', () => {
@@ -27,5 +27,22 @@ describe('credit amounts', () => {
 
   test('list UTC months across a year boundary', () => {
     expect(recentMonths(new Date('2026-01-15T00:00:00Z'), 3)).toEqual(['2026-01', '2025-12', '2025-11']);
+  });
+});
+
+describe('trimTrailingZeros', () => {
+  test('drops only the zeros at the end', () => {
+    expect(trimTrailingZeros('120300')).toBe('1203');
+    expect(trimTrailingZeros('000000')).toBe('');
+    expect(trimTrailingZeros('')).toBe('');
+    expect(trimTrailingZeros('105')).toBe('105');
+  });
+
+  test('a very long run of zeros is linear work, not a stall', () => {
+    const long = `1${'0'.repeat(200_000)}`;
+    const started = performance.now();
+    expect(trimTrailingZeros(long)).toBe('1');
+    expect(trimTrailingZeros(`${'0'.repeat(200_000)}x`)).toHaveLength(200_001);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 });

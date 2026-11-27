@@ -209,43 +209,63 @@ func TestWatermarkNeverMovesBackward(t *testing.T) {
 	}
 }
 
+// propertyOrg is the org the random operations run on.
+const propertyOrg = "org-prop"
+
+// propertyStep is one random operation on the ledger.
+type propertyStep struct {
+	t      *testing.T
+	store  *Store
+	random *rand.Rand
+	clock  time.Time
+	key    string
+	number int
+}
+
+func (s propertyStep) grant() {
+	var expires *time.Time
+	if s.random.Intn(2) == 0 {
+		at := s.clock.Add(time.Duration(1+s.random.Intn(40)) * time.Hour)
+		expires = &at
+	}
+	adjustForTest(s.t, s.store, propertyOrg, credits.Micros(1+s.random.Intn(500)), s.key, expires, s.clock)
+}
+
+func (s propertyStep) takeBack() {
+	_, err := s.store.AdjustCredit(context.Background(), negativeAdjustment(propertyOrg, credits.Micros(1+s.random.Intn(300)), s.key), s.clock)
+	if err != nil && !errors.Is(err, credits.ErrInsufficientBalance) {
+		s.t.Fatalf("step %d: %v", s.number, err)
+	}
+}
+
+func (s propertyStep) debit() {
+	end := s.clock.Add(time.Duration(1+s.random.Intn(10)) * time.Hour)
+	request := credits.DebitRequest{OrgID: propertyOrg, Amount: credits.Micros(1 + s.random.Intn(400)), PeriodStart: s.clock, PeriodEnd: end, IdempotencyKey: s.key}
+	if _, err := s.store.DebitCredit(context.Background(), request); err != nil {
+		s.t.Fatalf("step %d debit: %v", s.number, err)
+	}
+	_ = s.store.AdvanceCreditMeterWatermark(context.Background(), propertyOrg, end)
+}
+
+func (s propertyStep) expire() {
+	if _, err := s.store.ExpireCreditLots(context.Background(), s.clock, false); err != nil {
+		s.t.Fatalf("step %d expire: %v", s.number, err)
+	}
+}
+
 // Σ lots.remaining = balance = Σ entries after any mix of grants, debits,
 // negative adjustments and expiries.
 func TestCreditLedgerInvariantHoldsUnderRandomOperations(t *testing.T) {
 	store := testStore(t)
-	ctx := context.Background()
 	random := rand.New(rand.NewSource(42))
-	const orgID = "org-prop"
 	clock := creditsNow
-	for step := 0; step < 150; step++ {
+	for number := 0; number < 150; number++ {
 		clock = clock.Add(time.Duration(random.Intn(6)) * time.Hour)
-		key := fmt.Sprintf("op-%d", step)
-		switch random.Intn(5) {
-		case 0:
-			var expires *time.Time
-			if random.Intn(2) == 0 {
-				at := clock.Add(time.Duration(1+random.Intn(40)) * time.Hour)
-				expires = &at
-			}
-			adjustForTest(t, store, orgID, credits.Micros(1+random.Intn(500)), key, expires, clock)
-		case 1:
-			_, err := store.AdjustCredit(ctx, negativeAdjustment(orgID, credits.Micros(1+random.Intn(300)), key), clock)
-			if err != nil && !errors.Is(err, credits.ErrInsufficientBalance) {
-				t.Fatalf("step %d: %v", step, err)
-			}
-		case 2, 3:
-			end := clock.Add(time.Duration(1+random.Intn(10)) * time.Hour)
-			if _, err := store.DebitCredit(ctx, credits.DebitRequest{OrgID: orgID, Amount: credits.Micros(1 + random.Intn(400)), PeriodStart: clock, PeriodEnd: end, IdempotencyKey: key}); err != nil {
-				t.Fatalf("step %d debit: %v", step, err)
-			}
-			_ = store.AdvanceCreditMeterWatermark(ctx, orgID, end)
-		default:
-			if _, err := store.ExpireCreditLots(ctx, clock, false); err != nil {
-				t.Fatalf("step %d expire: %v", step, err)
-			}
-		}
-		if balance := creditInvariant(t, store, orgID); balance < 0 {
-			t.Fatalf("step %d: balance %d", step, balance)
+		step := propertyStep{t: t, store: store, random: random, clock: clock, key: fmt.Sprintf("op-%d", number), number: number}
+		operations := []func(){step.grant, step.takeBack, step.debit, step.debit, step.expire}
+		operations[random.Intn(len(operations))]()
+		if balance := creditInvariant(t, store, propertyOrg); balance < 0 {
+			t.Fatalf("step %d: balance %d", number, balance)
 		}
 	}
 }

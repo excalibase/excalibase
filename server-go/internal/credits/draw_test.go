@@ -67,35 +67,44 @@ func TestPlanDrawSkipsEmptyLots(t *testing.T) {
 	}
 }
 
+func randomLots(random *rand.Rand, periodEnd time.Time) (lots []Lot, usable Micros) {
+	lots = make([]Lot, random.Intn(6))
+	for i := range lots {
+		lots[i] = Lot{ID: int64(i + 1), Remaining: Micros(random.Intn(1000))}
+		if random.Intn(3) > 0 {
+			at := drawNow.Add(time.Duration(random.Intn(200)) * time.Hour)
+			lots[i].ExpiresAt = &at
+		}
+		if lots[i].ExpiresAt == nil || !lots[i].ExpiresAt.Before(periodEnd) {
+			usable += lots[i].Remaining
+		}
+	}
+	return lots, usable
+}
+
+func sumOfDraws(t *testing.T, round int, draws []Draw) Micros {
+	t.Helper()
+	var sum Micros
+	for _, draw := range draws {
+		sum += draw.Amount
+		if draw.Amount <= 0 {
+			t.Fatalf("round %d: empty draw %+v", round, draw)
+		}
+	}
+	return sum
+}
+
 func TestPlanDrawProperty(t *testing.T) {
 	random := rand.New(rand.NewSource(7))
 	for round := 0; round < 500; round++ {
-		lots := make([]Lot, random.Intn(6))
-		var usable Micros
 		periodEnd := drawNow.Add(time.Duration(random.Intn(100)) * time.Hour)
-		for i := range lots {
-			lots[i] = Lot{ID: int64(i + 1), Remaining: Micros(random.Intn(1000))}
-			if random.Intn(3) > 0 {
-				at := drawNow.Add(time.Duration(random.Intn(200)) * time.Hour)
-				lots[i].ExpiresAt = &at
-			}
-			if lots[i].ExpiresAt == nil || !lots[i].ExpiresAt.Before(periodEnd) {
-				usable += lots[i].Remaining
-			}
-		}
+		lots, usable := randomLots(random, periodEnd)
 		want := Micros(random.Intn(3000))
 		draws, taken := PlanDraw(lots, want, periodEnd)
 		if taken != min(want, usable) {
 			t.Fatalf("round %d: taken %d, want min(%d, %d)", round, taken, want, usable)
 		}
-		var sum Micros
-		for _, draw := range draws {
-			sum += draw.Amount
-			if draw.Amount <= 0 {
-				t.Fatalf("round %d: empty draw %+v", round, draw)
-			}
-		}
-		if sum != taken {
+		if sum := sumOfDraws(t, round, draws); sum != taken {
 			t.Fatalf("round %d: draws add to %d, taken %d", round, sum, taken)
 		}
 	}

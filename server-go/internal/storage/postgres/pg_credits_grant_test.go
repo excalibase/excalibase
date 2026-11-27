@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,9 +15,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
-func grant(t *testing.T, store *Store, userID string, cap int) credits.GrantResult {
+func grant(t *testing.T, store *Store, userID string, trialCap int) credits.GrantResult {
 	t.Helper()
-	result, err := store.GrantCreditTrial(context.Background(), userID, trialRules(cap), creditsNow)
+	result, err := store.GrantCreditTrial(context.Background(), userID, trialRules(trialCap), creditsNow)
 	if err != nil {
 		t.Fatalf("grant %s: %v", userID, err)
 	}
@@ -162,42 +163,43 @@ func TestASubjectClaimedByAnotherPersonGivesNoGrantAndDoesNotBlockTheLink(t *tes
 	}
 }
 
+func expectOutcome(t *testing.T, store *Store, userID string, want credits.GrantOutcome, why string) {
+	t.Helper()
+	if got := grant(t, store, userID, 2).Outcome; got != want {
+		t.Fatalf("%s: %s got %v, want %v", why, userID, got, want)
+	}
+}
+
+func expectQueue(t *testing.T, store *Store, want ...string) {
+	t.Helper()
+	queue, err := store.CreditWaitlist(context.Background(), 10)
+	if err != nil || !slices.Equal(queue, want) {
+		t.Fatalf("queue %v (%v), want %v", queue, err, want)
+	}
+}
+
 func TestTrialCapWaitlistsAndGrantsFirstComeWhenATrialEnds(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	for _, id := range []string{"k1", "k2", "k3", "k4"} {
 		creditPerson(t, store, id)
 	}
-	if grant(t, store, "k1", 2).Outcome != credits.OutcomeGranted || grant(t, store, "k2", 2).Outcome != credits.OutcomeGranted {
-		t.Fatal("the first two fit under the cap")
-	}
-	if grant(t, store, "k3", 2).Outcome != credits.OutcomeWaitlisted || grant(t, store, "k4", 2).Outcome != credits.OutcomeWaitlisted {
-		t.Fatal("past the cap people wait")
-	}
-	if grant(t, store, "k3", 2).Outcome != credits.OutcomeWaitlisted {
-		t.Fatal("asking again keeps the place")
-	}
-	queue, _ := store.CreditWaitlist(ctx, 10)
-	if len(queue) != 2 || queue[0] != "k3" || queue[1] != "k4" {
-		t.Fatalf("queue %v, first come first served", queue)
-	}
+	expectOutcome(t, store, "k1", credits.OutcomeGranted, "the first two fit under the cap")
+	expectOutcome(t, store, "k2", credits.OutcomeGranted, "the first two fit under the cap")
+	expectOutcome(t, store, "k3", credits.OutcomeWaitlisted, "past the cap people wait")
+	expectOutcome(t, store, "k4", credits.OutcomeWaitlisted, "past the cap people wait")
+	expectOutcome(t, store, "k3", credits.OutcomeWaitlisted, "asking again keeps the place")
+	expectQueue(t, store, "k3", "k4")
 	if state, _ := store.CreditTrialState(ctx, "k4"); state.State != "waitlisted" || state.Position != 2 {
 		t.Fatalf("%+v", state)
 	}
-	if grant(t, store, "k3", 2).Outcome != credits.OutcomeWaitlisted {
-		t.Fatal("still full")
-	}
+	expectOutcome(t, store, "k3", credits.OutcomeWaitlisted, "still full")
 
 	if n, err := store.ExpireCreditLots(ctx, creditsNow.Add(91*24*time.Hour), false); err != nil || n != 2 {
 		t.Fatalf("both trials end: %d %v", n, err)
 	}
-	if got := grant(t, store, "k3", 2); got.Outcome != credits.OutcomeGranted {
-		t.Fatalf("k3: %+v", got)
-	}
-	queue, _ = store.CreditWaitlist(ctx, 10)
-	if len(queue) != 1 || queue[0] != "k4" {
-		t.Fatalf("a granted person leaves the queue: %v", queue)
-	}
+	expectOutcome(t, store, "k3", credits.OutcomeGranted, "a place opened")
+	expectQueue(t, store, "k4")
 }
 
 func TestPendingTrialUsersAreVerifiedAcceptedAndNotYetClaimed(t *testing.T) {

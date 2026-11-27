@@ -15,8 +15,8 @@ const creditsTerms = "terms-1"
 
 var creditsNow = time.Date(2026, 12, 1, 12, 0, 0, 0, time.UTC)
 
-func trialRules(cap int) credits.Rules {
-	return credits.Rules{TrialAmount: credits.FromDollars(300), TrialDays: 90, TrialCap: cap, AdminCap: credits.FromDollars(1000), TermsVersion: creditsTerms}
+func trialRules(trialCap int) credits.Rules {
+	return credits.Rules{TrialAmount: credits.FromDollars(300), TrialDays: 90, TrialCap: trialCap, AdminCap: credits.FromDollars(1000), TermsVersion: creditsTerms}
 }
 
 // creditPerson seeds a verified account that owns one free org and accepted the terms.

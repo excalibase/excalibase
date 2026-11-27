@@ -66,6 +66,11 @@ export function HealthWidget({ counts, failingApps }: { readonly counts: HealthC
 
 const LOW_CREDIT_SHARE = 0.2;
 
+const dayCount = (days: number | null): string | undefined => {
+  if (days === null) return undefined;
+  return `${days} ${days === 1 ? 'day' : 'days'}`;
+};
+
 // What the Credits widget says beyond the balance: how long it lasts, and a warning when it runs low or out.
 function creditNotes(credit: CreditOverview, now: Date): { expires?: string; warning?: string; offer?: string } {
   const left = daysLeft(credit.nextExpiry, now);
@@ -74,7 +79,7 @@ function creditNotes(credit: CreditOverview, now: Date): { expires?: string; war
   if (credit.balanceMicros === 0 && credit.entries.length > 0) warning = 'Your credit is used up.';
   else if (granted > 0 && credit.balanceMicros < granted * LOW_CREDIT_SHARE) warning = 'Your credit is running low.';
   const offer = credit.trial.state === 'needs_terms' ? `Accept the credit terms to get ${dollars(credit.trial.amountMicros)}.` : undefined;
-  return { expires: left === null ? undefined : `${left} day${left === 1 ? '' : 's'}`, warning, offer };
+  return { expires: dayCount(left), warning, offer };
 }
 
 interface CreditsWidgetProps {
@@ -100,7 +105,7 @@ export function CreditsWidget({ planName, projects, limitsKnown, credit, creditF
       ) : (
         <p className="text-text-secondary">Your plan and usage appear once you have an organization.</p>
       )}
-      {notes?.warning && <p role="status" className="text-amber-400">{notes.warning}</p>}
+      {notes?.warning && <output className="block text-amber-400">{notes.warning}</output>}
       {notes?.offer && <p className="text-text-secondary">{notes.offer}</p>}
       {creditFailed && <p role="alert" className="text-red-400">Could not read your credit.</p>}
       <Link to="/usage" className={MORE}>Usage details →</Link>
