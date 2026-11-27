@@ -252,7 +252,7 @@ func (lab *fenceLab) deployProbeApp(t *testing.T, namespace, name, runtimeClass 
 	t.Helper()
 	name = strings.ReplaceAll(name, "-", "")
 	app := fenceProbeApp("app-"+name+"-"+namespace, name, lab.probeEnv())
-	options := AppRenderOptions{RuntimeClass: runtimeClass, Route: liveRoute, DeployID: liveDeployID, EnvRevision: "1"}
+	options := AppRenderOptions{TmpPercent: 25, RuntimeClass: runtimeClass, Route: liveRoute, DeployID: liveDeployID, EnvRevision: "1"}
 	workload, err := RenderAppWorkload(namespace, app, &fakeResolver{namespace: namespace}, options)
 	if err != nil {
 		t.Fatalf("render %s: %v", name, err)

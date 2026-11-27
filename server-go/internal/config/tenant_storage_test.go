@@ -9,7 +9,7 @@ import (
 const pinnedTools = "busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 
 func sizedStorage() AppConfig {
-	return AppConfig{
+	return AppConfig{AppTmpPercent: 25,
 		ProvisionerMode: "k8s", TenantStorageClass: "excalibase-tenant",
 		TenantStorageRequireSized: true, TenantSizedProvisioners: []string{"local.csi.openebs.io"},
 		AppDiskToolsImage: pinnedTools, StorageBudgetPercent: 80,
@@ -86,7 +86,7 @@ func TestValidateSizedTenantStorage(t *testing.T) {
 // A test cluster on local-path runs without sized volumes, and without a
 // capacity the budget is simply not enforced there.
 func TestValidateUnsizedTenantStorageNeedsNothing(t *testing.T) {
-	cfg := AppConfig{ProvisionerMode: "k8s", StorageBudgetPercent: 80}
+	cfg := AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s", StorageBudgetPercent: 80}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("unsized: %v", err)
 	}

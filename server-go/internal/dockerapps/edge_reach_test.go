@@ -46,7 +46,7 @@ func TestAnAppTrustsTheEdgesOwnCA(t *testing.T) {
 	})
 	h.rollout(freeApp(), "dep-1")
 	app := h.engine.appContainers("app-01")[0]
-	if got := string(app.files["/"+probeDir+"/edge-ca.crt"]); got != string(root) {
+	if got := string(h.engine.fileBody(app, "/"+probeDir+"/edge-ca.crt")); got != string(root) {
 		t.Fatalf("edge CA in the app = %q", got)
 	}
 	if !slices.Contains(app.config.Env, "NODE_EXTRA_CA_CERTS=/"+probeDir+"/edge-ca.crt") {

@@ -187,7 +187,7 @@ func (lab *egressLab) installHAProxyIngress(t *testing.T) {
 // deployRouteApp drives the production path: render, apply, wait.
 func (lab *egressLab) deployRouteApp(t *testing.T, app *apphost.App) {
 	t.Helper()
-	workload, err := RenderAppWorkload(routeNamespace, app, nil, AppRenderOptions{RuntimeClass: gvisorRuntimeClass, Route: liveRoute, DeployID: liveDeployID})
+	workload, err := RenderAppWorkload(routeNamespace, app, nil, AppRenderOptions{TmpPercent: 25, RuntimeClass: gvisorRuntimeClass, Route: liveRoute, DeployID: liveDeployID})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}

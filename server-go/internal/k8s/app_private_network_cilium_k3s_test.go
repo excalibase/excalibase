@@ -204,7 +204,7 @@ func (lab *egressLab) readFromApp(namespace string, app *apphost.App, host strin
 
 func (lab *egressLab) deployNetApp(t *testing.T, namespace string, app *apphost.App) {
 	t.Helper()
-	workload, err := RenderAppWorkload(namespace, app, nil, AppRenderOptions{RuntimeClass: gvisorRuntimeClass, Route: netRoute, DeployID: liveDeployID})
+	workload, err := RenderAppWorkload(namespace, app, nil, AppRenderOptions{TmpPercent: 25, RuntimeClass: gvisorRuntimeClass, Route: netRoute, DeployID: liveDeployID})
 	if err != nil {
 		t.Fatalf("render %s: %v", app.Name, err)
 	}

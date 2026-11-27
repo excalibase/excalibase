@@ -7,6 +7,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +58,8 @@ type AppDeployService struct {
 	corsOrigins CorsOriginReleaser
 	// images resolves a named image to the digest a deploy pins.
 	images ImageResolver
+	// volumes reads an image's declared VOLUMEs at deploy; nil in tests that do not need them.
+	volumes ImageVolumeReader
 	// localRegistries are operator registries never dialled (self-host only).
 	localRegistries []string
 	// internal is the platform's own registry for git builds (EXC-540); nil without one.
@@ -414,6 +417,15 @@ func (s *AppDeployService) apply(ctx context.Context, app *apphost.App, planned 
 	if render.PullAuth, err = s.pullAuth(app, cfg.Image); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
+	}
+	volumes, readDigest, err := s.imageVolumes(ctx, app.ProjectID, cfg.Image)
+	if err != nil {
+		s.fail(ctx, deploy, err, namespace, name)
+		return deploy, nil, nil
+	}
+	render.ImageVolumes = volumes
+	if readDigest != "" && !strings.Contains(cfg.Image, "@") {
+		target.Image = apphost.PinImage(cfg.Image, readDigest)
 	}
 	fitted, err := s.fitDiskToPlan(ctx, namespace, app)
 	if errors.Is(err, ErrAppDiskUsageAbovePlan) {

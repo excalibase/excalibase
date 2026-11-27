@@ -13,6 +13,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -135,7 +136,7 @@ var testRoute = AppRouteOptions{
 	IngressFromNamespace: "haproxy-controller",
 }
 
-var testRenderOptions = AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute, EnvRevision: "7", DeployID: testDeployID}
+var testRenderOptions = AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute, EnvRevision: "7", DeployID: testDeployID, TmpPercent: 25}
 
 const testDeployID = "dep-7"
 
@@ -348,7 +349,7 @@ func TestRenderAppWorkloadSecretValuesRollThePodsPerDeploy(t *testing.T) {
 	if got := workload.Deployment.Spec.Template.Annotations[appEnvRevisionAnnotation]; got != "7" {
 		t.Fatalf("env revision annotation = %q, want 7", got)
 	}
-	if _, err := RenderAppWorkload(testNamespace, fullApp(), newResolver(), AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute, DeployID: testDeployID}); !errors.Is(err, ErrRenderApp) {
+	if _, err := RenderAppWorkload(testNamespace, fullApp(), newResolver(), AppRenderOptions{TmpPercent: 25, RuntimeClass: testRuntimeClass, Route: testRoute, DeployID: testDeployID}); !errors.Is(err, ErrRenderApp) {
 		t.Fatalf("secret values with no env revision must be refused, got %v", err)
 	}
 	plain := mustRender(t, minimalApp(), newResolver())
@@ -513,7 +514,7 @@ func TestRenderAppWorkloadRunsUnderTheSandboxRuntime(t *testing.T) {
 }
 
 func TestRenderAppWorkloadRefusesNoRuntimeClass(t *testing.T) {
-	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{Route: testRoute, DeployID: testDeployID}); !errors.Is(err, ErrRenderApp) {
+	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{TmpPercent: 25, Route: testRoute, DeployID: testDeployID}); !errors.Is(err, ErrRenderApp) {
 		t.Fatalf("an app with no sandbox runtime must be refused, got %v", err)
 	}
 }
@@ -542,8 +543,8 @@ func TestRenderAppWorkloadContainerSecurityContext(t *testing.T) {
 	if security.AllowPrivilegeEscalation == nil || *security.AllowPrivilegeEscalation {
 		t.Error("container must set AllowPrivilegeEscalation false")
 	}
-	if security.ReadOnlyRootFilesystem == nil || *security.ReadOnlyRootFilesystem {
-		t.Error("container root filesystem must be explicitly writable")
+	if security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem {
+		t.Error("container root filesystem must be read-only")
 	}
 	if security.RunAsNonRoot != nil {
 		t.Error("container must not require RunAsNonRoot")
@@ -563,10 +564,68 @@ func TestRenderAppWorkloadContainerSecurityContext(t *testing.T) {
 	}
 }
 
-func TestRenderAppWorkloadMountsNoVolumes(t *testing.T) {
+// The only volume a disk-less app gets is its scratch /tmp, in memory and capped.
+func TestRenderAppWorkloadMountsOnlyScratchTmp(t *testing.T) {
 	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
-	if len(spec.Volumes) != 0 || len(spec.Containers[0].VolumeMounts) != 0 {
-		t.Fatalf("volumes = %+v, mounts = %+v, want none", spec.Volumes, spec.Containers[0].VolumeMounts)
+	mounts := spec.Containers[0].VolumeMounts
+	if len(spec.Volumes) != 1 || len(mounts) != 1 {
+		t.Fatalf("volumes = %+v, mounts = %+v, want only the scratch /tmp", spec.Volumes, mounts)
+	}
+	if mounts[0].MountPath != "/tmp" || mounts[0].Name != spec.Volumes[0].Name {
+		t.Fatalf("mount = %+v, want /tmp on volume %q", mounts[0], spec.Volumes[0].Name)
+	}
+	empty := spec.Volumes[0].EmptyDir
+	if empty == nil || empty.Medium != corev1.StorageMediumMemory {
+		t.Fatalf("scratch volume = %+v, want a memory emptyDir", spec.Volumes[0])
+	}
+}
+
+// The cap is a percentage of the container's memory limit, since the tmpfs is charged to it.
+func TestRenderAppWorkloadScratchTmpIsAPercentOfMemory(t *testing.T) {
+	for _, percent := range []int{10, 25, 100} {
+		options := testRenderOptions
+		options.TmpPercent = percent
+		workload, err := RenderAppWorkload(testNamespace, fullApp(), newResolver(), options)
+		if err != nil {
+			t.Fatalf("render at %d%%: %v", percent, err)
+		}
+		pod := workload.Deployment.Spec.Template.Spec
+		memory := pod.Containers[0].Resources.Limits.Memory().Value()
+		limit := pod.Volumes[0].EmptyDir.SizeLimit
+		if limit == nil || limit.Value() != memory*int64(percent)/100 {
+			t.Errorf("%d%%: sizeLimit = %v, want %d", percent, limit, memory*int64(percent)/100)
+		}
+	}
+}
+
+func TestRenderAppWorkloadRefusesAnUnsetOrOutOfRangeTmpPercent(t *testing.T) {
+	for _, percent := range []int{0, -5, 101} {
+		options := testRenderOptions
+		options.TmpPercent = percent
+		if _, err := RenderAppWorkload(testNamespace, fullApp(), newResolver(), options); !errors.Is(err, ErrRenderApp) {
+			t.Errorf("tmp percent %d: err = %v, want ErrRenderApp", percent, err)
+		}
+	}
+}
+
+// The disk stays a plain writable claim beside the scratch /tmp.
+func TestRenderAppWorkloadDiskStaysWritableBesideTmp(t *testing.T) {
+	spec := mustRender(t, diskApp(), newResolver()).Deployment.Spec.Template.Spec
+	paths := map[string]bool{}
+	for _, mount := range spec.Containers[0].VolumeMounts {
+		paths[mount.MountPath] = mount.ReadOnly
+	}
+	if readOnly, ok := paths["/data"]; !ok || readOnly || len(paths) != 2 || !hasKey(paths, "/tmp") {
+		t.Fatalf("mounts = %v, want writable /data and /tmp", paths)
+	}
+	claims := 0
+	for _, volume := range spec.Volumes {
+		if volume.PersistentVolumeClaim != nil {
+			claims++
+		}
+	}
+	if claims != 1 || len(spec.Volumes) != 2 {
+		t.Fatalf("volumes = %+v", spec.Volumes)
 	}
 }
 
@@ -726,7 +785,7 @@ func assertPorts(t *testing.T, rule string, got []ciliumPortRule, want ...cilium
 
 // Extras are additional to the fixed ranges, never a replacement.
 func TestRenderAppWorkloadEgressPolicyExtraDenyCIDRs(t *testing.T) {
-	workload, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{
+	workload, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{TmpPercent: 25,
 		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32", "198.51.100.0/24"}, Route: testRoute,
 		DeployID: testDeployID,
 	})
@@ -988,5 +1047,53 @@ func TestAppResourceRequirementsRefusesUnparseableCatalogue(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("an unparseable quantity must be refused")
+	}
+}
+
+func hasKey(m map[string]bool, key string) bool { _, ok := m[key]; return ok }
+
+// An image's own VOLUME would be an uncapped directory on the node's disk, even under a read-only
+// root: each declared path becomes a memory emptyDir sharing the /tmp budget; the app's disk keeps its path.
+func TestRenderAppWorkloadCapsEveryImageVolume(t *testing.T) {
+	options := testRenderOptions
+	options.ImageVolumes = []string{"/var/lib/app", "/cache", "/cache/", "/tmp", "/data"}
+	app := diskApp()
+	app.Disk.MountPath = "/data"
+	workload, err := RenderAppWorkload(testNamespace, app, newResolver(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := workload.Deployment.Spec.Template.Spec
+	memory := pod.Containers[0].Resources.Limits.Memory().Value()
+	share := memory * 25 / 100 / 3
+	sizes := map[string]int64{}
+	for _, mounted := range pod.Containers[0].VolumeMounts {
+		for _, volume := range pod.Volumes {
+			if volume.Name == mounted.Name && volume.EmptyDir != nil {
+				if volume.EmptyDir.Medium != corev1.StorageMediumMemory || volume.EmptyDir.SizeLimit == nil {
+					t.Errorf("%s: %+v is not a capped memory emptyDir", mounted.MountPath, volume.EmptyDir)
+					continue
+				}
+				sizes[mounted.MountPath] = volume.EmptyDir.SizeLimit.Value()
+			}
+		}
+	}
+	if len(sizes) != 3 || sizes["/tmp"] != share || sizes["/cache"] != share || sizes["/var/lib/app"] != share {
+		t.Fatalf("scratch mounts %v, want /tmp, /cache and /var/lib/app at %d each", sizes, share)
+	}
+	if _, shadowed := sizes["/data"]; shadowed {
+		t.Fatal("an emptyDir shadows the app's disk")
+	}
+}
+
+func TestRenderAppWorkloadAZeroMemoryLimitNeverRendersAnUnlimitedTmp(t *testing.T) {
+	deployment := &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{}}}}}}
+	if err := mountAppScratch(deployment, corev1.ResourceRequirements{}, 25, nil, ""); err == nil {
+		t.Fatal("a pod with no memory limit got a /tmp")
+	}
+	limits := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2")}}
+	if err := mountAppScratch(deployment, limits, 25, []string{"/v"}, ""); err == nil {
+		t.Fatal("a share of 0 bytes was rendered")
 	}
 }

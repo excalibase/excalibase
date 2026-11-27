@@ -20,6 +20,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -146,6 +147,13 @@ func (r *realRig) cleanup() {
 	for _, name := range []string{r.db, r.edge} {
 		_ = r.direct.ContainerRemove(ctx, name, container.RemoveOptions{Force: true})
 	}
+	// The shared probe volume is no project's, so a teardown leaves it; this rig made it.
+	shared, _ := r.direct.VolumeList(ctx, volume.ListOptions{Filters: labelFilter(engineproxy.SharedReadOnlyLabel, "true")})
+	for _, probe := range shared.Volumes {
+		if strings.HasPrefix(probe.Name, r.prefix+"-vol-") {
+			_ = r.direct.VolumeRemove(ctx, probe.Name, false)
+		}
+	}
 }
 
 func proxyTo(t *testing.T, policy engineproxy.Policy) *client.Client {
@@ -186,8 +194,8 @@ func buildProbe(t *testing.T) []byte {
 func itApp(body string) *apphost.App {
 	return &apphost.App{
 		ID: "app-it", ProjectID: "proj-it", Name: "web", Image: itBusybox, Port: 8080, Replicas: 1, Tier: domain.Free,
-		Args: []string{"sh", "-c", "mkdir -p /www && echo " + body + " > /www/index.html && echo serving " + body +
-			" && exec httpd -f -p 8080 -h /www"},
+		Args: []string{"sh", "-c", "mkdir -p /tmp/www && echo " + body + " > /tmp/www/index.html && echo serving " + body +
+			" && exec httpd -f -p 8080 -h /tmp/www"},
 		HealthCheckPath: "/", Disk: &apphost.AppDisk{MountPath: "/data", Size: "1Gi"}, Status: apphost.StatusCreated,
 	}
 }
@@ -278,7 +286,7 @@ func TestRealEngineAppsReachEachOtherByName(t *testing.T) {
 	ctx := context.Background()
 	web := itApp("unused")
 	web.Disk = nil
-	web.Args = []string{"sh", "-c", "mkdir -p /www && echo $(BODY) > /www/index.html && exec httpd -f -p 8080 -h /www"}
+	web.Args = []string{"sh", "-c", "mkdir -p /tmp/www && echo $(BODY) > /tmp/www/index.html && exec httpd -f -p 8080 -h /tmp/www"}
 	web.Env = []apphost.EnvVar{{Name: "BODY", Kind: apphost.KindLiteral, Value: literal("expanded")}}
 	rig.deploy(web, "dep-web")
 

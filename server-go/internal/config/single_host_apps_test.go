@@ -8,13 +8,14 @@ import (
 
 func singleHostHosting() AppConfig {
 	return AppConfig{
+		AppTmpPercent:   25,
 		ProvisionerMode: "docker", DeploymentMode: "selfhosted", AppHostingEnabled: true,
 		AppDomain: "apps.example.com", AppDiskToolsImage: "docker.io/excalibase/provisioning:1.4.0",
 		SingleHostApps: SingleHostAppsConfig{
 			SandboxRuntime: "runsc", NetworkPrefix: "excalibase-net-", VolumePrefix: "excalibase-vol-",
 			EdgeContainer: "excalibase-edge", EdgeRoutesDir: "/var/lib/excalibase/app-routes",
 			EdgeTLSAddress: "edge:443", ProbeBinary: "/usr/local/bin/excalibase-app-probe", EdgeTLS: "internal",
-			EdgeCAURL: "http://edge:8081/root.crt", EdgeAliases: []string{"studio.example.com", "api.example.com"},
+			LogMaxSize: "5m", LogMaxFiles: 3, EdgeCAURL: "http://edge:8081/root.crt", EdgeAliases: []string{"studio.example.com", "api.example.com"},
 		},
 	}
 }
@@ -107,5 +108,34 @@ func TestAnACMEEdgeNeedsNoCAURL(t *testing.T) {
 func TestEdgeIssuesLocallyOnlyWithItsOwnCA(t *testing.T) {
 	if (SingleHostAppsConfig{EdgeTLS: "admin@example.com"}).EdgeIssuesLocally() {
 		t.Fatal("an ACME edge counted as its own CA")
+	}
+}
+
+// EXC-732: app logs rotate; the cap is the size times the number of files.
+func TestAppLogRotationDefaultsAndIsValidated(t *testing.T) {
+	apps := Load().SingleHostApps
+	if apps.LogMaxSize != "5m" || apps.LogMaxFiles != 3 {
+		t.Fatalf("defaults %q x %d, want 5m x 3", apps.LogMaxSize, apps.LogMaxFiles)
+	}
+	t.Setenv("APP_LOG_MAX_SIZE", "2m")
+	t.Setenv("APP_LOG_MAX_FILES", "4")
+	if apps = Load().SingleHostApps; apps.LogMaxSize != "2m" || apps.LogMaxFiles != 4 {
+		t.Fatalf("read %q x %d", apps.LogMaxSize, apps.LogMaxFiles)
+	}
+	for env, bad := range map[string][]string{
+		"APP_LOG_MAX_SIZE":  {"big", "0m", "5", "-1m", "5mb"},
+		"APP_LOG_MAX_FILES": {"0", "101", "x", "-2"},
+	} {
+		for _, value := range bad {
+			t.Setenv("APP_LOG_MAX_SIZE", "5m")
+			t.Setenv("APP_LOG_MAX_FILES", "3")
+			t.Setenv(env, value)
+			cfg := singleHostHosting()
+			cfg.SingleHostApps.LogMaxSize = Load().SingleHostApps.LogMaxSize
+			cfg.SingleHostApps.LogMaxFiles = Load().SingleHostApps.LogMaxFiles
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), env) {
+				t.Errorf("%s=%q passed validation: %v", env, value, err)
+			}
+		}
 	}
 }

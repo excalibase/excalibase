@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -35,6 +36,7 @@ type Engine interface {
 
 	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
 	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
+	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (image.InspectResponse, error)
 
 	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
 	NetworkList(ctx context.Context, options network.ListOptions) ([]network.Summary, error)

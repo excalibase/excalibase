@@ -140,7 +140,7 @@ func TestDarkFeatures_HostMetricsIsOnOnlyOnASingleHost(t *testing.T) {
 	if got := featureEnv[features.HostMetrics]; got != "FEATURE_HOSTMETRICS" {
 		t.Errorf("host metrics variable = %q", got)
 	}
-	on := AppConfig{DarkFeatures: []features.Feature{features.HostMetrics, features.MCP}}
+	on := AppConfig{AppTmpPercent: 25, DarkFeatures: []features.Feature{features.HostMetrics, features.MCP}}
 	for mode, want := range map[string]bool{"docker": true, "kubernetes": false, "": false} {
 		on.ProvisionerMode = mode
 		flags := on.Features()
@@ -190,7 +190,7 @@ func TestDarkFeatures_HostLogsIsOnOnlyOnASingleHost(t *testing.T) {
 	if got := featureEnv[features.HostLogs]; got != "FEATURE_HOSTLOGS" {
 		t.Errorf("host logs variable = %q", got)
 	}
-	on := AppConfig{DarkFeatures: []features.Feature{features.HostLogs, features.LogRetention}}
+	on := AppConfig{AppTmpPercent: 25, DarkFeatures: []features.Feature{features.HostLogs, features.LogRetention}}
 	for mode, want := range map[string]bool{"docker": true, "kubernetes": false, "": false} {
 		on.ProvisionerMode = mode
 		flags := on.Features()

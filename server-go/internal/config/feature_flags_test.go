@@ -35,7 +35,7 @@ func TestFeatureFlags_CoversEveryBooleanOnAppConfig(t *testing.T) {
 // A flag's declared value must be the config's value — a declaration that
 // reports a constant would make the wiring check meaningless.
 func TestFeatureFlags_ReportTheConfiguredValue(t *testing.T) {
-	cfg := AppConfig{SchedulerEnabled: true, AutoMigrate: false, AutoPauseEnabled: true}
+	cfg := AppConfig{AppTmpPercent: 25, SchedulerEnabled: true, AutoMigrate: false, AutoPauseEnabled: true}
 	value := reflect.ValueOf(cfg)
 	for _, flag := range cfg.FeatureFlags() {
 		field := value.FieldByName(flag.Field)

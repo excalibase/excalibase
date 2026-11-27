@@ -49,7 +49,7 @@ func ciRouter(t *testing.T, store *pgstore.Store, resolver service.ImageResolver
 	prov := service.NewProvisioningService(store, provisioner.NewFactory(), nil)
 	prov.SetTierStore(store)
 	deploys := service.NewAppDeployService(apphost.NewPostgresAppStore(store.DB()), apphost.NewPostgresDeployStore(store.DB()),
-		kube, store, nil, k8s.AppRenderOptions{RuntimeClass: "gvisor", Route: k8s.AppRouteOptions{
+		kube, store, nil, k8s.AppRenderOptions{TmpPercent: 25, RuntimeClass: "gvisor", Route: k8s.AppRouteOptions{
 			Domain: "apps.example.com", IngressClass: "haproxy", IngressFromNamespace: "haproxy-controller"}})
 	deploys.SetPlanTiers(service.NewOrgPlanTiers(store, store))
 	deploys.SetNamespaceQuotaTiers(prov)

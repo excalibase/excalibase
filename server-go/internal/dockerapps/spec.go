@@ -97,7 +97,7 @@ func specFromWorkload(workload *k8s.AppWorkload) (containerSpec, error) {
 		},
 		func(s *containerSpec) error { return s.readPorts(container, workload.Internal) },
 		func(s *containerSpec) error { return s.readResources(container.Resources) },
-		func(s *containerSpec) error { return s.readDisk(workload.Disk, container.VolumeMounts) },
+		func(s *containerSpec) error { return s.readDisk(workload.Disk, diskMounts(container.VolumeMounts)) },
 		func(s *containerSpec) (err error) { s.Pull, err = pullAuth(workload.PullSecret); return err },
 	}
 	for _, step := range steps {
@@ -220,6 +220,18 @@ func (s *containerSpec) readResources(resources corev1.ResourceRequirements) err
 	s.CPURequestMilli = resources.Requests.Cpu().MilliValue()
 	s.MemoryRequest = resources.Requests.Memory().Value()
 	return nil
+}
+
+// diskMounts drops the scratch /tmp the cluster render adds: a single host
+// gives every container its own capped tmpfs instead.
+func diskMounts(mounts []corev1.VolumeMount) []corev1.VolumeMount {
+	kept := make([]corev1.VolumeMount, 0, len(mounts))
+	for _, mount := range mounts {
+		if mount.MountPath != "/tmp" {
+			kept = append(kept, mount)
+		}
+	}
+	return kept
 }
 
 func (s *containerSpec) readDisk(claim *corev1.PersistentVolumeClaim, mounts []corev1.VolumeMount) error {

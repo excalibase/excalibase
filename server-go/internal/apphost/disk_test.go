@@ -29,7 +29,7 @@ func TestValidateRefusesADiskMountPathThatIsNotADataDirectory(t *testing.T) {
 	refused := []string{
 		"", "data", "/", "//data", "/data/", "/data/../etc", "/./data", "/da ta", "/data:ro",
 		"/proc", "/proc/self", "/sys/fs", "/dev", "/dev/shm",
-		"/etc", "/bin", "/sbin", "/lib", "/lib64", "/usr", "/var", "/run", "/var/run", "/boot",
+		"/etc", "/tmp", "/tmp/data", "/.excalibase", "/bin", "/sbin", "/lib", "/lib64", "/usr", "/var", "/run", "/var/run", "/boot",
 		"/" + strings.Repeat("a", 256),
 		// Under a system directory hides the image's files just as surely.
 		"/usr/local/data", "/usr/share/nginx/html", "/etc/app", "/bin/x", "/sbin/x", "/lib/x", "/lib64/x",

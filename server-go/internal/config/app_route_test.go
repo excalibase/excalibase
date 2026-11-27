@@ -36,7 +36,7 @@ func TestParseIngressFromLabels(t *testing.T) {
 }
 
 func hostingConfig() AppConfig {
-	return AppConfig{
+	return AppConfig{AppTmpPercent: 25,
 		ProvisionerMode: "k8s", DeploymentMode: "cloud", AppHostingEnabled: true,
 		AppDomain: "apps.example.com", AppIngressClass: "haproxy", AppIngressFromNamespace: "haproxy-controller",
 	}
@@ -69,7 +69,7 @@ func TestValidateAppHostingNeedsARoute(t *testing.T) {
 }
 
 func TestValidateRouteIgnoredWithoutHosting(t *testing.T) {
-	cfg := AppConfig{ProvisionerMode: "k8s", DeploymentMode: "cloud"}
+	cfg := AppConfig{AppTmpPercent: 25, ProvisionerMode: "k8s", DeploymentMode: "cloud"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("hosting off must not require a route: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestValidateRouteIgnoredWithoutHosting(t *testing.T) {
 
 func TestAppDomainSettings(t *testing.T) {
 	base := func() AppConfig {
-		return AppConfig{AppHostingEnabled: true, AppDomain: "apps.example.com", AppIngressClass: "haproxy", AppIngressFromNamespace: "haproxy-controller"}
+		return AppConfig{AppTmpPercent: 25, AppHostingEnabled: true, AppDomain: "apps.example.com", AppIngressClass: "haproxy", AppIngressFromNamespace: "haproxy-controller"}
 	}
 	good := base()
 	good.AppDomainIssuer, good.AppDomainResolver = "letsencrypt-prod", "10.43.0.10:53"
