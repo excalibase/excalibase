@@ -62,7 +62,7 @@ export function PlanBudgetSection({ orgId }: { readonly orgId: string | undefine
   const over = data.left.cpuMilli < 0 || data.left.memoryBytes < 0 || data.left.diskBytes < 0 || data.left.services < 0;
   return (
     <Section title="Plan budget">
-      {over && <p role="status" className="text-amber-400">You are over your plan. What you run keeps running; nothing new can be added until you free some.</p>}
+      {over && <output className="block text-amber-400">You are over your plan. What you run keeps running; nothing new can be added until you free some.</output>}
       {dimensions(data.used, data.budget).map((dimension) => <Meter key={dimension.label} dimension={dimension} />)}
       <div className="flex justify-between gap-3 text-text-primary"><span>Services</span><span className="font-medium">{`${data.used.services} of ${data.budget.services}`}</span></div>
       <ServiceTable services={data.services} />
