@@ -121,6 +121,8 @@ type ProjectBudgetStore interface {
 	ReserveDatabaseSize(ctx context.Context, projectID string, next planbudget.Reservation) (planbudget.Reservation, error)
 	// RestoreDatabaseSize records a previous size again without admitting it: the cluster still runs at it.
 	RestoreDatabaseSize(ctx context.Context, projectID string, previous planbudget.Reservation) error
+	// BudgetActive says whether the budget admits anything now; off, a size is still recorded but never refused.
+	BudgetActive(ctx context.Context) bool
 }
 
 // FunctionsRuntimeStore admits a project's functions runtime the first time one

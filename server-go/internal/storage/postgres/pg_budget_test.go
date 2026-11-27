@@ -524,25 +524,50 @@ func TestCreateReadsEveryQuantityTheTierEditorAccepts(t *testing.T) {
 	}
 }
 
-// With the flag off a create is what main does: nothing is parsed, read or recorded.
-func TestFlagOffCreateNeverReadsOrRecordsAReservation(t *testing.T) {
+// toggleGate is a gate whose flag the test can flip, to follow an org across the flag going on, off and on again.
+type toggleGate struct{ on bool }
+
+func (g *toggleGate) gate(cpuMilli int) *planbudget.Gate {
+	numbers := config.PlanNumbers{CPUMilli: cpuMilli, MemoryMiB: 64 * 1024, DiskGiB: 500, MaxProjects: 50, MaxServices: 50}
+	return planbudget.NewGate(func(context.Context) bool { return g.on }, config.PlanBudgetConfig{Free: numbers, Standard: numbers})
+}
+
+// With the flag off a create is never refused for the budget, but it still records what it holds,
+// so the sum is right the day the flag comes on.
+func TestFlagOffCreateIsNeverRefusedButStillRecordsTheSize(t *testing.T) {
 	store := testStore(t)
-	store.SetPlanBudget(gateOf(1, 1, 1, 1, false))
+	flag := &toggleGate{}
+	store.SetPlanBudget(flag.gate(1))
 	org := orgOf(t, store, "flagoffcreate")
-	setTierRow(t, store, domain.Free, "lots", "plenty", "much", 1)
-	if err := store.Create(instanceRow("proj-off-one", org)); err != nil {
-		t.Fatalf("a tier the budget cannot read must not stop a create while the flag is off: %v", err)
+	for _, project := range []string{"proj-off-one", "proj-off-two"} {
+		if err := store.Create(instanceRow(project, org)); err != nil {
+			t.Fatalf("flag off admits whatever the budget says: %v", err)
+		}
 	}
-	if memory, copies := reservedOf(t, store, "proj-off-one"); memory != 0 || copies != 0 {
-		t.Fatalf("flag off records nothing: %d bytes, %d copies", memory, copies)
+	if memory, copies := reservedOf(t, store, "proj-off-two"); memory == 0 || copies != 1 {
+		t.Fatalf("flag off still records: %d bytes, %d copies", memory, copies)
 	}
 }
 
-func TestFlagOffAddingADatabaseNeverReadsOrRecordsAReservation(t *testing.T) {
+// A tier the budget cannot read must not stop a create while the flag is off; the database is left unrecorded
+// so the backfill sizes it when the flag comes on.
+func TestFlagOffCreateWithAnUnreadableTierSucceedsAndLeavesTheSizeUnrecorded(t *testing.T) {
 	store := testStore(t)
-	store.SetPlanBudget(gateOf(1, 1, 1, 1, false))
-	org := orgOf(t, store, "flagoffadd")
+	store.SetPlanBudget((&toggleGate{}).gate(1))
+	org := orgOf(t, store, "flagoffbad")
 	setTierRow(t, store, domain.Free, "lots", "plenty", "much", 1)
+	if err := store.Create(instanceRow("proj-off-bad", org)); err != nil {
+		t.Fatalf("flag off: %v", err)
+	}
+	if _, copies := reservedOf(t, store, "proj-off-bad"); copies != 0 {
+		t.Fatalf("an unreadable tier records nothing: %d", copies)
+	}
+}
+
+func TestFlagOffAddingADatabaseIsNeverRefusedAndRecordsTheSize(t *testing.T) {
+	store := testStore(t)
+	store.SetPlanBudget((&toggleGate{}).gate(1))
+	org := orgOf(t, store, "flagoffadd")
 	empty := instanceRow("proj-off-add", org)
 	empty.NoDatabase = true
 	if err := store.Create(empty); err != nil {
@@ -552,28 +577,44 @@ func TestFlagOffAddingADatabaseNeverReadsOrRecordsAReservation(t *testing.T) {
 	if err := store.RecordDatabaseChoices(empty, "ACTIVE"); err != nil {
 		t.Fatalf("flag off: %v", err)
 	}
-	if _, copies := reservedOf(t, store, "proj-off-add"); copies != 0 {
-		t.Fatalf("flag off records nothing: %d", copies)
+	if _, copies := reservedOf(t, store, "proj-off-add"); copies != 1 {
+		t.Fatalf("flag off still records the size: %d", copies)
 	}
 }
 
-func TestFlagOffResizeFunctionsAndBackfillTouchNothing(t *testing.T) {
+// The day the flag comes on, what happened while it was off must be in the sum: on, off, a resize, on.
+func TestAResizeWhileTheFlagIsOffCountsOnceTheFlagIsBackOn(t *testing.T) {
 	store := testStore(t)
-	store.SetPlanBudget(gateOf(1, 1, 1, 1, false))
+	flag := &toggleGate{on: true}
+	store.SetPlanBudget(flag.gate(1000))
+	org := orgOf(t, store, "toggle")
+	newDatabase(t, store, "proj-tg-one", org)
+	flag.on = false
+	big := planbudget.Reservation{PerCopy: planbudget.Size{CPUMilli: 900, MemoryBytes: 1 << 30, DiskBytes: freeDatabaseDisk}, Copies: 1}
+	if _, err := store.ReserveDatabaseSize(context.Background(), "proj-tg-one", big); err != nil {
+		t.Fatalf("flag off admits the resize: %v", err)
+	}
+	flag.on = true
+	err := store.Create(instanceRow("proj-tg-two", org))
+	if !isRefusal(err) {
+		t.Fatalf("the 0.9 vCPU the resize took must count, so a second 0.5 vCPU database is refused: %v", err)
+	}
+}
+
+func TestFunctionsAndPutBackWhileTheFlagIsOffAreStillRecorded(t *testing.T) {
+	store := testStore(t)
+	flag := &toggleGate{}
+	store.SetPlanBudget(flag.gate(100000))
 	org := orgOf(t, store, "flagoffrest")
 	newDatabase(t, store, "proj-off-rest", org)
 	ctx := context.Background()
-	previous, err := store.ReserveDatabaseSize(ctx, "proj-off-rest", planbudget.Reservation{PerCopy: planbudget.Size{CPUMilli: 9000}, Copies: 3})
-	if err != nil || previous != (planbudget.Reservation{}) {
-		t.Fatalf("%+v %v", previous, err)
-	}
-	if err := store.RestoreDatabaseSize(ctx, "proj-off-rest", planbudget.Reservation{PerCopy: planbudget.Size{CPUMilli: 9000}, Copies: 3}); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.EnsureFunctionsRuntime(ctx, "proj-off-rest"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkFunctionsRuntimes(ctx, []string{"proj-off-rest"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RestoreDatabaseSize(ctx, "proj-off-rest", planbudget.Reservation{PerCopy: planbudget.Size{CPUMilli: 700}, Copies: 2}); err != nil {
 		t.Fatal(err)
 	}
 	if n, failed, err := store.BackfillReservations(ctx); n != 0 || len(failed) != 0 || err != nil {
@@ -584,8 +625,8 @@ func TestFlagOffResizeFunctionsAndBackfillTouchNothing(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT reserved_cpu_milli, reserved_copies, has_functions_runtime FROM database_instances WHERE project_id = 'proj-off-rest'`).Scan(&cpu, &copies, &runtime); err != nil {
 		t.Fatal(err)
 	}
-	if cpu != 0 || copies != 0 || runtime {
-		t.Fatalf("flag off wrote %d %d %v", cpu, copies, runtime)
+	if cpu != 700 || copies != 2 || !runtime {
+		t.Fatalf("recorded %d %d %v", cpu, copies, runtime)
 	}
 }
 
@@ -652,5 +693,20 @@ func TestATierEditDoesNotChangeWhatARunningDatabaseHolds(t *testing.T) {
 	newDatabase(t, store, "proj-te-two", org)
 	if memory, _ := reservedOf(t, store, "proj-te-two"); memory != 8<<30 {
 		t.Fatalf("a new database takes the edited tier: %d", memory)
+	}
+}
+
+func TestAFunctionsRuntimeDeployedWhileTheFlagIsOffStillCountsWhenItComesOn(t *testing.T) {
+	store := testStore(t)
+	flag := &toggleGate{}
+	store.SetPlanBudget(flag.gate(100000))
+	org := orgOf(t, store, "fnoff")
+	newDatabase(t, store, "proj-fo-one", org)
+	if err := store.EnsureFunctionsRuntime(context.Background(), "proj-fo-one"); err != nil {
+		t.Fatal(err)
+	}
+	var runtime bool
+	if err := store.db.QueryRow(`SELECT has_functions_runtime FROM database_instances WHERE project_id = 'proj-fo-one'`).Scan(&runtime); err != nil || !runtime {
+		t.Fatalf("recorded %v %v", runtime, err)
 	}
 }

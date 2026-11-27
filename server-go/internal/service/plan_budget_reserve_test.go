@@ -13,6 +13,7 @@ import (
 type recordingReserver struct {
 	asked    []planbudget.Reservation
 	restored []planbudget.Reservation
+	inactive bool
 	held     planbudget.Reservation
 	err      error
 }
@@ -32,6 +33,8 @@ func (r *recordingReserver) RestoreDatabaseSize(_ context.Context, _ string, pre
 	r.held = previous
 	return nil
 }
+
+func (r *recordingReserver) BudgetActive(context.Context) bool { return !r.inactive }
 
 var standardPlan = config.TierConfig{CPU: "2", Memory: "4Gi", Instances: 3, StorageSize: "50Gi"}
 
@@ -95,5 +98,33 @@ func TestAProjectCreateThatDoesNotFitKeepsItsRefusal(t *testing.T) {
 	var got *planbudget.Refusal
 	if !errors.As(err, &got) || errors.Is(err, ErrProjectStoreUnavailable) {
 		t.Fatalf("a refusal is not a store failure: %v", err)
+	}
+}
+
+var unreadablePlan = config.TierConfig{CPU: "lots", Memory: "4Gi", Instances: 3, StorageSize: "50Gi"}
+
+// While the budget is off a plan it cannot read must not stop a resize; the database is marked unrecorded.
+func TestAnUnreadablePlanDoesNotStopAResizeWhileTheBudgetIsOff(t *testing.T) {
+	reserver := &recordingReserver{inactive: true, held: planbudget.Reservation{PerCopy: planbudget.Size{CPUMilli: 500}, Copies: 1}}
+	svc := &ProvisioningService{reserver: reserver}
+	putBack, err := svc.reserveResize(context.Background(), &domain.DatabaseInstance{ProjectID: "p"}, unreadablePlan, "5Gi")
+	if err != nil || putBack == nil {
+		t.Fatalf("flag off: %v", err)
+	}
+	if len(reserver.asked) != 1 || reserver.asked[0] != (planbudget.Reservation{}) {
+		t.Fatalf("the database is marked unrecorded: %+v", reserver.asked)
+	}
+	putBack()
+	if len(reserver.restored) != 1 || reserver.restored[0].PerCopy.CPUMilli != 500 {
+		t.Fatalf("a failed change still puts the old size back: %+v", reserver.restored)
+	}
+}
+
+func TestAnUnreadablePlanStopsAResizeWhileTheBudgetIsOn(t *testing.T) {
+	reserver := &recordingReserver{}
+	svc := &ProvisioningService{reserver: reserver}
+	putBack, err := svc.reserveResize(context.Background(), &domain.DatabaseInstance{ProjectID: "p"}, unreadablePlan, "5Gi")
+	if err == nil || putBack != nil || len(reserver.asked) != 0 {
+		t.Fatalf("flag on refuses what it cannot read: %v %+v", err, reserver.asked)
 	}
 }

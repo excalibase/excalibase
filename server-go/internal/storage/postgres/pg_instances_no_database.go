@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/planbudget"
@@ -85,16 +86,17 @@ func (s *Store) explainNoDatabaseWrite(res rowsAffecter, projectID, expected str
 // the size it reserves. A project that already holds a reservation (a retry of
 // the same add) is not charged twice.
 func (s *Store) admitAddedDatabase(ctx context.Context, tx *sql.Tx, inst *domain.DatabaseInstance, status string) (planbudget.Size, int64, error) {
-	if !s.budget.Active(ctx) {
-		return planbudget.Size{}, 0, nil
-	}
 	orgID, err := projectOrg(tx, inst.ProjectID)
 	if err != nil {
 		return planbudget.Size{}, 0, err
 	}
 	perCopy, copies, err := tierReservation(ctx, tx, inst.Tier, inst.StorageSize)
 	if err != nil {
-		return planbudget.Size{}, 0, err
+		if s.budget.Active(ctx) {
+			return planbudget.Size{}, 0, err
+		}
+		log.Printf("WARN: plan budget: %s is left unrecorded while the budget is off: %v", inst.ProjectID, err)
+		return planbudget.Size{}, 0, nil
 	}
 	adding := planbudget.ReservedDatabase(planbudget.Database{Status: status, PerCopy: perCopy, Copies: copies})
 	err = s.budget.Admit(ctx, tx, orgID, func(ctx context.Context) (planbudget.Size, error) {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -121,12 +122,13 @@ func releaseSettledReservation(q execQuerier, inst *domain.DatabaseInstance) err
 
 // admitInsert admits a new row's reservation, writes the row and records what it holds.
 func (s *Store) admitInsert(ctx context.Context, tx *sql.Tx, inst *domain.DatabaseInstance) error {
-	if !s.budget.Active(ctx) {
-		return insertInstance(tx, inst)
-	}
 	perCopy, copies, err := tierReservation(ctx, tx, inst.Tier, inst.StorageSize)
 	if err != nil {
-		return err
+		if s.budget.Active(ctx) {
+			return err
+		}
+		log.Printf("WARN: plan budget: %s is left unrecorded while the budget is off: %v", inst.ProjectID, err)
+		return insertInstance(tx, inst)
 	}
 	if inst.NoDatabase {
 		copies = 0
@@ -156,12 +158,11 @@ func (s *Store) admitStatusChange(ctx context.Context, tx *sql.Tx, orgID string,
 }
 
 // ReserveDatabaseSize admits a resize and records the new size, before the
-// cluster is touched. A resize down always passes. See storage.ProjectBudgetStore.
+// cluster is touched. A resize down always passes. The size is recorded even
+// while the budget is off, so the sum is right the day it comes on; only the
+// admission is skipped. See storage.ProjectBudgetStore.
 func (s *Store) ReserveDatabaseSize(ctx context.Context, projectID string, next planbudget.Reservation) (planbudget.Reservation, error) {
 	var previous planbudget.Reservation
-	if !s.budget.Active(ctx) {
-		return previous, nil
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return previous, fmt.Errorf("begin resize reservation: %w", err)
@@ -201,9 +202,6 @@ func (s *Store) ReserveDatabaseSize(ctx context.Context, projectID string, next 
 // EnsureFunctionsRuntime admits a project's functions runtime the first time it
 // is needed and records that it exists. Calling it again costs nothing.
 func (s *Store) EnsureFunctionsRuntime(ctx context.Context, projectID string) error {
-	if !s.budget.Active(ctx) {
-		return nil
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin functions runtime reservation: %w", err)
@@ -241,7 +239,7 @@ type BackfillFailure struct {
 }
 
 // BackfillReservations records the size of every database that has none yet,
-// from the plan it was created under, and returns how many it recorded and
+// from the plan as it is configured now, and returns how many it recorded and
 // which it could not. It writes the platform's own rows only: no cluster,
 // container or workload is read, resized or restarted. It does nothing while
 // the budget is off, and is safe to run on every boot.
@@ -291,9 +289,6 @@ func (s *Store) backfillOne(ctx context.Context, projectID string, tier domain.T
 // failed on the cluster. It is not admitted: the database is still running at
 // that size, so refusing it would leave the record smaller than the cluster.
 func (s *Store) RestoreDatabaseSize(ctx context.Context, projectID string, previous planbudget.Reservation) error {
-	if !s.budget.Active(ctx) {
-		return nil
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin restore of reservation: %w", err)
@@ -315,9 +310,6 @@ func (s *Store) RestoreDatabaseSize(ctx context.Context, projectID string, previ
 // MarkFunctionsRuntimes records that these projects already run functions, so
 // their runtimes count from the start. Like the backfill it only writes rows.
 func (s *Store) MarkFunctionsRuntimes(ctx context.Context, projectIDs []string) error {
-	if !s.budget.Active(ctx) {
-		return nil
-	}
 	for _, id := range projectIDs {
 		if _, err := s.db.ExecContext(ctx, `UPDATE database_instances SET has_functions_runtime = TRUE WHERE project_id = $1 AND NOT has_functions_runtime`, id); err != nil {
 			return fmt.Errorf("mark functions runtime of %s: %w", id, err)
@@ -343,3 +335,6 @@ func (s *Store) admitDiskChange(ctx context.Context, tx *sql.Tx, projectID, size
 		return after.held().Sub(row.held()), nil
 	})
 }
+
+// BudgetActive reports whether the budget admits anything now. See storage.ProjectBudgetStore.
+func (s *Store) BudgetActive(ctx context.Context) bool { return s.budget.Active(ctx) }
