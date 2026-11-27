@@ -1348,7 +1348,7 @@ can refuse), and the refusal for whatever is left.
   when the platform changes the parent, as the platform's role. The link is
   recorded child to parent, so the walk from the table does not see it; the probe
   looks at `pg_inherits` too. Detaching keeps the child's rows and columns, so
-  nothing of the customer's is lost. Views and other objects that read a platform
+  nothing of the customer's is lost. A customer table that references a platform table (a profiles table with ON DELETE CASCADE) is not a taint, since the cascade runs as that table's owner; a platform table that references a customer table still is. Views and other objects that read a platform
   table run as their own owner, not as the platform's role, so they are not repaired.
   Reclaimed tables get row-level security forced off, and every policy on them
   that depends on a customer object is dropped, so customer code never runs as

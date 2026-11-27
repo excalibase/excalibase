@@ -101,6 +101,7 @@ func typeOwnerOf(alias string) string {
 const attachedToPlatformTables = `
       SELECT t.oid AS rel, 'pg_class'::regclass AS classid, t.oid AS objid FROM pg_class t WHERE t.relnamespace = {{NS}} AND t.relkind IN ('r', 'p')
       UNION ALL SELECT g.tgrelid, 'pg_trigger'::regclass, g.oid FROM pg_trigger g JOIN pg_class t ON t.oid = g.tgrelid WHERE t.relnamespace = {{NS}}
+        AND NOT (g.tgisinternal AND EXISTS (SELECT 1 FROM pg_constraint fk WHERE fk.oid = g.tgconstraint AND fk.contype = 'f' AND fk.confrelid = g.tgrelid AND fk.conrelid <> g.tgrelid))
       UNION ALL SELECT pl.polrelid, 'pg_policy'::regclass, pl.oid FROM pg_policy pl JOIN pg_class t ON t.oid = pl.polrelid WHERE t.relnamespace = {{NS}}
       UNION ALL SELECT a.adrelid, 'pg_attrdef'::regclass, a.oid FROM pg_attrdef a JOIN pg_class t ON t.oid = a.adrelid WHERE t.relnamespace = {{NS}}
       UNION ALL SELECT k.conrelid, 'pg_constraint'::regclass, k.oid FROM pg_constraint k JOIN pg_class t ON t.oid = k.conrelid WHERE t.relnamespace = {{NS}}

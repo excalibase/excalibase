@@ -189,7 +189,7 @@ func TestPlatformSchemas_ACustomerChildOfAPlatformTableIsDetached(t *testing.T) 
 func TestPlatformSchemas_ACustomerPartitionOfAPlatformTableIsDetached(t *testing.T) {
 	c := newPlatformSchemaCase(t)
 	c.register(t)
-	mustExec(t, c.admin, `CREATE TABLE auth.parted (id int) PARTITION BY RANGE (id)`)
+	mustExec(t, c.admin, `CREATE TABLE auth.parted (id int PRIMARY KEY) PARTITION BY RANGE (id)`)
 	mustExec(t, c.admin, `CREATE TABLE public.part PARTITION OF auth.parted FOR VALUES FROM (0) TO (10)`)
 	mustExec(t, c.admin, `ALTER TABLE public.part OWNER TO excalibase_app`)
 	if !c.probe(t) {
@@ -198,5 +198,25 @@ func TestPlatformSchemas_ACustomerPartitionOfAPlatformTableIsDetached(t *testing
 	c.register(t)
 	if c.probe(t) || scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_inherits)`) {
 		t.Fatal("the partition is still attached after the repair")
+	}
+}
+
+// A customer table that references a platform table (the common profiles table
+// with ON DELETE CASCADE) is no taint: the internal triggers on the platform
+// table depend on the customer's constraint, but the cascade runs as the
+// referencing table's owner. A foreign key from a platform table to a customer
+// table stays tainted (the walk test above).
+func TestPlatformSchemas_ACustomerForeignKeyIntoAPlatformTableIsClean(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	mustExec(t, c.admin, `CREATE TABLE public.profiles (user_id int REFERENCES auth.users(id) ON DELETE CASCADE)`)
+	mustExec(t, c.admin, `ALTER TABLE public.profiles OWNER TO excalibase_app`)
+	if c.probe(t) {
+		t.Fatal("a customer profiles table makes the platform schema read as tainted")
+	}
+	c.register(t)
+	if !scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.profiles'::regclass AND contype = 'f')`) {
+		t.Fatal("the repair removed the customer's foreign key")
 	}
 }

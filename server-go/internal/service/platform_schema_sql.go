@@ -300,6 +300,6 @@ func foreignChildrenSQL() string {
 	return `(
     SELECT i.inhrelid AS child_oid, i.inhrelid::regclass::text AS child, i.inhparent::regclass::text AS parent, ch.relispartition AS is_partition
     FROM pg_inherits i JOIN pg_class p ON p.oid = i.inhparent JOIN pg_class ch ON ch.oid = i.inhrelid JOIN pg_roles r ON r.oid = ch.relowner
-    WHERE p.relnamespace = {{NS}} AND (ch.relnamespace NOT IN ` + platformSchemas + ` OR {{CUSTOMER_R}})
+    WHERE p.relnamespace = {{NS}} AND p.relkind IN ('r', 'p', 'f') AND ch.relkind IN ('r', 'p', 'f') AND (ch.relnamespace NOT IN ` + platformSchemas + ` OR {{CUSTOMER_R}})
   )`
 }
