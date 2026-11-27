@@ -26,7 +26,8 @@ function Meter({ dimension }: { readonly dimension: Dimension }) {
         <span>{dimension.label}</span>
         <span className="font-medium">{`${dimension.text(dimension.used)} of ${dimension.text(dimension.limit)}`}</span>
       </div>
-      <div role="meter" aria-label={dimension.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={share} className="h-2 overflow-hidden rounded bg-surface-secondary">
+      <meter aria-label={dimension.label} min={0} max={100} value={share} className="sr-only" />
+      <div aria-hidden="true" className="h-2 overflow-hidden rounded bg-surface-secondary">
         <div className={share >= 100 ? 'h-full bg-red-500' : 'h-full bg-purple-500'} style={{ width: `${share}%` }} />
       </div>
     </div>

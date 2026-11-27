@@ -352,7 +352,7 @@ func TestThePlanBudgetRouteNeedsTheCloudAsWellAsTheFlag(t *testing.T) {
 	} {
 		router, token := darkFeatureRouterIn(t, c.mode, c.on...)
 		w := probeDark(router, probe, token)
-		if unmounted := w.Code == http.StatusNotFound && w.Body.String() == unmountedBody; unmounted == c.mounted {
+		if (w.Code == http.StatusNotFound && w.Body.String() == unmountedBody) == c.mounted {
 			t.Errorf("%s: answered %d %q, mounted should be %v", c.name, w.Code, w.Body.String(), c.mounted)
 		}
 	}

@@ -19,7 +19,7 @@ describe('Plan budget on the Usage page', () => {
     expect(section.getByText('1 GiB of 4 GiB')).toBeInTheDocument();
     expect(section.getByText('5 GiB of 20 GiB')).toBeInTheDocument();
     expect(section.getByText('2 of 6')).toBeInTheDocument();
-    expect(section.getByRole('meter', { name: 'CPU' })).toHaveAttribute('aria-valuenow', '25');
+    expect(section.getByRole('meter', { name: 'CPU' })).toHaveAttribute('value', '25');
     expect(section.getByText('shop')).toBeInTheDocument();
     expect(section.getByText('web')).toBeInTheDocument();
   });

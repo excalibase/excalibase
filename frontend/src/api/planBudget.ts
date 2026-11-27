@@ -59,8 +59,16 @@ export interface BudgetRefusal {
   dimension: string;
 }
 
+interface RefusalBody {
+  code?: unknown;
+  error?: unknown;
+  dimension?: unknown;
+}
+
+const textOf = (value: unknown): string => (typeof value === 'string' ? value : '');
+
 export function budgetRefusal(error: unknown): BudgetRefusal | undefined {
-  const response = (error as { response?: { status?: number; data?: { code?: unknown; error?: unknown; dimension?: unknown } } } | null | undefined)?.response;
+  const response = (error as { response?: { status?: number; data?: RefusalBody } } | null | undefined)?.response;
   if (response?.status !== 409 || response.data?.code !== 'plan_budget_exceeded') return undefined;
-  return { message: String(response.data.error ?? ''), dimension: String(response.data.dimension ?? '') };
+  return { message: textOf(response.data.error), dimension: textOf(response.data.dimension) };
 }
