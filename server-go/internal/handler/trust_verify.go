@@ -196,6 +196,8 @@ func callbackOutcome(attempt trust.Attempt, err error) string {
 		return "too_soon"
 	case errors.Is(err, trust.ErrAlreadyVerified):
 		return "passed"
+	case errors.Is(err, trust.ErrAdminHold):
+		return "held"
 	case err != nil:
 		log.Printf("ERROR: trust verify complete: %v", err)
 		return "error"

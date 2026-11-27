@@ -193,3 +193,12 @@ func TestExplainRebuildsTheReasonFromStoredEvidence(t *testing.T) {
 		t.Errorf("check failed: %v", got)
 	}
 }
+
+// A hold set by an administrator after Begin (a race) is met again inside the store's transaction.
+func TestCompleteReportsAnAdminHoldTheStoreFinds(t *testing.T) {
+	store := &fakeVerifications{recordErr: ErrAdminHold}
+	profile := &fakeProfile{evidence: Evidence{GitHubID: "4242", AccountAgeDays: 500, PublicEvents: 9}}
+	if _, err := newVerifier(profile, store, on()).Complete(context.Background(), "u1", "tok"); !errors.Is(err, ErrAdminHold) {
+		t.Fatalf("got %v, want ErrAdminHold", err)
+	}
+}

@@ -56,12 +56,17 @@ func (v verificationStore) Record(ctx context.Context, attempt trust.Attempt) er
 	if err := lockUserTrust(ctx, tx, attempt.UserID); err != nil {
 		return err
 	}
-	current, err := storedTrustState(ctx, tx, attempt.UserID)
+	current, method, err := storedTrust(ctx, tx, attempt.UserID)
 	if err != nil {
 		return fmt.Errorf("record verification: read decision: %w", err)
 	}
 	if current == trust.Full {
 		return trust.ErrAlreadyVerified
+	}
+	// A hold an administrator set after Begin looked is met here, under the
+	// account's lock: nothing is written, a failure does not overwrite it either.
+	if method == trust.MethodAdmin {
+		return trust.ErrAdminHold
 	}
 	var claimErr error
 	if attempt.Passed {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -143,5 +144,24 @@ func TestGitHubEvidenceFailsWhenGitHubDoes(t *testing.T) {
 	svc := New([]Provider{GitHub(Endpoints{APIBase: server.URL})}, nil, nil, callbackBase, server.Client())
 	if _, err := svc.Evidence(context.Background(), "tok"); err == nil {
 		t.Fatal("a refused API call counted as evidence")
+	}
+}
+
+// A state that carries the verify prefix but was not saved as a verification, or names no account, finishes nothing.
+func TestFinishVerifyRefusesAMalformedRecord(t *testing.T) {
+	cases := map[string]domain.OAuthState{
+		"a sign-in record under a verify-looking state": {Provider: "github", CodeVerifier: "cv", Purpose: "", UserID: "user-7"},
+		"another purpose":  {Provider: "github", CodeVerifier: "cv", Purpose: "invite", UserID: "user-7"},
+		"no account":       {Provider: "github", CodeVerifier: "cv", Purpose: PurposeVerify, UserID: ""},
+		"another provider": {Provider: "google", CodeVerifier: "cv", Purpose: PurposeVerify, UserID: "user-7"},
+	}
+	for name, record := range cases {
+		fake := newFakeProvider(t)
+		svc, states := newService(t, fake, configured())
+		state := verifyStatePrefix + "forged"
+		states.records[hashState(state)] = memState{state: record, expires: time.Now().Add(time.Minute)}
+		if _, err := svc.FinishVerify(context.Background(), state, state, "the-code"); !errors.Is(err, ErrStateInvalid) {
+			t.Errorf("%s: err = %v, want ErrStateInvalid", name, err)
+		}
 	}
 }

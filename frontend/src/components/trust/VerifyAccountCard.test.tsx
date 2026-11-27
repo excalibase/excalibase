@@ -100,3 +100,10 @@ describe('Verify your account card', () => {
     expect(assign).not.toHaveBeenCalled();
   });
 });
+
+describe('Verify your account card after an admin hold', () => {
+  test('says an administrator holds the account when GitHub sends the browser back with held', async () => {
+    mount(limited(), { route: '/?verify=held' });
+    expect(await screen.findByRole('status')).toHaveTextContent('An administrator has limited this account');
+  });
+});

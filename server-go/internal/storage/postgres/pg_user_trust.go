@@ -49,14 +49,14 @@ func (s *Store) SaveUserTrust(ctx context.Context, record trust.Record, actor st
 	return tx.Commit()
 }
 
-// storedTrustState is the account's state inside a transaction, or "" when it has none.
-func storedTrustState(ctx context.Context, tx *sql.Tx, userID string) (trust.State, error) {
-	var state sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT state FROM user_trust WHERE user_id = $1`, userID).Scan(&state)
+// storedTrust is the account's decision inside a transaction, with empty fields when it has none.
+func storedTrust(ctx context.Context, tx *sql.Tx, userID string) (trust.State, trust.Method, error) {
+	var state, method sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT state, method FROM user_trust WHERE user_id = $1`, userID).Scan(&state, &method)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
+		return "", "", err
 	}
-	return trust.State(state.String), nil
+	return trust.State(state.String), trust.Method(method.String), nil
 }
 
 // writeUserTrust upserts the decision and appends its audit entry inside a

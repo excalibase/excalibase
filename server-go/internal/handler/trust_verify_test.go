@@ -230,6 +230,7 @@ func TestCallbackOutcomes(t *testing.T) {
 		{"cancelled at GitHub", &fakeVerify{}, &fakeGitHubFlow{user: "u1"}, "v.abc", url.Values{"error": {"access_denied"}}, "cancelled"},
 		{"state does not match the browser", &fakeVerify{}, &fakeGitHubFlow{user: "u1"}, "other", nil, "state"},
 		{"too soon", &fakeVerify{completeErr: &trust.TooSoonError{RetryAfter: time.Minute}}, &fakeGitHubFlow{user: "u1"}, "v.abc", nil, "too_soon"},
+		{"an admin hold set meanwhile", &fakeVerify{completeErr: trust.ErrAdminHold}, &fakeGitHubFlow{user: "u1"}, "v.abc", nil, "held"},
 		{"flag turned off meanwhile", &fakeVerify{completeErr: trust.ErrVerifyOff}, &fakeGitHubFlow{user: "u1"}, "v.abc", nil, "off"},
 		{"store error", &fakeVerify{completeErr: errors.New("db down")}, &fakeGitHubFlow{user: "u1"}, "v.abc", nil, "error"},
 	}

@@ -11,6 +11,7 @@ const RETURNED: Record<string, string> = {
   too_soon: 'Verification was tried a moment ago. Wait a few minutes and try again.',
   error: 'Something went wrong on our side. Try again in a few minutes.',
   off: 'Verification is not available right now.',
+  held: 'An administrator has limited this account. Contact support.',
 };
 
 function rule(policy: TrustStatus['policy']): string {

@@ -202,3 +202,32 @@ func TestTheHolderOfAClaimCanVerifyAgainAfterItsDecisionWasLowered(t *testing.T)
 		t.Errorf("decision %+v", got)
 	}
 }
+
+// An administrator's hold set between Begin and Record is met inside the locked
+// transaction: a pass does not lift it and a failure does not overwrite it.
+func TestRecordRefusesAnAdminHoldAndLeavesItAlone(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	newUsers(t, store, "held")
+	if err := store.SaveUserTrust(ctx, trustRecord("held", trust.Limited, trust.MethodAdmin, trust.ReasonAdminOverride), "admin-1"); err != nil {
+		t.Fatal(err)
+	}
+	fail := trust.Attempt{UserID: "held", CheckedAt: time.Now().UTC(), Reason: trust.ReasonGitHubInactive, Evidence: trust.Evidence{GitHubID: "2020"}}
+	for name, attempt := range map[string]trust.Attempt{"a pass": passing("held", "2020"), "a failure": fail} {
+		if err := verifications(store).Record(ctx, attempt); !errors.Is(err, trust.ErrAdminHold) {
+			t.Fatalf("%s: err = %v, want ErrAdminHold", name, err)
+		}
+		got, _ := store.FindUserTrust(ctx, "held")
+		if got.State != trust.Limited || got.Method != trust.MethodAdmin || got.Reason != trust.ReasonAdminOverride {
+			t.Fatalf("%s overwrote the hold: %+v", name, got)
+		}
+	}
+	var claims int
+	_ = store.db.QueryRow(`SELECT count(*) FROM trust_claims WHERE claim_key = 'github:2020'`).Scan(&claims)
+	if claims != 0 {
+		t.Error("a held account claimed a GitHub account")
+	}
+	if latest, _ := verifications(store).Latest(ctx, "held"); latest != nil {
+		t.Errorf("a refused attempt was recorded: %+v", latest)
+	}
+}
