@@ -52,6 +52,7 @@ func (s *Store) LinkStudioIdentity(ctx context.Context, provider, subject, userI
 	defer func() { _ = tx.Rollback() }()
 	// The lock a grant holds while it reads the person's identities: a link either lands before the grant
 	// reads them, and is claimed by it, or after the grant, and claims itself below.
+	// It is taken even with credits off: a link is rare and brief, and a flag check here would race the flag.
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, creditGrantLockSpace); err != nil {
 		return err
 	}
