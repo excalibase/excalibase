@@ -294,7 +294,7 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 // implement the two stores separately rather than as one platform store.
 func newOrgHandler2(orgs *fakestore.Orgs, users *fakestore.Users, instances *fakestore.Instances) *handler.OrgHandler {
 	h := handler.NewOrgHandler(orgs, users)
-	h.SetInstanceStore(instances)
+	configureOrgHandler(h, instances, goodStandingGuard(instances), nil, nil)
 	return h
 }
 
