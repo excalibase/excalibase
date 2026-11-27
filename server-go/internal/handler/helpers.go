@@ -15,6 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 	"github.com/go-sql-driver/mysql"
 	"github.com/lib/pq"
 )
@@ -111,6 +112,24 @@ func writeOrgGuardError(w http.ResponseWriter, err error) {
 	}
 	log.Printf("ERROR: suspended-owner check: %v", err)
 	httpError(w, orgguard.ErrCheckUnavailable.Error(), http.StatusServiceUnavailable)
+}
+
+// isStartRefusal is a refusal of the checks that run before compute starts:
+// a suspended owner, or an owner who is not verified (EXC-899).
+func isStartRefusal(err error) bool {
+	return orgguard.IsRefusal(err) || trust.IsRefusal(err)
+}
+
+// writeStartRefusal answers a refusal isStartRefusal named.
+func writeStartRefusal(w http.ResponseWriter, err error) {
+	if trust.IsRefusal(err) {
+		if !errors.Is(err, trust.ErrVerificationRequired) {
+			log.Printf("ERROR: verification check: %v", err)
+		}
+		trust.WriteRefusal(w, err)
+		return
+	}
+	writeOrgGuardError(w, err)
 }
 
 func httpError(w http.ResponseWriter, msg string, code int) {

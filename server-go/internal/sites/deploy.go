@@ -40,6 +40,9 @@ func (s *Service) deployable(ctx context.Context, request DeployRequest) (*Site,
 	if err := s.requireKind(ctx, site.Kind); err != nil {
 		return nil, Limits{}, err
 	}
+	if err := s.requireTrusted(ctx, request.ProjectID, site.Kind); err != nil {
+		return nil, Limits{}, err
+	}
 	limits, err := s.limitsFor(ctx, request.ProjectID)
 	if err != nil {
 		return nil, Limits{}, err
@@ -165,6 +168,9 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 		return nil, ErrDeployNotServable
 	}
 	if err := s.requireKind(ctx, target.Kind); err != nil {
+		return nil, err
+	}
+	if err := s.requireTrusted(ctx, projectID, target.Kind); err != nil {
 		return nil, err
 	}
 	limits, err := s.limitsFor(ctx, projectID)

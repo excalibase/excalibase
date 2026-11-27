@@ -11,6 +11,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
@@ -64,6 +65,7 @@ type appTemplateArgs struct {
 	vault    vaultclient.VaultClient
 	claimer  service.ProjectOperationClaimer
 	flags    features.Flags
+	gate     *trust.Gate
 }
 
 // newAppTemplateHandler serves the built-in templates; a built-in that does not parse stops the server.
@@ -76,7 +78,7 @@ func newAppTemplateHandler(a appTemplateArgs) *handler.AppTemplateHandler {
 	deps := service.AppTemplateDeps{
 		Apps: apphost.NewPostgresAppStore(a.sqlStore.DB()), Deployer: a.deployer, Projects: a.projects,
 		Plans: plans, Limits: service.NewAppLimits(plans, a.tiers), Disks: a.disks, Budget: a.budget,
-		Claimer: a.claimer, Flags: a.flags, Guard: newOrgGuard(a.projects, a.sqlStore),
+		Claimer: a.claimer, Flags: a.flags, Guard: newOrgGuard(a.projects, a.sqlStore), ContainerGate: a.gate,
 	}
 	// Left nil, not a typed nil, so the service sees "no network" and "no vault".
 	if a.network != nil {

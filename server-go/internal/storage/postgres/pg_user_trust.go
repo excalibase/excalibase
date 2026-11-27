@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/trust"
 )
@@ -113,4 +114,30 @@ func (s *Store) RecordBackfill(ctx context.Context, run trust.BackfillRun) error
 		return fmt.Errorf("record trust backfill: %w", err)
 	}
 	return nil
+}
+
+// backfillActor is the audit actor of the grandfather backfill.
+const backfillActor = "backfill"
+
+// GrandfatherUsersBefore gives every account created before cutoff that holds
+// no decision a full one, with its audit entry, and says how many. An account
+// with a decision (an admin's limit, say) is left alone, and one created on or
+// after cutoff is not touched: it must verify.
+func (s *Store) GrandfatherUsersBefore(ctx context.Context, cutoff time.Time) (int, error) {
+	result, err := s.db.ExecContext(ctx, `
+		WITH granted AS (
+			INSERT INTO user_trust (user_id, state, method, reason, check_version)
+			SELECT id, 'full', 'grandfathered', 'grandfathered', 1 FROM users WHERE created_at < $1
+			ON CONFLICT (user_id) DO NOTHING
+			RETURNING user_id)
+		INSERT INTO trust_audit (user_id, from_state, to_state, method, reason, actor)
+		SELECT user_id, NULL, 'full', 'grandfathered', 'grandfathered', $2 FROM granted`, cutoff, backfillActor)
+	if err != nil {
+		return 0, fmt.Errorf("grandfather users: %w", err)
+	}
+	granted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("grandfather users: %w", err)
+	}
+	return int(granted), nil
 }

@@ -146,13 +146,16 @@ func TestAbuseAnalyticsSplitsRefusalsAndFindsTheStillActive(t *testing.T) {
 func TestTrafficAnalyticsSumsEachProjectsDailyPeak(t *testing.T) {
 	store, console := analyticsFixture(t, nil)
 	ctx := context.Background()
+	// Pinned to midday of a UTC day so a run just after midnight cannot split
+	// the samples of one day across two days.
+	midday := time.Now().UTC().Truncate(day).Add(-day).Add(12 * time.Hour)
 	for _, sample := range []struct {
 		project string
-		ago     time.Duration
+		at      time.Time
 		active  int
-	}{{"p1", day, 10}, {"p1", day + time.Hour, 14}, {"p2", day, 6}, {"p2", 10 * day, 99}} {
+	}{{"p1", midday, 10}, {"p1", midday.Add(-time.Hour), 14}, {"p2", midday, 6}, {"p2", midday.Add(-9 * day), 99}} {
 		if _, err := store.db.ExecContext(ctx, `INSERT INTO database_metrics (project_id, timestamp, active_connections) VALUES ($1, $2, $3)`,
-			sample.project, time.Now().Add(-sample.ago), sample.active); err != nil {
+			sample.project, sample.at, sample.active); err != nil {
 			t.Fatal(err)
 		}
 	}

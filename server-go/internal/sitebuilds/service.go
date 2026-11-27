@@ -19,6 +19,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
 	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/sites"
+	"github.com/excalibase/provisioning-poc/internal/trust"
 )
 
 const (
@@ -63,6 +64,8 @@ type Options struct {
 	Previews PreviewSites
 	// OrgGuard stops builds of an organisation whose owner is abuse-suspended (EXC-843); nil allows all.
 	OrgGuard *orgguard.Guard
+	// ContainerGate stops builds of a limited (unverified) owner: a build runs tenant code in a Job (EXC-899); nil allows all.
+	ContainerGate *trust.Gate
 }
 
 // MembershipChecker answers who a project member is and whether they still hold the developer rung.
@@ -410,18 +413,40 @@ func (s *Service) enqueue(ctx context.Context, connection connected, commit gitp
 	return build, created, nil
 }
 
-// refuseSuspended stops a build of an organisation whose owner is suspended
-// before it is queued, so no Job is made. A push or preview is recorded FAILED
-// with the reason, so it is not lost silently; anything else is refused.
+// checkStart asks whether a build of the project may start: its owner must not
+// be suspended, and must be verified.
+func (o Options) checkStart(ctx context.Context, projectID string) error {
+	if err := o.OrgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
+	return o.ContainerGate.CheckProject(ctx, projectID)
+}
+
+// refusedReason is the sentence a recorded refusal says, or "" for a refusal
+// that is not final (an unreadable check).
+func refusedReason(err error) string {
+	switch {
+	case errors.Is(err, orgguard.ErrOrgSuspended):
+		return orgguard.Message
+	case errors.Is(err, trust.ErrVerificationRequired):
+		return err.Error()
+	}
+	return ""
+}
+
+// refuseSuspended stops a build of an organisation whose owner is suspended or
+// limited before it is queued, so no Job is made. A push or preview is recorded
+// FAILED with the reason, so it is not lost silently; anything else is refused.
 func (s *Service) refuseSuspended(ctx context.Context, build *Build) error {
-	err := s.options.OrgGuard.CheckProject(ctx, build.ProjectID)
+	err := s.options.checkStart(ctx, build.ProjectID)
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, orgguard.ErrOrgSuspended) || (build.Trigger != TriggerPush && build.Trigger != TriggerPreview) {
+	reason := refusedReason(err)
+	if reason == "" || (build.Trigger != TriggerPush && build.Trigger != TriggerPreview) {
 		return err
 	}
-	build.Status, build.FailureKind, build.FailureReason = StatusFailed, FailPlatform, orgguard.Message
+	build.Status, build.FailureKind, build.FailureReason = StatusFailed, FailPlatform, reason
 	return nil
 }
 

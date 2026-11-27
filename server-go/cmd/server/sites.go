@@ -53,7 +53,7 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 	service, err := sites.NewService(store, publisher, origins, sites.Options{
 		BaseDomain: cfg.Sites.BaseDomain, Hostnames: store, DeployLimits: limits, CustomDomains: customDomainOptions(cfg),
 		Projects: projectGate{instances: sqlStore, claimer: claimer}, Previews: previewStore(cfg, store), MaxPreviews: cfg.Sites.MaxPreviews,
-		PreviewsDark: previewsDark(cfg), OrgGuard: newOrgGuard(sqlStore, sqlStore),
+		PreviewsDark: previewsDark(cfg), OrgGuard: newOrgGuard(sqlStore, sqlStore), ContainerGate: newTrustGate(cfg, sqlStore, sqlStore),
 		// Server sites keep their code beside the deploy records (EXC-661).
 		Flags: cfg.Features(), Code: store, OutboundWorker: cfg.Sites.OutboundWorker, Outbound: outbound, APIBaseURL: siteAPIBaseURL(cfg), Secrets: secrets,
 	})
