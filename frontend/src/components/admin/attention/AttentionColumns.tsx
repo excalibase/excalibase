@@ -40,7 +40,7 @@ function Runs<T>({ runs, tone, Row, idOf }: { readonly runs: Run<T>[]; readonly 
   return runs.map((run, index) => (
     <li key={`${run.key}-${index}`} className="space-y-0.5">
       {run.items.length > 1 && run.key && <RunLabel text={run.key} count={run.items.length} tone={tone} />}
-      <ul role="list" className="space-y-0.5">
+      <ul className="space-y-0.5">
         {run.items.map((item) => <Row key={idOf(item)} item={item} showReason={run.items.length === 1} />)}
       </ul>
     </li>

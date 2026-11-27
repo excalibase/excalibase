@@ -44,7 +44,7 @@ export function InfiniteColumn(props: InfiniteColumnProps) {
     <section className="bg-bg-secondary border border-border-primary rounded-lg p-3 min-w-0">
       <h3 className="text-xs uppercase tracking-wide text-text-tertiary mb-2">{total === undefined ? title : `${title} · ${total}`}</h3>
       <div ref={scroller} className="max-h-[22rem] overflow-y-auto overscroll-contain">
-        <ul role="list" aria-label={title} aria-busy={isLoading || isLoadingMore} className="space-y-1">
+        <ul aria-label={title} aria-busy={isLoading || isLoadingMore} className="space-y-1">
           {children}
         </ul>
         {empty && <p className="text-sm text-text-tertiary">{emptyText}</p>}
