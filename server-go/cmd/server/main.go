@@ -2553,7 +2553,7 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 // mountOrgAndAdminRoutes mounts /api/orgs and /api/admin.
 func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 	creditsGate := mountCredits(d)
-	mountPlanBudget(d)
+	mountPlanBudget(cfg, d)
 	if d.creditsHandler != nil {
 		r.Route("/api/credits", func(r chi.Router) {
 			r.Use(auth.RequireAuth)

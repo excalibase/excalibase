@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -108,10 +109,24 @@ func newPlanBudgetHandler(sqlStore storage.PlatformStore) *handler.PlanBudgetHan
 	return handler.NewPlanBudgetHandler(source, sqlStore)
 }
 
-// mountPlanBudget adds the budget read to the org routes, behind the planbudget flag.
-func mountPlanBudget(d *handlerDeps) {
+// mountPlanBudget adds the budget read to the org routes, while the budget applies: the flag is on and this is
+// the cloud. A self-hosted install enforces no budget, so it shows none.
+func mountPlanBudget(cfg config.AppConfig, d *handlerDeps) {
 	if d.planBudgetHandler != nil && d.orgHandler != nil {
-		d.orgHandler.SetPlanBudget(d.planBudgetHandler, features.Require(d.features, features.PlanBudget))
+		d.orgHandler.SetPlanBudget(d.planBudgetHandler, planBudgetGateFor(cfg, d.features))
+	}
+}
+
+// planBudgetGateFor answers 404 for the budget route unless the budget applies, decided per request.
+func planBudgetGateFor(cfg config.AppConfig, flags features.Flags) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !cfg.IsCloud() || !features.Enabled(r.Context(), flags, features.PlanBudget) {
+				http.NotFound(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
