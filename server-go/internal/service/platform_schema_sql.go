@@ -21,7 +21,7 @@ func platformSchemaScripts() (lockdown, quarantine, refusal string) {
 // schemaScoped fills the fragments that depend on which schema is read.
 func schemaScoped(namespace string) *strings.Replacer {
 	scoped := strings.NewReplacer("{{NS}}", namespace, "{{QNS}}", "to_regnamespace(quarantine)")
-	return strings.NewReplacer("{{OWNED}}", scoped.Replace(ownedObjectsSQL()), "{{TAINTED_TABLES}}", scoped.Replace(taintedTables),
+	return strings.NewReplacer("{{OWNED}}", scoped.Replace(ownedObjectsSQL()), "{{TAINTED_TABLES}}", scoped.Replace(taintedTables), "{{FOREIGN_CHILDREN}}", scoped.Replace(foreignChildrenSQL()),
 		"{{LAST_TRY}}", strconv.Itoa(quarantineNameTries-1), "{{GRANTED}}", scoped.Replace(grantedOnSchema), "{{REVOKE_HELPER}}", revokeHelperSQL,
 		"{{STAGE_LOCKDOWN}}", stageNotice("lockdown"), "{{STAGE_QUARANTINE}}", stageNotice("quarantine"), "{{STAGE_REFUSAL}}", stageNotice("refusal"), "{{MOVABLE}}", scoped.Replace(movableObjectsSQL()), "{{MOVABLE_IN_QUARANTINE}}", scoped.Replace(movableWithTargetsSQL()))
 }
@@ -85,6 +85,13 @@ BEGIN
       WHERE c.relnamespace = schema_oid AND w.rulename <> '_RETURN' AND NOT {{CUSTOMER_R}}
     LOOP
       EXECUTE format('DROP RULE %I ON %s', item.rulename, item.relation);
+    END LOOP;
+    FOR item IN SELECT * FROM {{FOREIGN_CHILDREN}} fc LOOP
+      IF item.is_partition THEN
+        EXECUTE format('ALTER TABLE %s DETACH PARTITION %s', item.parent, item.child);
+      ELSE
+        EXECUTE format('ALTER TABLE %s NO INHERIT %s', item.child, item.parent);
+      END IF;
     END LOOP;
 
     FOR item IN
@@ -234,6 +241,7 @@ const platformSchemaDriftProbeTemplate = `SELECT COALESCE(
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND w.rulename <> '_RETURN' AND NOT {{CUSTOMER_R}})
       OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
                  WHERE c.relnamespace = to_regnamespace(v.schema_name) AND NOT {{CUSTOMER_R}} AND c.oid IN {{TAINTED_TABLES}})
+      OR EXISTS (SELECT 1 FROM {{FOREIGN_CHILDREN}} fc)
       OR EXISTS (SELECT 1 FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a LEFT JOIN pg_roles r ON r.oid = a.grantee
                  JOIN pg_roles dr ON dr.oid = d.defaclrole
                  WHERE (d.defaclnamespace = to_regnamespace(v.schema_name) OR (d.defaclnamespace = 0 AND NOT {{CUSTOMER_D}}))
@@ -282,3 +290,16 @@ func stageNotice(name string) string {
 
 // repairStageMarker starts the notice each script of a registration prints.
 const repairStageMarker = "excalibase-repair-stage:"
+
+// foreignChildrenSQL lists the tables outside the platform's hands that inherit
+// from, or are partitions of, a table in {{NS}}. A trigger on such a child fires
+// when the platform changes the parent, as the platform's role, and the link is
+// recorded child to parent, so the walk from the table never sees it.
+func foreignChildrenSQL() string {
+	platformSchemas := "(SELECT oid FROM pg_namespace WHERE nspname = ANY (" + textArraySQL(platformSchemaNames) + "))"
+	return `(
+    SELECT i.inhrelid AS child_oid, i.inhrelid::regclass::text AS child, i.inhparent::regclass::text AS parent, ch.relispartition AS is_partition
+    FROM pg_inherits i JOIN pg_class p ON p.oid = i.inhparent JOIN pg_class ch ON ch.oid = i.inhrelid JOIN pg_roles r ON r.oid = ch.relowner
+    WHERE p.relnamespace = {{NS}} AND (ch.relnamespace NOT IN ` + platformSchemas + ` OR {{CUSTOMER_R}})
+  )`
+}

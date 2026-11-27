@@ -1343,6 +1343,13 @@ can refuse), and the refusal for whatever is left.
   and rules. Members of a superuser-owned extension are exempt. The probe and the
   repair use the same walk, so a table the probe calls clean cannot run customer
   code. A customer publication that includes a platform table taints it too.
+  A customer table that inherits a platform table, or is a partition of one, is
+  detached (`NO INHERIT` / `DETACH PARTITION`), because its triggers would fire
+  when the platform changes the parent, as the platform's role. The link is
+  recorded child to parent, so the walk from the table does not see it; the probe
+  looks at `pg_inherits` too. Detaching keeps the child's rows and columns, so
+  nothing of the customer's is lost. Views and other objects that read a platform
+  table run as their own owner, not as the platform's role, so they are not repaired.
   Reclaimed tables get row-level security forced off, and every policy on them
   that depends on a customer object is dropped, so customer code never runs as
   `auth_admin`.

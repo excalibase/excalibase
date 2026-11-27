@@ -1,0 +1,45 @@
+(
+    SELECT c.relowner AS owner FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'c')
+    UNION ALL SELECT p.proowner AS owner FROM pg_proc p WHERE p.pronamespace = {{NS}}
+    UNION ALL SELECT (CASE WHEN t.typtype = 'm' THEN coalesce((SELECT rt.typowner FROM pg_range g JOIN pg_type rt ON rt.oid = g.rngtypid
+      WHERE g.rngmultitypid = t.oid), t.typowner) ELSE t.typowner END) AS owner FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
+    UNION ALL SELECT op.oprowner AS owner FROM pg_operator op WHERE op.oprnamespace = {{NS}}
+    UNION ALL SELECT opf.opfowner AS owner FROM pg_opfamily opf WHERE opf.opfnamespace = {{NS}}
+    UNION ALL SELECT opc.opcowner AS owner FROM pg_opclass opc WHERE opc.opcnamespace = {{NS}}
+    UNION ALL SELECT col.collowner AS owner FROM pg_collation col WHERE col.collnamespace = {{NS}}
+    UNION ALL SELECT cv.conowner AS owner FROM pg_conversion cv WHERE cv.connamespace = {{NS}}
+    UNION ALL SELECT tsc.cfgowner AS owner FROM pg_ts_config tsc WHERE tsc.cfgnamespace = {{NS}}
+    UNION ALL SELECT tsd.dictowner AS owner FROM pg_ts_dict tsd WHERE tsd.dictnamespace = {{NS}}
+    UNION ALL SELECT ext.extowner AS owner FROM pg_extension ext WHERE ext.extnamespace = {{NS}}
+    UNION ALL SELECT st.stxowner AS owner FROM pg_statistic_ext st WHERE st.stxnamespace = {{NS}}
+  )
+=====
+(
+    SELECT c.relowner AS owner FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind = 'c'
+    UNION ALL SELECT p.proowner AS owner FROM pg_proc p WHERE p.pronamespace = {{NS}}
+    UNION ALL SELECT (CASE WHEN t.typtype = 'm' THEN coalesce((SELECT rt.typowner FROM pg_range g JOIN pg_type rt ON rt.oid = g.rngtypid
+      WHERE g.rngmultitypid = t.oid), t.typowner) ELSE t.typowner END) AS owner FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
+    UNION ALL SELECT op.oprowner AS owner FROM pg_operator op WHERE op.oprnamespace = {{NS}}
+    UNION ALL SELECT opf.opfowner AS owner FROM pg_opfamily opf WHERE opf.opfnamespace = {{NS}}
+    UNION ALL SELECT opc.opcowner AS owner FROM pg_opclass opc WHERE opc.opcnamespace = {{NS}}
+    UNION ALL SELECT col.collowner AS owner FROM pg_collation col WHERE col.collnamespace = {{NS}}
+    UNION ALL SELECT cv.conowner AS owner FROM pg_conversion cv WHERE cv.connamespace = {{NS}}
+    UNION ALL SELECT tsc.cfgowner AS owner FROM pg_ts_config tsc WHERE tsc.cfgnamespace = {{NS}}
+    UNION ALL SELECT tsd.dictowner AS owner FROM pg_ts_dict tsd WHERE tsd.dictnamespace = {{NS}}
+    UNION ALL SELECT st.stxowner AS owner FROM pg_statistic_ext st WHERE st.stxnamespace = {{NS}}
+  )
+=====
+(
+    SELECT 'TYPE' AS kind, c.reltype::regtype::text AS ident, c.oid AS object_oid, c.relowner AS owner, EXISTS (SELECT 1 FROM pg_type x WHERE x.typnamespace = {{QNS}} AND x.typname = c.relname) AS collides FROM pg_class c WHERE c.relnamespace = {{NS}} AND c.relkind = 'c'
+    UNION ALL SELECT 'ROUTINE' AS kind, p.oid::regprocedure::text AS ident, p.oid AS object_oid, p.proowner AS owner, EXISTS (SELECT 1 FROM pg_proc x WHERE x.pronamespace = {{QNS}} AND x.proname = p.proname AND x.proargtypes = p.proargtypes) AS collides FROM pg_proc p WHERE p.pronamespace = {{NS}}
+    UNION ALL SELECT CASE t.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END AS kind, t.oid::regtype::text AS ident, t.oid AS object_oid, (CASE WHEN t.typtype = 'm' THEN coalesce((SELECT rt.typowner FROM pg_range g JOIN pg_type rt ON rt.oid = g.rngtypid
+      WHERE g.rngmultitypid = t.oid), t.typowner) ELSE t.typowner END) AS owner, EXISTS (SELECT 1 FROM pg_type x WHERE x.typnamespace = {{QNS}} AND x.typname = t.typname) AS collides FROM pg_type t WHERE t.typnamespace = {{NS}} AND t.typrelid = 0 AND t.typcategory <> 'A'
+    UNION ALL SELECT 'OPERATOR' AS kind, format('%I.%s (%s, %s)', (SELECT nspname FROM pg_namespace WHERE oid = op.oprnamespace), op.oprname, coalesce(NULLIF(op.oprleft, 0)::regtype::text, 'NONE'), coalesce(NULLIF(op.oprright, 0)::regtype::text, 'NONE')) AS ident, op.oid AS object_oid, op.oprowner AS owner, EXISTS (SELECT 1 FROM pg_operator x WHERE x.oprnamespace = {{QNS}} AND x.oprname = op.oprname AND x.oprleft = op.oprleft AND x.oprright = op.oprright) AS collides FROM pg_operator op WHERE op.oprnamespace = {{NS}}
+    UNION ALL SELECT 'OPERATOR FAMILY' AS kind, format('%s USING %s', (SELECT quote_ident(n.nspname) || '.' || quote_ident(opf.opfname) FROM pg_namespace n WHERE n.oid = opf.opfnamespace), (SELECT amname FROM pg_am WHERE oid = opf.opfmethod)) AS ident, opf.oid AS object_oid, opf.opfowner AS owner, EXISTS (SELECT 1 FROM pg_opfamily x WHERE x.opfnamespace = {{QNS}} AND x.opfname = opf.opfname AND x.opfmethod = opf.opfmethod) AS collides FROM pg_opfamily opf WHERE opf.opfnamespace = {{NS}}
+    UNION ALL SELECT 'OPERATOR CLASS' AS kind, format('%s USING %s', (SELECT quote_ident(n.nspname) || '.' || quote_ident(opc.opcname) FROM pg_namespace n WHERE n.oid = opc.opcnamespace), (SELECT amname FROM pg_am WHERE oid = opc.opcmethod)) AS ident, opc.oid AS object_oid, opc.opcowner AS owner, EXISTS (SELECT 1 FROM pg_opclass x WHERE x.opcnamespace = {{QNS}} AND x.opcname = opc.opcname AND x.opcmethod = opc.opcmethod) AS collides FROM pg_opclass opc WHERE opc.opcnamespace = {{NS}}
+    UNION ALL SELECT 'COLLATION' AS kind, (SELECT quote_ident(n.nspname) || '.' || quote_ident(col.collname) FROM pg_namespace n WHERE n.oid = col.collnamespace) AS ident, col.oid AS object_oid, col.collowner AS owner, EXISTS (SELECT 1 FROM pg_collation x WHERE x.collnamespace = {{QNS}} AND x.collname = col.collname AND x.collencoding = col.collencoding) AS collides FROM pg_collation col WHERE col.collnamespace = {{NS}}
+    UNION ALL SELECT 'CONVERSION' AS kind, (SELECT quote_ident(n.nspname) || '.' || quote_ident(cv.conname) FROM pg_namespace n WHERE n.oid = cv.connamespace) AS ident, cv.oid AS object_oid, cv.conowner AS owner, EXISTS (SELECT 1 FROM pg_conversion x WHERE x.connamespace = {{QNS}} AND x.conname = cv.conname) AS collides FROM pg_conversion cv WHERE cv.connamespace = {{NS}}
+    UNION ALL SELECT 'TEXT SEARCH CONFIGURATION' AS kind, (SELECT quote_ident(n.nspname) || '.' || quote_ident(tsc.cfgname) FROM pg_namespace n WHERE n.oid = tsc.cfgnamespace) AS ident, tsc.oid AS object_oid, tsc.cfgowner AS owner, EXISTS (SELECT 1 FROM pg_ts_config x WHERE x.cfgnamespace = {{QNS}} AND x.cfgname = tsc.cfgname) AS collides FROM pg_ts_config tsc WHERE tsc.cfgnamespace = {{NS}}
+    UNION ALL SELECT 'TEXT SEARCH DICTIONARY' AS kind, (SELECT quote_ident(n.nspname) || '.' || quote_ident(tsd.dictname) FROM pg_namespace n WHERE n.oid = tsd.dictnamespace) AS ident, tsd.oid AS object_oid, tsd.dictowner AS owner, EXISTS (SELECT 1 FROM pg_ts_dict x WHERE x.dictnamespace = {{QNS}} AND x.dictname = tsd.dictname) AS collides FROM pg_ts_dict tsd WHERE tsd.dictnamespace = {{NS}}
+    UNION ALL SELECT 'STATISTICS' AS kind, (SELECT quote_ident(n.nspname) || '.' || quote_ident(st.stxname) FROM pg_namespace n WHERE n.oid = st.stxnamespace) AS ident, st.oid AS object_oid, st.stxowner AS owner, EXISTS (SELECT 1 FROM pg_statistic_ext x WHERE x.stxnamespace = {{QNS}} AND x.stxname = st.stxname) AS collides FROM pg_statistic_ext st WHERE st.stxnamespace = {{NS}}
+  )

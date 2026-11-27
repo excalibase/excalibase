@@ -91,6 +91,21 @@ func forKind(kind schemaObjectKind, expr string) string {
 	return strings.ReplaceAll(expr, "{a}", kind.alias)
 }
 
+const (
+	selectKeyword = "SELECT "
+	inSchema      = " = {{NS}}"
+)
+
+// ownerSelect reads the owner of every object of one kind in {{NS}}.
+func ownerSelect(kind schemaObjectKind) string {
+	return selectKeyword + kind.owner + " AS owner FROM " + kind.catalog + " " + kind.alias + " WHERE " + kind.alias + "." + kind.namespaceColumn + inSchema
+}
+
+// unionOf joins per-kind selects into one parenthesised UNION ALL.
+func unionOf(selects []string) string {
+	return "(\n    " + strings.Join(selects, "\n    UNION ALL ") + "\n  )"
+}
+
 // ownedObjectsSQL lists the owner of every object in {{NS}}, of every kind that
 // has an owner.
 func ownedObjectsSQL() string {
@@ -99,13 +114,13 @@ func ownedObjectsSQL() string {
 		if kind.owner == "" {
 			continue
 		}
-		query := "SELECT " + kind.owner + " AS owner FROM " + kind.catalog + " " + kind.alias + " WHERE " + kind.alias + "." + kind.namespaceColumn + " = {{NS}}"
+		query := ownerSelect(kind)
 		if kind.where != "" {
 			query += " AND " + kind.where
 		}
 		selects = append(selects, query)
 	}
-	return "(\n    " + strings.Join(selects, "\n    UNION ALL ") + "\n  )"
+	return unionOf(selects)
 }
 
 // movableObjectsSQL is the owners of the kinds the quarantine moves.
@@ -115,9 +130,9 @@ func movableObjectsSQL() string {
 		if kind.move == nil {
 			continue
 		}
-		selects = append(selects, "SELECT "+kind.owner+" AS owner FROM "+kind.catalog+" "+kind.alias+" WHERE "+kind.alias+"."+kind.namespaceColumn+" = {{NS}}"+moveFilter(kind))
+		selects = append(selects, ownerSelect(kind)+moveFilter(kind))
 	}
-	return "(\n    " + strings.Join(selects, "\n    UNION ALL ") + "\n  )"
+	return unionOf(selects)
 }
 
 func moveFilter(kind schemaObjectKind) string {
@@ -138,10 +153,10 @@ func movableWithTargetsSQL() string {
 		if kind.move == nil {
 			continue
 		}
-		selects = append(selects, forKind(kind, "SELECT "+kind.move.kind+" AS kind, "+kind.move.ident+" AS ident, {a}.oid AS object_oid, "+kind.owner+" AS owner, "+
-			kind.move.collides+" AS collides FROM "+kind.catalog+" {a} WHERE {a}."+kind.namespaceColumn+" = {{NS}}"+moveFilter(kind)))
+		selects = append(selects, forKind(kind, selectKeyword+kind.move.kind+" AS kind, "+kind.move.ident+" AS ident, {a}.oid AS object_oid, "+kind.owner+" AS owner, "+
+			kind.move.collides+" AS collides FROM "+kind.catalog+" {a} WHERE {a}."+kind.namespaceColumn+inSchema+moveFilter(kind)))
 	}
-	return "(\n    " + strings.Join(selects, "\n    UNION ALL ") + "\n  )"
+	return unionOf(selects)
 }
 
 // schemaScopedCatalogs are the catalogs the repair covers, for the test that

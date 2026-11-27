@@ -153,3 +153,50 @@ func TestPlatformSchemas_AFunctionOfASuperuserExtensionIsNotForeign(t *testing.T
 	}
 	c.register(t)
 }
+
+// A customer table that inherits a platform table has its triggers fire when the
+// platform updates the parent, as the platform's role. Inheritance is recorded
+// child to parent, so the walk from the table never sees it: the repair detaches
+// the child (it keeps its rows and columns) and the probe sees the link.
+func TestPlatformSchemas_ACustomerChildOfAPlatformTableIsDetached(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	c.seedAuthUsers(t)
+	c.plantEvil(t)
+	mustExec(t, c.admin, `CREATE TABLE public.child () INHERITS (auth.users)`)
+	mustExec(t, c.admin, `ALTER TABLE public.child OWNER TO excalibase_app`)
+	mustExec(t, c.app, `CREATE FUNCTION public.evil_tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM public.evil(); RETURN NEW; END $$`)
+	mustExec(t, c.app, `CREATE TRIGGER planted BEFORE UPDATE ON public.child FOR EACH ROW EXECUTE FUNCTION public.evil_tg()`)
+	mustExec(t, c.app, `INSERT INTO public.child (email) VALUES ('kid@example.org')`)
+	mustExec(t, c.admin, `ALTER TABLE auth.users OWNER TO auth_admin`)
+	if !c.probe(t) {
+		t.Fatal("the probe did not see a customer child of a platform table")
+	}
+	c.register(t)
+	if c.probe(t) {
+		t.Fatal("the child is still attached after the repair")
+	}
+	mustExec(t, c.authAdmin, `UPDATE auth.users SET email = email`)
+	if got := c.loot(t); got != "" {
+		t.Fatalf("customer code ran as %q", got)
+	}
+	if !scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM public.child WHERE email = 'kid@example.org')`) {
+		t.Fatal("the detached child lost its rows")
+	}
+}
+
+// The same holds for a customer partition of a partitioned platform table.
+func TestPlatformSchemas_ACustomerPartitionOfAPlatformTableIsDetached(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	mustExec(t, c.admin, `CREATE TABLE auth.parted (id int) PARTITION BY RANGE (id)`)
+	mustExec(t, c.admin, `CREATE TABLE public.part PARTITION OF auth.parted FOR VALUES FROM (0) TO (10)`)
+	mustExec(t, c.admin, `ALTER TABLE public.part OWNER TO excalibase_app`)
+	if !c.probe(t) {
+		t.Fatal("the probe did not see a customer partition of a platform table")
+	}
+	c.register(t)
+	if c.probe(t) || scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_inherits)`) {
+		t.Fatal("the partition is still attached after the repair")
+	}
+}
