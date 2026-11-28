@@ -185,11 +185,11 @@ func TestAdminAuditFiltersAreIndexed(t *testing.T) {
 	store, _ := consoleFixture(t)
 	for _, name := range []string{"idx_audit_log_user_id_id", "idx_audit_log_resource_id_id", "idx_audit_log_project_id_id", "idx_audit_log_action_prefix"} {
 		var found bool
-		if err := store.db.QueryRowContext(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'audit_log' AND indexname = $1)`, name).Scan(&found); err != nil {
+		if err := store.db.QueryRowContext(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE c.relname = $1 AND i.indisvalid AND i.indisready)`, name).Scan(&found); err != nil {
 			t.Fatal(err)
 		}
 		if !found {
-			t.Errorf("index %s is missing: a filter that matches nothing would scan the whole log", name)
+			t.Errorf("index %s is missing or invalid: a filter that matches nothing would scan the whole log", name)
 		}
 	}
 }

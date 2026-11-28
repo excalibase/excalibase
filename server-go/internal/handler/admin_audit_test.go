@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -12,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/go-chi/chi/v5"
+	"github.com/lib/pq"
 )
 
 type fakeAuditRead struct{ got adminconsole.AuditQuery }
@@ -157,5 +162,36 @@ func TestAdminAudit_NoSignedInUserGetsTheUnmountedAnswer(t *testing.T) {
 	r.Route("/api/admin/audit", func(r chi.Router) { h.AuditRoutes(r) })
 	if w := auditGet(r, "/api/admin/audit/"); w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 and no panic", w.Code)
+	}
+}
+
+type slowAuditRead struct{}
+
+func (slowAuditRead) ListAudit(context.Context, adminconsole.AuditQuery) (adminconsole.AuditPage, error) {
+	return adminconsole.AuditPage{}, fmt.Errorf("audit page: %w", &pq.Error{Code: "57014", Message: "canceling statement due to statement timeout"})
+}
+
+func TestAdminAudit_AStatementTimeoutIs503AskingToNarrowTheFilterAndIsLoggedAsAWarning(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	h := NewAdminAuditHandler(adminconsole.NewAuditLog(slowAuditRead{}), adminconsole.NewUserDetails(&fakeDetailRead{}, nil))
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ctx := auth.SetUser(req.Context(), &domain.User{ID: "boss", Role: "platform_admin", Active: true})
+			next.ServeHTTP(w, req.WithContext(auth.SetToken(ctx, &domain.AccessToken{Scopes: auth.ScopeSession})))
+		})
+	})
+	r.Route("/api/admin/audit", func(r chi.Router) { h.AuditRoutes(r) })
+	w := auditGet(r, "/api/admin/audit/?action=a")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "narrow the filter") || strings.Contains(w.Body.String(), "pq") || strings.Contains(w.Body.String(), "statement") {
+		t.Fatalf("body = %q, want a plain ask to narrow the filter", w.Body.String())
+	}
+	if !strings.Contains(logged.String(), "WARN") || strings.Contains(logged.String(), "ERROR") {
+		t.Fatalf("log = %q, want a WARN line and no ERROR", logged.String())
 	}
 }
