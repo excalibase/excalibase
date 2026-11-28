@@ -51,17 +51,46 @@ function TrialOffer({ orgId, overview }: { readonly orgId: string; readonly over
   );
 }
 
+// A usage line nothing paid for: the hours after the credit is gone.
+const isUnpaid = (entry: CreditEntry) => entry.kind === 'usage' && entry.amountMicros === 0 && uncoveredMicros(entry) > 0;
+
+interface HistoryRow { key: string; when: string; what: string; amountMicros: number }
+
+// Entries as rows: every hour nothing paid for folds into one row per UTC day with the day's total, the rest stay as they are.
+function historyRows(entries: readonly CreditEntry[]): HistoryRow[] {
+  const rows: HistoryRow[] = [];
+  const unpaidByDay = new Map<string, HistoryRow & { uncovered: number }>();
+  for (const entry of entries) {
+    const note = uncoveredMicros(entry) > 0 ? ` · Not covered: ${dollars(uncoveredMicros(entry))}` : '';
+    if (!isUnpaid(entry)) {
+      rows.push({ key: String(entry.id), when: formatInstant(entry.periodStart ?? entry.createdAt), what: `${KIND_LABEL[entry.kind]}${entry.reason ? ` · ${entry.reason}` : ''}${note}`, amountMicros: entry.amountMicros });
+      continue;
+    }
+    const day = (entry.periodStart ?? entry.createdAt).slice(0, 10);
+    const row = unpaidByDay.get(day);
+    if (row) {
+      row.uncovered += uncoveredMicros(entry);
+      row.what = `${KIND_LABEL.usage} · Not covered: ${dollars(row.uncovered)}`;
+      continue;
+    }
+    const folded = { key: `unpaid-${day}`, when: formatInstant(`${day}T00:00:00Z`, 'date'), what: `${KIND_LABEL.usage} · Not covered: ${dollars(uncoveredMicros(entry))}`, amountMicros: 0, uncovered: uncoveredMicros(entry) };
+    unpaidByDay.set(day, folded);
+    rows.push(folded);
+  }
+  return rows;
+}
+
 function History({ entries }: { readonly entries: readonly CreditEntry[] }) {
   if (entries.length === 0) return <p className="text-text-secondary">No credit activity yet.</p>;
   return (
     <table className="w-full text-text-primary">
       <thead className="text-text-secondary"><tr><th className={CELL}>When</th><th className={CELL}>What</th><th className={`${CELL} text-right`}>Amount</th></tr></thead>
       <tbody>
-        {entries.map((entry) => (
-          <tr key={entry.id} className="border-t border-border-primary">
-            <td className={CELL}>{formatInstant(entry.periodStart ?? entry.createdAt)}</td>
-            <td className={CELL}>{KIND_LABEL[entry.kind]}{entry.reason ? ` · ${entry.reason}` : ''}{uncoveredMicros(entry) > 0 && ` · Not covered: ${dollars(uncoveredMicros(entry))}`}</td>
-            <td className={`${CELL} text-right`}>{dollars(entry.amountMicros)}</td>
+        {historyRows(entries).map((row) => (
+          <tr key={row.key} className="border-t border-border-primary">
+            <td className={CELL}>{row.when}</td>
+            <td className={CELL}>{row.what}</td>
+            <td className={`${CELL} text-right`}>{dollars(row.amountMicros)}</td>
           </tr>
         ))}
       </tbody>

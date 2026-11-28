@@ -119,6 +119,20 @@ describe('CreditsSection', () => {
       expect(await screen.findByText(/Not covered: \$3\.50/)).toBeInTheDocument();
     });
 
+    test('folds the hours nothing paid for into one row per day with the day\'s total', async () => {
+      const unpaid = (id: number, periodStart: string, uncovered: number) => ({ id, kind: 'usage', amountMicros: 0, actor: 'system', reason: '', periodStart, createdAt: periodStart, details: { uncovered_micros: uncovered } });
+      mountSection(burning({ entries: [
+        unpaid(5, '2026-11-30T13:00:00Z', 2_000_000), unpaid(4, '2026-11-30T12:00:00Z', 1_500_000), unpaid(3, '2026-11-29T23:00:00Z', 1_000_000),
+        { id: 2, kind: 'usage', amountMicros: -500_000, actor: 'system', reason: '', periodStart: '2026-11-30T11:00:00Z', createdAt: '2026-11-30T11:00:00Z', details: { uncovered_micros: 250_000 } },
+      ] }));
+      const history = within(await screen.findByRole('table'));
+      expect(history.getAllByText(/Not covered/)).toHaveLength(3);
+      expect(history.getByText(/Not covered: \$3\.50/)).toBeInTheDocument();
+      expect(history.getByText(/Not covered: \$1\.00/)).toBeInTheDocument();
+      expect(history.getByText(/Not covered: \$0\.25/)).toBeInTheDocument();
+      expect(history.getAllByRole('row')).toHaveLength(4);
+    });
+
     test('says nothing about a run-out when nothing has been used', async () => {
       mountSection(creditOverview());
       const section = within(await screen.findByRole('region', { name: 'Credits' }));
