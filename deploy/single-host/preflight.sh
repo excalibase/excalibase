@@ -105,6 +105,13 @@ case ",${COMPOSE_PROFILES:-}," in
         complain "LOG_S3_FROM must be a real date such as 2027-01-15, after 2024-01-01"
       fi
     fi
+    if [ -n "${LOG_S3_FALLBACK_FROM:-}" ]; then
+      if ! printf '%s' "$LOG_S3_FALLBACK_FROM" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' \
+        || [ "$(date -u -d "$LOG_S3_FALLBACK_FROM" +%F 2>/dev/null || true)" != "$LOG_S3_FALLBACK_FROM" ] \
+        || [ "$LOG_S3_FALLBACK_FROM" \< "${LOG_S3_FROM:-9999}" ] || [ "$LOG_S3_FALLBACK_FROM" = "${LOG_S3_FROM:-}" ]; then
+        complain "LOG_S3_FALLBACK_FROM must be a real date after LOG_S3_FROM"
+      fi
+    fi
     for tenant in "${POSTGRES_PASSWORD:-}" "${SETUP_TOKEN:-}" "${OBJECTSTORE_ROOT_SECRET:-}" "${OBJECTSTORE_BACKUPS_SECRET:-}" \
       "${OBJECTSTORE_FILES_SECRET:-}" "${BACKUP_DEFAULT_SECRET_ACCESS_KEY:-}" "${STORAGE_SECRET_ACCESS_KEY:-}"; do
       if [ -n "$tenant" ] && [ "${LOG_S3_SECRET_ACCESS_KEY:-}" = "$tenant" ]; then

@@ -1,9 +1,7 @@
-# Stored project logs on a single host (EXC-672), chunks and index in S3-compatible
-# storage (EXC-905; compose profile hostlogs-s3, init.sh --host-logs-s3). The
-# filesystem period stays first so older lines stay readable; the s3 period starts on
-# LOG_S3_FROM, a day in the future when you turn this on. Same as loki.yaml otherwise.
-# Stored project logs on a single host (EXC-672): the chart's Loki (EXC-634),
-# fed by provisioning, which alone reaches it. Periods come from .env.
+# Stored project logs on a single host (EXC-672) with chunks and index in S3-compatible storage
+# (EXC-905; compose profile hostlogs-s3, init.sh --host-logs-s3). The filesystem period stays
+# first so older lines stay readable; the s3 period starts on LOG_S3_FROM, a day ahead when you
+# turn this on. Same as loki.yaml otherwise. Periods come from .env.
 auth_enabled: false
 server:
   http_listen_port: 3100
@@ -23,6 +21,8 @@ common:
 ingester:
   wal:
     dir: /loki/wal
+  # Chunks reach the bucket within this age: a lost disk loses at most this much of the newest lines.
+  max_chunk_age: 1h
 storage_config:
   aws:
     endpoint: ${LOG_S3_ENDPOINT}
@@ -43,6 +43,14 @@ schema_config:
     - from: "${LOG_S3_FROM}"
       store: tsdb
       object_store: s3
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+    # Back on the volume from LOG_S3_FALLBACK_FROM (a rollback); a far day until it is set.
+    - from: "${LOG_S3_FALLBACK_FROM:-2099-12-31}"
+      store: tsdb
+      object_store: filesystem
       schema: v13
       index:
         prefix: index_

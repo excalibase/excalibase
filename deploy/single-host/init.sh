@@ -29,7 +29,7 @@
 # --host-logs-s3: the same, with chunks and index in S3-compatible storage (compose profile
 # hostlogs-s3) so logs survive losing this disk and are not capped by it. Instead of --host-logs.
 # It writes blank LOG_S3_ENDPOINT, _BUCKET, _REGION, _FROM (the day the s3 period starts: a day
-# ahead), _ACCESS_KEY_ID and _SECRET_ACCESS_KEY for you to fill, with a bucket and key of their
+# ahead, filled in), _ACCESS_KEY_ID and _SECRET_ACCESS_KEY for you to fill, with a bucket and key of their
 # own; the stack refuses to start until they are (OPERATOR.md, Loki object storage).
 # --auth-hooks: end-user auth hooks, signed calls to each project's own endpoint. The addresses
 # the install's names resolve to are refused to them; behind a CDN or proxy, edit AUTH_HOOKS_DENY_CIDRS.
@@ -407,10 +407,11 @@ fi
 [ -n "$log_drains" ] && profiles=${profiles:+$profiles,}logdrains
 profiles=${profiles:+COMPOSE_PROFILES=$profiles}
 logs_s3_blanks=
+# The first day the bucket is used: tomorrow, so what is written today stays readable on the volume.
 [ -n "$host_logs_s3" ] && logs_s3_blanks="LOG_S3_ENDPOINT=
 LOG_S3_BUCKET=
 LOG_S3_REGION=
-LOG_S3_FROM=
+LOG_S3_FROM=$(date -u -d tomorrow +%F)
 LOG_S3_ACCESS_KEY_ID=
 LOG_S3_SECRET_ACCESS_KEY="
 for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$logs_s3_blanks" "$profiles" "$firewall_env" "$hooks" "$drains"; do

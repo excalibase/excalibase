@@ -68,6 +68,7 @@ services:
       LOG_S3_BUCKET: ${LOG_S3_BUCKET:-}
       LOG_S3_REGION: ${LOG_S3_REGION:-}
       LOG_S3_FROM: ${LOG_S3_FROM:-}
+      LOG_S3_FALLBACK_FROM: ${LOG_S3_FALLBACK_FROM:-}
       LOG_S3_ACCESS_KEY_ID: ${LOG_S3_ACCESS_KEY_ID:-}
       LOG_S3_SECRET_ACCESS_KEY: ${LOG_S3_SECRET_ACCESS_KEY:-}
       BACKUP_DEFAULT_ACCESS_KEY_ID: ${BACKUP_DEFAULT_ACCESS_KEY_ID:-excalibase-backups}
@@ -610,12 +611,13 @@ services:
   # The same Loki with chunks and index in S3-compatible storage (EXC-905; init.sh
   # --host-logs-s3, which selects this profile in place of hostlogs). The volume keeps
   # the WAL, the caches and the chunks written before LOG_S3_FROM. Its own network
-  # reaches the bucket and nothing else joins it.
+  # reaches the bucket's public address and port alone (the host firewall's logs chain);
+  # nothing else joins it. Its container name differs from loki's so switching profiles
+  # never collides: stop the old one first (docs/deployment/docker-local.md).
   loki-s3:
     <<: *loki_base
-    container_name: excalibase-loki
+    container_name: excalibase-loki-s3
     profiles: ["hostlogs-s3"]
-    command: ["-config.file=/etc/loki/loki.yaml", "-config.expand-env=true", "-target=all"]
     environment:
       LOG_RETENTION: ${LOG_RETENTION:-168h}
       LOG_RETENTION_FREE: ${LOG_RETENTION_FREE:-24h}
@@ -627,9 +629,14 @@ services:
       LOG_S3_FROM: ${LOG_S3_FROM:-}
       LOG_S3_ACCESS_KEY_ID: ${LOG_S3_ACCESS_KEY_ID:-}
       LOG_S3_SECRET_ACCESS_KEY: ${LOG_S3_SECRET_ACCESS_KEY:-}
+      LOG_S3_FALLBACK_FROM: ${LOG_S3_FALLBACK_FROM:-}
     volumes:
       - ./loki/loki-s3.yaml:/etc/loki/loki.yaml:ro,z
       - logs_data:/loki
+    # Never starts on a value preflight refuses (a shared key, a bad date).
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
     networks:
       logs:
         aliases: [loki]
@@ -878,6 +885,10 @@ services:
     environment:
       HOST_FIREWALL_NETWORKS: *bridge_networks
       HOST_FIREWALL_TENANT_NETWORKS: excalibase-tenants
+      # Present only with the hostlogs-s3 profile (EXC-905): forwarded traffic from it may go to the
+      # bucket's public address and port, and DNS; metadata, private and LAN ranges drop.
+      HOST_FIREWALL_LOGS_NETWORK: excalibase-logs-out
+      HOST_FIREWALL_LOGS_ENDPOINT: ${LOG_S3_ENDPOINT:-}
       HOST_FIREWALL_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
       # engineproxy.ProjectBridgePrefix; apps reach what the edge publishes, as the internet does.
       HOST_FIREWALL_PROJECT_BRIDGES: exnet+

@@ -68,7 +68,8 @@ sh "$DIR/../init.sh" --env-file "$WORK/logs-s3.env" --domain example.com --admin
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-logs-s3 >/dev/null
 grep -qx 'FEATURE_HOSTLOGS=true' "$WORK/logs-s3.env" && grep -qx 'COMPOSE_PROFILES=hostlogs-s3' "$WORK/logs-s3.env" \
   || fail "--host-logs-s3 profile: $(grep -E 'HOSTLOGS|PROFILES' "$WORK/logs-s3.env")"
-for key in LOG_S3_ENDPOINT LOG_S3_BUCKET LOG_S3_REGION LOG_S3_FROM LOG_S3_ACCESS_KEY_ID LOG_S3_SECRET_ACCESS_KEY; do
+grep -qx "LOG_S3_FROM=$(date -u -d tomorrow +%F)" "$WORK/logs-s3.env" || fail "LOG_S3_FROM is not tomorrow: $(grep LOG_S3_FROM "$WORK/logs-s3.env")"
+for key in LOG_S3_ENDPOINT LOG_S3_BUCKET LOG_S3_REGION LOG_S3_ACCESS_KEY_ID LOG_S3_SECRET_ACCESS_KEY; do
   grep -qx "$key=" "$WORK/logs-s3.env" || fail "--host-logs-s3 wrote no blank $key"
 done
 ! grep -q '^LOG_S3_' "$WORK/logs.env" "$WORK/.env" || fail "object storage values without --host-logs-s3"

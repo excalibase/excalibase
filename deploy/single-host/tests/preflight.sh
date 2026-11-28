@@ -137,4 +137,10 @@ want=LOG_S3_SECRET_ACCESS_KEY refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOI
   LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=k LOG_S3_SECRET_ACCESS_KEY=$s3key STORAGE_SECRET_ACCESS_KEY=$s3key
 want=LOG_S3_ACCESS_KEY_ID refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOINT=https://a.example LOG_S3_BUCKET=b LOG_S3_REGION=auto \
   LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=excalibase-backups LOG_S3_SECRET_ACCESS_KEY=$s3key
+# A rollback day: a real date after LOG_S3_FROM.
+s3 LOG_S3_FALLBACK_FROM=2027-02-01 >/dev/null || fail "a good rollback day refused"
+for bad in 2027-01-15 2027-01-01 soon 2027-13-45; do
+  want=LOG_S3_FALLBACK_FROM refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOINT=https://a.example LOG_S3_BUCKET=b LOG_S3_REGION=auto \
+    LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=k LOG_S3_SECRET_ACCESS_KEY=$s3key "LOG_S3_FALLBACK_FROM=$bad"
+done
 echo "preflight ok"

@@ -196,8 +196,10 @@ services, networks = doc["services"], doc["networks"]
 if "loki" in services:
     sys.exit("both Lokis run with hostlogs-s3")
 loki = services.get("loki-s3") or sys.exit("no loki-s3 with the hostlogs-s3 profile")
-if loki["container_name"] != "excalibase-loki":
-    sys.exit("tests and operators find Loki by its name")
+if loki["container_name"] != "excalibase-loki-s3" or "loki" in services:
+    sys.exit("the S3 Loki container name must differ from loki, so switching profiles never collides")
+if (loki.get("depends_on") or {}).get("preflight", {}).get("condition") != "service_completed_successfully":
+    sys.exit("loki-s3 starts without waiting for preflight")
 if set(loki["networks"]) != {"logs", "logs-out"} or not networks["logs"].get("internal") or networks["logs-out"].get("internal"):
     sys.exit("loki-s3 must join the internal logs network and logs-out, which reaches the bucket")
 if "loki" not in (loki["networks"]["logs"] or {}).get("aliases", []):
@@ -217,6 +219,8 @@ for key, want in (("LOG_S3_ENDPOINT", "https://acct.r2.cloudflarestorage.com"), 
                   ("LOG_S3_REGION", "auto"), ("LOG_S3_FROM", "2027-01-15"), ("LOG_S3_ACCESS_KEY_ID", "logskeyid")):
     if env.get(key) != want:
         sys.exit(f"{key} is {env.get(key)!r}, want {want!r}")
+if "LOG_S3_FALLBACK_FROM" not in env:
+    sys.exit("the rollback day does not reach loki-s3")
 if not env.get("LOG_S3_SECRET_ACCESS_KEY"):
     sys.exit("the secret key does not reach loki-s3")
 if "-config.expand-env=true" not in loki["command"]:
@@ -235,9 +239,9 @@ for key in ("BACKUP_DEFAULT_SECRET_ACCESS_KEY", "STORAGE_SECRET_ACCESS_KEY", "BA
 # loki-s3.yaml: the chart's Loki, with the s3 period after the filesystem one and retention intact.
 python3 - "$DIR/../loki/loki.yaml" "$DIR/../loki/loki-s3.yaml" <<'PY' || exit 1
 import sys, yaml
-fs, s3 = (yaml.safe_load(open(path).read().replace("${LOG_S3_FROM}", "2027-01-15")) for path in sys.argv[1:3])
+fs, s3 = (yaml.safe_load(open(path).read().replace("${LOG_S3_FROM}", "2027-01-15").replace("${LOG_S3_FALLBACK_FROM:-2099-12-31}", "2099-12-31")) for path in sys.argv[1:3])
 periods = s3["schema_config"]["configs"]
-if periods[0] != fs["schema_config"]["configs"][0] or len(periods) != 2:
+if periods[0] != fs["schema_config"]["configs"][0] or len(periods) != 3:
     sys.exit(f"the filesystem period must stay first: {periods}")
 if periods[1]["object_store"] != "s3" or str(periods[1]["from"]) != "2027-01-15" or periods[1]["schema"] != "v13" or periods[1]["store"] != "tsdb":
     sys.exit(f"the s3 period: {periods[1]}")
@@ -246,7 +250,14 @@ if aws["bucketnames"] != "${LOG_S3_BUCKET}" or aws["access_key_id"] != "${LOG_S3
     sys.exit(f"storage_config.aws: {aws}")
 if s3["compactor"]["delete_request_store"] != "s3" or not s3["compactor"]["retention_enabled"]:
     sys.exit(f"compactor: {s3['compactor']}")
-for section in ("limits_config", "ingester", "query_range", "server", "common"):
+if "${LOG_S3_FALLBACK_FROM:-2099-12-31}" not in open(sys.argv[2]).read():
+    sys.exit("the rollback day does not come from LOG_S3_FALLBACK_FROM")
+back = periods[2]
+if back["object_store"] != "filesystem" or str(back["from"]) != "2099-12-31" or back["schema"] != "v13":
+    sys.exit(f"the rollback period must be a far day until LOG_S3_FALLBACK_FROM is set: {back}")
+if s3["ingester"] != dict(fs["ingester"], max_chunk_age="1h"):
+    sys.exit(f"ingester: {s3['ingester']}")
+for section in ("limits_config", "query_range", "server", "common"):
     if s3[section] != fs[section]:
         sys.exit(f"{section} differs from loki.yaml: retention, per-plan periods and limits must match")
 rest = {k: v for k, v in s3["compactor"].items() if k != "delete_request_store"}
