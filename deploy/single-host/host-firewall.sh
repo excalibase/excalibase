@@ -43,6 +43,11 @@ fi
 HOST_CHAIN=EXCALIBASE-HOST
 TENANT_CHAIN=EXCALIBASE-TENANT
 APP_CHAIN=EXCALIBASE-APP
+LOGS_CHAIN=EXCALIBASE-LOGS
+# EXC-905: the network of the logs' way out to an S3 bucket, present only with the hostlogs-s3 profile. Its
+# containers may forward to the bucket's public address and port alone, and to DNS; absent, nothing is guarded.
+LOGS_NETWORK=${HOST_FIREWALL_LOGS_NETWORK:-}
+LOGS_ENDPOINT=${HOST_FIREWALL_LOGS_ENDPOINT:-}
 # The wildcard on project bridges, and the network whose published web ports apps may reach.
 PROJECT_BRIDGES=${HOST_FIREWALL_PROJECT_BRIDGES:-}
 # The host ports the edge publishes.
@@ -64,7 +69,7 @@ DENY4="169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 127.
 # And the translation prefixes, which reach those IPv4 ranges through a NAT64 or 6to4 upstream.
 DENY6="fe80::/10 fc00::/7 64:ff9b::/96 64:ff9b:1::/48 2002::/16 ff00::/8"
 
-IFACES= TENANT_IFACES= OWN4= OWN6= EDGE4= EDGE6= DNS4= DNS6= EXTRA4= PLANNED= KNOWN4= KNOWN6=
+IFACES= TENANT_IFACES= LOGS_IFACES= OWN4= OWN6= EDGE4= EDGE6= DNS4= DNS6= EXTRA4= PLANNED= KNOWN4= KNOWN6=
 
 say() { echo "host-firewall: $*"; }
 err() { echo "host-firewall: ERROR: $*" >&2; return 1; }
@@ -104,12 +109,12 @@ extra_denied() {
 # plan: read what to guard, or keep the last plan that could be read: a reload while the
 # bridges file is away still puts back what was there.
 plan() {
-  kept="$IFACES|$TENANT_IFACES|$OWN4|$OWN6|$EDGE4|$EDGE6|$DNS4|$DNS6|$EXTRA4"
+  kept="$IFACES|$TENANT_IFACES|$LOGS_IFACES|$OWN4|$OWN6|$EDGE4|$EDGE6|$DNS4|$DNS6|$EXTRA4"
   if read_plan; then
     PLANNED=1
     return 0
   fi
-  IFS='|' read -r IFACES TENANT_IFACES OWN4 OWN6 EDGE4 EDGE6 DNS4 DNS6 EXTRA4 <<KEPT
+  IFS='|' read -r IFACES TENANT_IFACES LOGS_IFACES OWN4 OWN6 EDGE4 EDGE6 DNS4 DNS6 EXTRA4 <<KEPT
 $kept
 KEPT
   return 1
@@ -117,7 +122,7 @@ KEPT
 
 # read_plan: the bridges file into IFACES, TENANT_IFACES, OWN4, OWN6, EDGE4 and EDGE6, the resolvers and the deny list.
 read_plan() {
-  IFACES= TENANT_IFACES= OWN4= OWN6= EDGE4= EDGE6=
+  IFACES= TENANT_IFACES= LOGS_IFACES= OWN4= OWN6= EDGE4= EDGE6=
   resolvers || return 1
   extra_denied || return 1
   [ -r "$BRIDGES_FILE" ] || { err "no bridges file $BRIDGES_FILE: the engine proxy has not named the bridges"; return 1; }
@@ -132,6 +137,7 @@ read_plan() {
     [ $# = 3 ] && [ -e "$SYSFS/$2" ] || { err "bridge $2 of network $network is not on this host"; return 1; }
     IFACES="$IFACES $2"
     listed "$network" "$(words "$TENANTS")" && TENANT_IFACES="$TENANT_IFACES $2"
+    [ -n "$LOGS_NETWORK" ] && [ "$network" = "$LOGS_NETWORK" ] && LOGS_IFACES="$LOGS_IFACES $2"
     for subnet in $(words "$3"); do
       case $subnet in *:*) OWN6="$OWN6 $subnet" ;; *) OWN4="$OWN4 $subnet" ;; esac
       if [ "$network" = "$EDGE_NETWORK" ]; then
@@ -220,6 +226,29 @@ tenant_rules() {
   for range in $deny; do echo "$TENANT_CHAIN -d $range -j DROP"; done
 }
 
+# logs_port: the port of the bucket's endpoint (https 443, http 80 unless it names one).
+logs_port() {
+  case $LOGS_ENDPOINT in
+    *://*:[0-9]*) echo "${LOGS_ENDPOINT##*:}" ;;
+    http://*) echo 80 ;;
+    *) echo 443 ;;
+  esac
+}
+
+# logs_rules <family>: what the logs' way out may forward to: DNS to the host's resolvers, then
+# the bucket's port on a public address; metadata, private and LAN ranges drop.
+logs_rules() {
+  if [ "$1" = 6 ]; then deny=$DENY6 dns=$DNS6; else deny=$DENY4 dns=$DNS4; fi
+  replies "$LOGS_CHAIN"
+  for server in $dns; do
+    echo "$LOGS_CHAIN -d $server -p udp --dport 53 -j RETURN"
+    echo "$LOGS_CHAIN -d $server -p tcp --dport 53 -j RETURN"
+  done
+  for range in $deny; do echo "$LOGS_CHAIN -d $range -j DROP"; done
+  echo "$LOGS_CHAIN -p tcp --dport $(logs_port) -j RETURN"
+  echo "$LOGS_CHAIN -j DROP"
+}
+
 # app_rules <family>: what a project bridge may forward to. Its own bridge passes; any
 # other project's bridge drops here, by our rule rather than Docker's isolation chains, which
 # a flushed ruleset removes, and a published port, which Docker lets cross bridges, drops too. The deny
@@ -257,6 +286,7 @@ jumps() {
   for chain in FORWARD DOCKER-USER; do
     [ "$chain" = FORWARD ] || has_user_chain "$1" || continue
     for iface in $TENANT_IFACES; do echo "$chain -i $iface -j $TENANT_CHAIN"; done
+    for iface in $LOGS_IFACES; do echo "$chain -i $iface -j $LOGS_CHAIN"; done
     [ -z "$PROJECT_BRIDGES" ] || echo "$chain -i $PROJECT_BRIDGES -j $APP_CHAIN"
   done
 }
@@ -303,7 +333,7 @@ closed() {
 # leading <ipt> <chain>: the rules on top that accept nothing: ours, and Docker's jump to its user chain.
 leading() {
   "$1" -w -S "$2" | sed -n 's/^-A //p' | awk -v forward="FORWARD -j DOCKER-USER" \
-    -v ours=" -j ($HOST_CHAIN|$TENANT_CHAIN|$APP_CHAIN)\$" '$0 != forward && $0 !~ ours { exit } { print }'
+    -v ours=" -j ($HOST_CHAIN|$TENANT_CHAIN|$APP_CHAIN|$LOGS_CHAIN)\$" '$0 != forward && $0 !~ ours { exit } { print }'
 }
 
 # placed <ipt> <chain> <rule> <leading rules>: nothing can accept the bridge's traffic before the rule
@@ -321,7 +351,7 @@ placed() {
 place() {
   for chain in INPUT FORWARD DOCKER-USER; do
     held=$("$1" -w -S "$chain" 2>/dev/null) || continue
-    echo "$held" | grep -E "^-A $chain -i [^ ]+ -j ($HOST_CHAIN|$TENANT_CHAIN|$APP_CHAIN)\$" | cut -c4- | while read -r jump; do
+    echo "$held" | grep -E "^-A $chain -i [^ ]+ -j ($HOST_CHAIN|$TENANT_CHAIN|$APP_CHAIN|$LOGS_CHAIN)\$" | cut -c4- | while read -r jump; do
       # shellcheck disable=SC2086
       echo "$2" | grep -qxF -- "$jump" || "$1" -w -D $jump || exit 1
     done || return 1
@@ -343,10 +373,12 @@ apply() {
   closed "$ipt" "$HOST_CHAIN" || return 1
   closed "$ipt" "$TENANT_CHAIN" || return 1
   [ -z "$PROJECT_BRIDGES" ] || closed "$ipt" "$APP_CHAIN" || return 1
+  [ -z "$LOGS_NETWORK" ] || closed "$ipt" "$LOGS_CHAIN" || return 1
   place "$ipt" "$(jumps "$ipt")" || return 1
   fill "$ipt" "$HOST_CHAIN" "$(host_rules "$2")" || return 1
   fill "$ipt" "$TENANT_CHAIN" "$(tenant_rules "$2")" || return 1
   [ -z "$PROJECT_BRIDGES" ] || fill "$ipt" "$APP_CHAIN" "$(app_rules "$2")" || return 1
+  [ -z "$LOGS_NETWORK" ] || fill "$ipt" "$LOGS_CHAIN" "$(logs_rules "$2")" || return 1
 }
 
 # hooks_only <ipt>: with nothing read yet, the project bridges' wildcard to closed chains; chains that exist keep their rules.
@@ -372,6 +404,9 @@ verify() {
   done
   if [ -n "$PROJECT_BRIDGES" ]; then
     chain_holds "$1" "$APP_CHAIN" "$(app_rules "$2")" || { err "$1: $APP_CHAIN is not as written"; return 1; }
+  fi
+  if [ -n "$LOGS_NETWORK" ]; then
+    chain_holds "$1" "$LOGS_CHAIN" "$(logs_rules "$2")" || { err "$1: $LOGS_CHAIN is not as written"; return 1; }
   fi
   jumps "$1" | while read -r chain rule; do
     placed "$1" "$chain" "$rule" "$(leading "$1" "$chain")" || { err "$1: $chain $rule is missing, or below a rule that accepts"; exit 1; }

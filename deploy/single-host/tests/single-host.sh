@@ -175,6 +175,95 @@ if not compactor.get("retention_enabled") or compactor.get("delete_request_store
         or compactor.get("delete_request_cancel_period") != "24h":
     sys.exit(f"loki.yaml compactor {compactor} does not take delete requests as the chart does")
 PY
+# Stored logs in S3-compatible storage (EXC-905): its own profile in place of hostlogs, the
+# bucket reached through a network of its own, the filesystem service untouched.
+S3ENV="COMPOSE_PROFILES=hostlogs-s3 FEATURE_HOSTLOGS=true LOG_S3_ENDPOINT=https://acct.r2.cloudflarestorage.com LOG_S3_BUCKET=excalibase-logs LOG_S3_REGION=auto LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=logskeyid LOG_S3_SECRET_ACCESS_KEY=$hex"
+render COMPOSE_PROFILES=hostlogs FEATURE_HOSTLOGS=true | python3 -c '
+import sys, yaml
+loki = yaml.safe_load(sys.stdin)["services"]
+if "loki-s3" in loki:
+    sys.exit("the S3 Loki runs on the filesystem profile")
+if any(k.startswith("LOG_S3") for k in loki["loki"].get("environment") or {}):
+    sys.exit("the filesystem Loki carries S3 settings")
+if not any(v.get("target") == "/etc/loki/loki.yaml" and v["source"].endswith("/loki/loki.yaml") for v in loki["loki"]["volumes"]):
+    sys.exit("the filesystem Loki changed its config")
+'
+# shellcheck disable=SC2086
+render $S3ENV | python3 -c '
+import sys, yaml
+doc = yaml.safe_load(sys.stdin)
+services, networks = doc["services"], doc["networks"]
+if "loki" in services:
+    sys.exit("both Lokis run with hostlogs-s3")
+loki = services.get("loki-s3") or sys.exit("no loki-s3 with the hostlogs-s3 profile")
+if loki["container_name"] != "excalibase-loki-s3" or "loki" in services:
+    sys.exit("the S3 Loki container name must differ from loki, so switching profiles never collides")
+if (loki.get("depends_on") or {}).get("preflight", {}).get("condition") != "service_completed_successfully":
+    sys.exit("loki-s3 starts without waiting for preflight")
+if set(loki["networks"]) != {"logs", "logs-out"} or not networks["logs"].get("internal") or networks["logs-out"].get("internal"):
+    sys.exit("loki-s3 must join the internal logs network and logs-out, which reaches the bucket")
+if "loki" not in (loki["networks"]["logs"] or {}).get("aliases", []):
+    sys.exit("provisioning reaches Loki as loki")
+joined = sorted(n for n, s in services.items() if "logs" in (s.get("networks") or {}))
+if joined != ["loki-s3", "provisioning"]:
+    sys.exit(f"the logs network is joined by {joined}")
+joined = sorted(n for n, s in services.items() if "logs-out" in (s.get("networks") or {}))
+if joined != ["loki-s3"]:
+    sys.exit(f"the way out is joined by {joined}")
+if loki.get("ports") or not loki.get("read_only") or "ALL" not in (loki.get("cap_drop") or []) or not loki.get("mem_limit"):
+    sys.exit("loki-s3 is published or not hardened")
+if not any(v.get("target") == "/etc/loki/loki.yaml" and v["source"].endswith("/loki/loki-s3.yaml") for v in loki["volumes"]):
+    sys.exit("loki-s3 does not read loki-s3.yaml")
+env = loki["environment"]
+for key, want in (("LOG_S3_ENDPOINT", "https://acct.r2.cloudflarestorage.com"), ("LOG_S3_BUCKET", "excalibase-logs"),
+                  ("LOG_S3_REGION", "auto"), ("LOG_S3_FROM", "2027-01-15"), ("LOG_S3_ACCESS_KEY_ID", "logskeyid")):
+    if env.get(key) != want:
+        sys.exit(f"{key} is {env.get(key)!r}, want {want!r}")
+if "LOG_S3_FALLBACK_FROM" not in env:
+    sys.exit("the rollback day does not reach loki-s3")
+if not env.get("LOG_S3_SECRET_ACCESS_KEY"):
+    sys.exit("the secret key does not reach loki-s3")
+if "-config.expand-env=true" not in loki["command"]:
+    sys.exit("loki-s3 does not expand the environment")
+if "excalibase-logs-out" not in services["host-firewall"]["environment"]["HOST_FIREWALL_NETWORKS"].split(","):
+    sys.exit("the host firewall does not guard the logs way out")
+if services["provisioning"]["environment"].get("HOST_LOGS_LOKI_URL") != "http://loki:3100":
+    sys.exit("provisioning is not pointed at loki")
+preflight = services["preflight"]["environment"]
+if preflight.get("COMPOSE_PROFILES") != "hostlogs-s3" or not preflight.get("LOG_S3_FROM"):
+    sys.exit("preflight is not told the profile and the values")
+for key in ("BACKUP_DEFAULT_SECRET_ACCESS_KEY", "STORAGE_SECRET_ACCESS_KEY", "BACKUP_DEFAULT_ACCESS_KEY_ID", "STORAGE_ACCESS_KEY_ID"):
+    if key not in preflight:
+        sys.exit(f"preflight cannot compare the logs key with {key}")
+'
+# loki-s3.yaml: the chart's Loki, with the s3 period after the filesystem one and retention intact.
+python3 - "$DIR/../loki/loki.yaml" "$DIR/../loki/loki-s3.yaml" <<'PY' || exit 1
+import sys, yaml
+fs, s3 = (yaml.safe_load(open(path).read().replace("${LOG_S3_FROM}", "2027-01-15").replace("${LOG_S3_FALLBACK_FROM:-2099-12-31}", "2099-12-31")) for path in sys.argv[1:3])
+periods = s3["schema_config"]["configs"]
+if periods[0] != fs["schema_config"]["configs"][0] or len(periods) != 3:
+    sys.exit(f"the filesystem period must stay first: {periods}")
+if periods[1]["object_store"] != "s3" or str(periods[1]["from"]) != "2027-01-15" or periods[1]["schema"] != "v13" or periods[1]["store"] != "tsdb":
+    sys.exit(f"the s3 period: {periods[1]}")
+aws = s3["storage_config"]["aws"]
+if aws["bucketnames"] != "${LOG_S3_BUCKET}" or aws["access_key_id"] != "${LOG_S3_ACCESS_KEY_ID}" or aws["secret_access_key"] != "${LOG_S3_SECRET_ACCESS_KEY}":
+    sys.exit(f"storage_config.aws: {aws}")
+if s3["compactor"]["delete_request_store"] != "s3" or not s3["compactor"]["retention_enabled"]:
+    sys.exit(f"compactor: {s3['compactor']}")
+if "${LOG_S3_FALLBACK_FROM:-2099-12-31}" not in open(sys.argv[2]).read():
+    sys.exit("the rollback day does not come from LOG_S3_FALLBACK_FROM")
+back = periods[2]
+if back["object_store"] != "filesystem" or str(back["from"]) != "2099-12-31" or back["schema"] != "v13":
+    sys.exit(f"the rollback period must be a far day until LOG_S3_FALLBACK_FROM is set: {back}")
+if s3["ingester"] != dict(fs["ingester"], max_chunk_age="1h"):
+    sys.exit(f"ingester: {s3['ingester']}")
+for section in ("limits_config", "query_range", "server", "common"):
+    if s3[section] != fs[section]:
+        sys.exit(f"{section} differs from loki.yaml: retention, per-plan periods and limits must match")
+rest = {k: v for k, v in s3["compactor"].items() if k != "delete_request_store"}
+if rest != {k: v for k, v in fs["compactor"].items() if k != "delete_request_store"}:
+    sys.exit("the compactor differs from loki.yaml beyond the delete store")
+PY
 # Log drains (EXC-658): the forwarder only with the profile; it reaches provisioning and the internet only.
 render | python3 "$DIR/log_drains_check.py" off
 render COMPOSE_PROFILES=hostlogs,logdrains FEATURE_HOSTLOGS=true FEATURE_LOGDRAINS=true LOG_FORWARDER_TOKEN=$hex \

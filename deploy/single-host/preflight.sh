@@ -86,6 +86,45 @@ if [ "${FEATURE_LOGDRAINS:-}" = true ]; then
   done
 fi
 
+# Stored logs in object storage (EXC-905): a bucket of their own, a day the s3 period
+# starts, and a key that is none of the tenants' (backups, files, the bundled store).
+case ",${COMPOSE_PROFILES:-}," in
+  *,hostlogs-s3,*)
+    for name in LOG_S3_ENDPOINT LOG_S3_BUCKET LOG_S3_REGION LOG_S3_FROM LOG_S3_ACCESS_KEY_ID LOG_S3_SECRET_ACCESS_KEY; do
+      eval "value=\${$name:-}"
+      [ -n "$value" ] || complain "$name is empty: --host-logs-s3 needs it in .env (docs: OPERATOR.md, Loki object storage)"
+    done
+    if [ -n "${LOG_S3_ENDPOINT:-}" ] && ! printf '%s' "$LOG_S3_ENDPOINT" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
+      complain "LOG_S3_ENDPOINT must be http(s)://host[:port] with no path"
+    fi
+    if [ -n "${LOG_S3_FROM:-}" ]; then
+      # A real date (date -d refuses 2027-13-45) written YYYY-MM-DD, after the first period.
+      if ! printf '%s' "$LOG_S3_FROM" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' \
+        || [ "$(date -u -d "$LOG_S3_FROM" +%F 2>/dev/null || true)" != "$LOG_S3_FROM" ] \
+        || [ "$LOG_S3_FROM" \< 2024-01-02 ]; then
+        complain "LOG_S3_FROM must be a real date such as 2027-01-15, after 2024-01-01"
+      fi
+    fi
+    if [ -n "${LOG_S3_FALLBACK_FROM:-}" ]; then
+      if ! printf '%s' "$LOG_S3_FALLBACK_FROM" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' \
+        || [ "$(date -u -d "$LOG_S3_FALLBACK_FROM" +%F 2>/dev/null || true)" != "$LOG_S3_FALLBACK_FROM" ] \
+        || [ "$LOG_S3_FALLBACK_FROM" \< "${LOG_S3_FROM:-9999}" ] || [ "$LOG_S3_FALLBACK_FROM" = "${LOG_S3_FROM:-}" ]; then
+        complain "LOG_S3_FALLBACK_FROM must be a real date after LOG_S3_FROM"
+      fi
+    fi
+    for tenant in "${POSTGRES_PASSWORD:-}" "${SETUP_TOKEN:-}" "${OBJECTSTORE_ROOT_SECRET:-}" "${OBJECTSTORE_BACKUPS_SECRET:-}" \
+      "${OBJECTSTORE_FILES_SECRET:-}" "${BACKUP_DEFAULT_SECRET_ACCESS_KEY:-}" "${STORAGE_SECRET_ACCESS_KEY:-}"; do
+      if [ -n "$tenant" ] && [ "${LOG_S3_SECRET_ACCESS_KEY:-}" = "$tenant" ]; then
+        complain "LOG_S3_SECRET_ACCESS_KEY is another secret of this install (backups, files or the bundled store); logs need a key of their own"
+      fi
+    done
+    case "${LOG_S3_ACCESS_KEY_ID:-}" in
+      "${BACKUP_DEFAULT_ACCESS_KEY_ID:-excalibase-backups}" | "${STORAGE_ACCESS_KEY_ID:-excalibase-files}" | excalibase-backups | excalibase-files)
+        complain "LOG_S3_ACCESS_KEY_ID is a tenant key id (backups or files); logs need a key of their own" ;;
+    esac
+    ;;
+esac
+
 # Host firewall (EXC-683). On Docker the platform's bridges reach the host and
 # the tenants' bridge the LAN unless it runs; it is on unless HOST_FIREWALL=off,
 # and provisioning and the edge wait for it healthy. Here, on every up, an

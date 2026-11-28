@@ -428,4 +428,56 @@ run || fail "unfenced rerun: $(cat "$WORK/out")"
 lacks v4 "INPUT -i exnet+ -j EXCALIBASE-HOST"
 lacks v4 "DOCKER-USER -i exnet+ -j EXCALIBASE-APP"
 
+# 12. EXC-905: the logs' way out to a bucket (hostlogs-s3). Its bridge forwards to the bucket's public address
+#     and port and DNS alone; metadata, private and LAN ranges drop. Absent (hostlogs, or no logs at all), nothing changes.
+logs_run() { # logs_run ENDPOINT [check]
+  endpoint=$1; shift
+  PATH="$WORK/bin:$PATH" HOST_FIREWALL_ONCE=1 HOST_FIREWALL_WAIT=0 HOST_FIREWALL_SYSFS="$WORK/sys" HOST_FIREWALL_BRIDGE_NF="$WORK/brnf" \
+    HOST_FIREWALL_BRIDGES_FILE="$WORK/bridges" HOST_FIREWALL_RESOLV_CONF="$WORK/resolv.conf" \
+    HOST_FIREWALL_NETWORKS=excalibase-tenants,excalibase-platform,excalibase-edge,excalibase-drains,excalibase-logs-out \
+    HOST_FIREWALL_TENANT_NETWORKS=excalibase-tenants HOST_FIREWALL_LOGS_NETWORK=excalibase-logs-out \
+    HOST_FIREWALL_LOGS_ENDPOINT="$endpoint" sh "$DIR/../host-firewall.sh" "$@" >"$WORK/out" 2>&1
+}
+reset
+mkdir "$WORK/sys/br-1091090a0b0c"
+echo "excalibase-logs-out br-1091090a0b0c 172.31.0.0/16" >>"$WORK/bridges"
+logs_run https://acct.r2.cloudflarestorage.com || fail "a run with the logs network: $(cat "$WORK/out")"
+for family in v4 v6; do
+  has $family "INPUT -i br-1091090a0b0c -j EXCALIBASE-HOST"
+  has $family "DOCKER-USER -i br-1091090a0b0c -j EXCALIBASE-LOGS"
+  has $family "FORWARD -i br-1091090a0b0c -j EXCALIBASE-LOGS"
+  lacks $family "DOCKER-USER -i br-1091090a0b0c -j EXCALIBASE-TENANT"
+  has $family "EXCALIBASE-LOGS -p tcp --dport 443 -j RETURN"
+  has $family "EXCALIBASE-LOGS -j DROP"
+done
+has v4 "EXCALIBASE-LOGS -d 192.168.1.1/32 -p udp --dport 53 -j RETURN"
+for range in 169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 168.63.129.16/32; do has v4 "EXCALIBASE-LOGS -d $range -j DROP"; done
+for range in fc00::/7 fe80::/10; do has v6 "EXCALIBASE-LOGS -d $range -j DROP"; done
+# The port is the endpoint's, and the deny list comes before it.
+before v4 "EXCALIBASE-LOGS -d 169.254.0.0/16 -j DROP" "EXCALIBASE-LOGS -p tcp --dport 443 -j RETURN"
+logs_run http://store.example:9000 || fail "an endpoint with a port: $(cat "$WORK/out")"
+has v4 "EXCALIBASE-LOGS -p tcp --dport 9000 -j RETURN"
+lacks v4 "EXCALIBASE-LOGS -p tcp --dport 443 -j RETURN"
+logs_run http://store.example || fail "http without a port: $(cat "$WORK/out")"
+has v4 "EXCALIBASE-LOGS -p tcp --dport 80 -j RETURN"
+logs_run http://store.example check || fail "check failed with the logs chain in place: $(cat "$WORK/out")"
+sed -i '/^EXCALIBASE-LOGS -j DROP$/d' "$WORK/v4.rules"
+if logs_run http://store.example check; then fail "check passed with the logs chain open"; fi
+# A jump left from a run with the logs network goes when the network is gone.
+reset
+mkdir "$WORK/sys/br-1091090a0b0c"
+echo "excalibase-logs-out br-1091090a0b0c 172.31.0.0/16" >>"$WORK/bridges"
+logs_run https://a.example || fail "logs network, first run"
+has v4 "DOCKER-USER -i br-1091090a0b0c -j EXCALIBASE-LOGS"
+sed -i 's/^excalibase-logs-out .*/excalibase-logs-out absent/' "$WORK/bridges"
+logs_run https://a.example || fail "logs network gone: $(cat "$WORK/out")"
+lacks v4 "DOCKER-USER -i br-1091090a0b0c -j EXCALIBASE-LOGS"
+lacks v4 "INPUT -i br-1091090a0b0c -j EXCALIBASE-HOST"
+# The network absent (a hostlogs install): the guard starts and writes no logs chain.
+reset
+echo "excalibase-logs-out absent" >>"$WORK/bridges"
+logs_run https://acct.r2.cloudflarestorage.com || fail "no logs network: $(cat "$WORK/out")"
+! grep -q -- '-j EXCALIBASE-LOGS' "$WORK/v4.rules" || fail "a logs jump with no logs network"
+logs_run https://acct.r2.cloudflarestorage.com check || fail "check with no logs network: $(cat "$WORK/out")"
+
 echo "host-firewall: ok"

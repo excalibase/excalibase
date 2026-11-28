@@ -104,4 +104,43 @@ done
 good PLATFORM_TAG=1.5.0 HOST_FIREWALL=off >/dev/null || fail "an old release without the firewall refused"
 # The firewall allows DNS only to the resolvers Docker forwards to: init.sh names that file.
 want=HOST_RESOLV_CONF refused HOST_RESOLV_CONF=
+# EXC-905: stored logs in S3-compatible storage (compose profile hostlogs-s3) need a bucket,
+# a from date and a key of their own, never a tenant's.
+s3key=fedcba9876543210fedcba9876543210fedcba9876543210fedcba98765432
+s3() {
+  good COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOINT=https://acct.r2.cloudflarestorage.com LOG_S3_BUCKET=excalibase-logs \
+    LOG_S3_REGION=auto LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=logskeyid LOG_S3_SECRET_ACCESS_KEY=$s3key "$@"
+}
+s3 >/dev/null || fail "a complete object storage setup refused: $(s3 2>&1)"
+good COMPOSE_PROFILES=hostlogs >/dev/null || fail "filesystem logs asked for an S3 setup"
+for missing in LOG_S3_ENDPOINT LOG_S3_BUCKET LOG_S3_REGION LOG_S3_FROM LOG_S3_ACCESS_KEY_ID LOG_S3_SECRET_ACCESS_KEY; do
+  want=$missing refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOINT=https://acct.r2.cloudflarestorage.com LOG_S3_BUCKET=b \
+    LOG_S3_REGION=auto LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=k LOG_S3_SECRET_ACCESS_KEY=$s3key "$missing="
+done
+for from in 2027-13-45 15/01/2027 2027-1-5 tomorrow 2023-12-31; do
+  want=LOG_S3_FROM refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOINT=https://a.example LOG_S3_BUCKET=b LOG_S3_REGION=auto \
+    LOG_S3_ACCESS_KEY_ID=k LOG_S3_SECRET_ACCESS_KEY=$s3key "LOG_S3_FROM=$from"
+done
+for endpoint in ftp://a.example a.example https://a.example/path 'https://a.example b'; do
+  want=LOG_S3_ENDPOINT refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_BUCKET=b LOG_S3_REGION=auto LOG_S3_FROM=2027-01-15 \
+    LOG_S3_ACCESS_KEY_ID=k LOG_S3_SECRET_ACCESS_KEY=$s3key "LOG_S3_ENDPOINT=$endpoint"
+done
+# The key is the logs' own: not the bundled store's, nor any tenant backup or file key.
+for shared in "LOG_S3_SECRET_ACCESS_KEY=${hex%?}1" "LOG_S3_SECRET_ACCESS_KEY=${hex%?}2" "LOG_S3_SECRET_ACCESS_KEY=${hex%?}3" \
+  "LOG_S3_SECRET_ACCESS_KEY=$hex"; do
+  want=LOG_S3_SECRET_ACCESS_KEY s3 "$shared" >/dev/null 2>&1 && fail "logs took a shared secret: $shared"
+  s3 "$shared" >"$WORK_OUT" 2>&1 && fail "preflight accepted $shared"; grep -q LOG_S3_SECRET_ACCESS_KEY "$WORK_OUT" || fail "no message for $shared: $(cat "$WORK_OUT")"
+done
+want=LOG_S3_SECRET_ACCESS_KEY refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOINT=https://a.example LOG_S3_BUCKET=b LOG_S3_REGION=auto \
+  LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=k LOG_S3_SECRET_ACCESS_KEY=$s3key BACKUP_DEFAULT_SECRET_ACCESS_KEY=$s3key
+want=LOG_S3_SECRET_ACCESS_KEY refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOINT=https://a.example LOG_S3_BUCKET=b LOG_S3_REGION=auto \
+  LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=k LOG_S3_SECRET_ACCESS_KEY=$s3key STORAGE_SECRET_ACCESS_KEY=$s3key
+want=LOG_S3_ACCESS_KEY_ID refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOINT=https://a.example LOG_S3_BUCKET=b LOG_S3_REGION=auto \
+  LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=excalibase-backups LOG_S3_SECRET_ACCESS_KEY=$s3key
+# A rollback day: a real date after LOG_S3_FROM.
+s3 LOG_S3_FALLBACK_FROM=2027-02-01 >/dev/null || fail "a good rollback day refused"
+for bad in 2027-01-15 2027-01-01 soon 2027-13-45; do
+  want=LOG_S3_FALLBACK_FROM refused COMPOSE_PROFILES=hostlogs-s3 LOG_S3_ENDPOINT=https://a.example LOG_S3_BUCKET=b LOG_S3_REGION=auto \
+    LOG_S3_FROM=2027-01-15 LOG_S3_ACCESS_KEY_ID=k LOG_S3_SECRET_ACCESS_KEY=$s3key "LOG_S3_FALLBACK_FROM=$bad"
+done
 echo "preflight ok"
