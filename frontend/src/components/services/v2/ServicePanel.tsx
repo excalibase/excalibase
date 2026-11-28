@@ -3,6 +3,7 @@ import { Spinner } from '../../containers/ContainerBits';
 import type { DatabaseInstance } from '../../../types';
 import { AppPanel } from './AppPanel';
 import { DatabasePanel } from './DatabasePanel';
+import { FunctionsPanel } from './FunctionsPanel';
 import { PanelFrame } from './PanelFrame';
 import type { ServiceRef } from './panelState';
 import { SitePanel } from './SitePanel';
@@ -38,6 +39,6 @@ export function ServicePanel({ projectId, service, tab, database, onTab, onClose
         </PanelFrame>
       );
     case 'functions':
-      return null;
+      return <FunctionsPanel projectId={projectId} tab={tab} onTab={onTab} onClose={onClose} />;
   }
 }

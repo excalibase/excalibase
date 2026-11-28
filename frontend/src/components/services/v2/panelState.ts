@@ -40,7 +40,7 @@ const TABS: Readonly<Record<ServiceKind, readonly PanelTab[]>> = {
   ],
   site: [tab('overview', 'Overview'), tab('deploys', 'Deploys'), tab('variables', 'Variables'), tab('settings', 'Settings')],
   storage: [],
-  functions: [],
+  functions: [tab('functions', 'Functions'), tab('logs', 'Logs'), tab('secrets', 'Secrets')],
 };
 
 export const tabsFor = (kind: ServiceKind): readonly PanelTab[] => TABS[kind];

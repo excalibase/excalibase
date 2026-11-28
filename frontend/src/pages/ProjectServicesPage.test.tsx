@@ -21,6 +21,8 @@ interface World {
   deploys?: unknown[];
   buckets?: unknown[];
   functions?: unknown[];
+  functionsMissing?: boolean;
+  functionsError?: boolean;
   sites?: unknown[];
   projectError?: boolean;
   bucketsError?: boolean;
@@ -41,6 +43,9 @@ function stub(world: World) {
     if (url.endsWith('/sites/')) return data(world.sites ?? []);
     if (url.endsWith('/storage/buckets') && world.bucketsMissing) return Promise.reject(Object.assign(new Error('Request failed with status code 404'), { response: { status: 404, data: {} } }));
     if (url.endsWith('/storage/buckets')) return world.bucketsError ? Promise.reject(new Error('buckets down')) : data(world.buckets ?? []);
+    if (url.endsWith('/functions') && world.functionsMissing) return Promise.reject(Object.assign(new Error('Request failed with status code 404'), { response: { status: 404, data: {} } }));
+    if (url.endsWith('/functions') && world.functionsError) return Promise.reject(new Error('functions down'));
+    if (url.endsWith('/functions/runtime/status')) return data({ status: 'healthy', healthy: true });
     if (url.endsWith('/functions')) return data(world.functions ?? []);
     return Promise.reject(Object.assign(new Error('not mocked'), { response: { status: 404 } }));
   });
@@ -133,15 +138,45 @@ describe('ProjectServicesPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not load the project/i);
     expect(screen.queryByTestId('services-empty')).not.toBeInTheDocument();
   });
-  test('functions are hidden like the nav hides them: no card, no menu entry, no request', async () => {
-    stub({ apps: [app], deploys: [deploy('succeeded')], functions: [{ id: 'f' }, { id: 'g' }] });
-    renderAt('/project/p1?service=functions');
-    await userEvent.click(await screen.findByRole('button', { name: '+ Add service' }));
+  test('functions are one card with the count and the runtime state, and no add entry', async () => {
+    stub({ apps: [app], deploys: [deploy('succeeded')], functions: [{ id: 'f', files: [] }, { id: 'g', files: [] }] });
+    renderAt('/project/p1');
+    const card = await screen.findByRole('link', { name: /Functions/ });
+    expect(await within(card).findByText('2 edge functions')).toBeInTheDocument();
+    expect(await within(card).findByText('Running')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '+ Add service' }));
     expect(within(screen.getByRole('menu')).queryByRole('menuitem', { name: /Function/ })).not.toBeInTheDocument();
-    expect(screen.queryByText(/2 functions/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Functions' })).not.toBeInTheDocument();
+  });
+
+  test('selecting the functions card opens its panel with three tabs', async () => {
+    stub({ apps: [app], deploys: [deploy('succeeded')], functions: [{ id: 'f', name: 'Fn', files: [], version: 1, active: true }] });
+    renderAt('/project/p1');
+    await userEvent.click(await screen.findByRole('link', { name: /Functions/ }));
+    expect(await screen.findByRole('region', { name: 'Functions panel' })).toBeInTheDocument();
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Functions', 'Logs', 'Secrets']);
+    expect(screen.getByTestId('where')).toHaveTextContent('service=functions');
+  });
+
+  test('no functions, or an install without them, means no card and no panel', async () => {
+    stub({ apps: [app], deploys: [deploy('succeeded')], functions: [] });
+    renderAt('/project/p1?service=functions');
+    expect(await screen.findByRole('link', { name: /api/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Functions/ })).not.toBeInTheDocument();
     expect(screen.getByText(/not in this project/)).toBeInTheDocument();
-    expect(vi.mocked(api.get).mock.calls.some(([url]) => String(url).endsWith('/functions'))).toBe(false);
+  });
+
+  test('an install that does not mount functions is not an error', async () => {
+    stub({ apps: [app], deploys: [deploy('succeeded')], functionsMissing: true });
+    renderAt('/project/p1');
+    expect(await screen.findByRole('link', { name: /api/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Functions/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  test('a functions list that failed is reported, not read as none', async () => {
+    stub({ apps: [app], deploys: [deploy('succeeded')], functionsError: true });
+    renderAt('/project/p1');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/some services could not be loaded|functions down/i);
   });
 
   test('switching from one bucket card to another shows the second bucket', async () => {

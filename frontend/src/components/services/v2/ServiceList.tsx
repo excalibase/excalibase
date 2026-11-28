@@ -1,14 +1,15 @@
 import { Link, type To } from 'react-router-dom';
-import { Box, Database, FolderOpen, Globe, Loader2, type LucideIcon } from 'lucide-react';
+import { Box, Code2, Database, FolderOpen, Globe, Loader2, type LucideIcon } from 'lucide-react';
 import { useDeploys, type App } from '../../../api/apps';
 import { useSiteDeploys, type Site } from '../../../api/sites';
+import { useRuntimeStatus } from '../../../hooks/useEdgeFunctions';
 import { useTiers } from '../../../api/tiers';
 import type { Bucket } from '../../../hooks/useStorage';
 import type { DatabaseInstance } from '../../../types';
 import { cn } from '../../../utils/cn';
 import { ToneBadge } from '../../containers/ContainerBits';
 import { databaseServiceStatus } from '../serviceStatus';
-import { appCardDetail, appCardStatus, bucketCardDetail, databaseCardDetail, siteCardDetail, siteCardStatus, type CardStatus } from './cardStatus';
+import { appCardDetail, appCardStatus, bucketCardDetail, databaseCardDetail, functionsCardDetail, functionsCardStatus, siteCardDetail, siteCardStatus, type CardStatus } from './cardStatus';
 import { serviceKey, type ServiceRef } from './panelState';
 import type { ProjectServices } from './useProjectServices';
 
@@ -79,6 +80,11 @@ function SiteCard({ site, projectId, ...rest }: { readonly site: Site; readonly 
   return <ServiceCard icon={Globe} name={site.name} detail={siteCardDetail(site)} status={siteCardStatus(site, deploys)} service={{ kind: 'site', id: site.id }} {...rest} />;
 }
 
+function FunctionsCard({ projectId, count, ...rest }: { readonly projectId: string; readonly count: number } & Pick<CardProps, 'selected' | 'to'>) {
+  const { data: runtime } = useRuntimeStatus(projectId);
+  return <ServiceCard icon={Code2} name="Functions" detail={functionsCardDetail(count)} status={functionsCardStatus(runtime)} service={{ kind: 'functions' }} {...rest} />;
+}
+
 interface ServiceListProps {
   readonly projectId: string;
   readonly services: ProjectServices;
@@ -111,6 +117,9 @@ export function ServiceList({ projectId, services, selected, to }: ServiceListPr
           to={to}
         />
       ))}
+      {services.functions.length > 0 && (
+        <FunctionsCard projectId={projectId} count={services.functions.length} selected={isSelected({ kind: 'functions' })} to={to} />
+      )}
     </ul>
   );
 }

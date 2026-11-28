@@ -36,8 +36,10 @@ describe('tabsFor', () => {
   test('a site has four tabs', () => {
     expect(tabsFor('site').map((t) => t.key)).toEqual(['overview', 'deploys', 'variables', 'settings']);
   });
-  test('functions and storage show their own view with no tabs', () => {
-    expect(tabsFor('functions')).toEqual([]);
+  test('functions have three tabs', () => {
+    expect(tabsFor('functions').map((t) => t.key)).toEqual(['functions', 'logs', 'secrets']);
+  });
+  test('storage shows its own view with no tabs', () => {
     expect(tabsFor('storage')).toEqual([]);
   });
 });
@@ -62,7 +64,9 @@ describe('parsePanelState', () => {
   });
 
   test('a service without tabs carries none', () => {
-    expect(parsePanelState(params('service=functions&tab=data')).tab).toBe('');
+    expect(parsePanelState(params('service=storage:avatars&tab=data')).tab).toBe('');
+    expect(parsePanelState(params('service=functions&tab=data')).tab).toBe('functions');
+    expect(parsePanelState(params('service=functions&tab=secrets')).tab).toBe('secrets');
   });
 
   test('an unreadable service is no panel, not a guess', () => {
