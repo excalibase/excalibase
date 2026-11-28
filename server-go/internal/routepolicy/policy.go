@@ -169,6 +169,10 @@ type Row struct {
 	// unbound one with write scope (project creation: Studio makes such tokens
 	// for automation). Read-only tokens are refused by the write gate already.
 	Unbound bool
+	// HiddenFromOthers marks a staff-only route that answers every caller but a
+	// platform admin's own session as an unmounted route does (404), instead of
+	// naming the permission it lacks: the route is not even confirmed to exist.
+	HiddenFromOthers bool
 	// Capability is the capability a platform service token may call this
 	// route with, or "" when no capability token may reach it.
 	Capability string

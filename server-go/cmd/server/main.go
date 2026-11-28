@@ -1184,6 +1184,8 @@ type handlerDeps struct {
 	adminAnalyticsHandler *handler.AdminAnalyticsHandler
 	// adminAttentionHandler pages the lists of the console's needs-attention card (EXC-898).
 	adminAttentionHandler *handler.AdminAttentionHandler
+	// adminAudit serves the console's audit log and account page (EXC-856); nil leaves the routes unmounted.
+	adminAudit *handler.AdminAuditHandler
 	// adminAssertions checks Cloudflare Access assertions on the admin host; nil builds the real one from config.
 	adminAssertions adminaccess.Checker
 	// adminGateOverride replaces the gate built from config; tests that probe other layers use it.
@@ -2063,6 +2065,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		adminConsoleHandler:   adminConsole,
 		adminAttentionHandler: handler.NewAdminAttentionHandler(adminconsole.NewAttention(pgstore.NewAdminConsole(sqlStore.DB()))),
 		adminAnalyticsHandler: handler.NewAdminAnalyticsHandler(pgstore.NewAdminConsole(sqlStore.DB()), cfg.Features()),
+		adminAudit:            wireAdminAudit(sqlStore),
 		authHandler:           authHandler,
 		oauthHandler:          oauthHandler,
 		trustVerifyHandler:    trustVerify,
@@ -2581,6 +2584,7 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 			r.Group(func(r chi.Router) { d.adminConsoleHandler.Routes(r) })
 			r.Route("/analytics", func(r chi.Router) { d.adminAnalyticsHandler.Routes(r) })
 			r.Route("/attention", func(r chi.Router) { d.adminAttentionHandler.Routes(r) })
+			mountAdminAudit(r, d)
 			r.Group(func(r chi.Router) { d.orgHandler.ConsoleRoutes(r) })
 			r.Route("/tiers", func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermViewAny))
