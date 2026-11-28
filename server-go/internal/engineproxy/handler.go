@@ -23,9 +23,13 @@ import (
 // maxCreateBody bounds the JSON the proxy reads to check a create.
 const maxCreateBody = 1 << 20
 
-// maxConcurrentBodyChecks bounds the bodies read and decoded at once: each costs about thirty
-// times its size, so a flood of large creates would otherwise outgrow the proxy's memory.
-const maxConcurrentBodyChecks = 4
+// maxConcurrentBodyChecks bounds the bodies read and decoded at once: a 1 MiB create allocates about 90 MiB,
+// so a flood of large creates would otherwise outgrow the proxy's memory.
+const maxConcurrentBodyChecks = 2
+
+// defaultBodyCheckWait is how long a body waits for a free slot: longer than a check takes,
+// shorter than a client gives up.
+const defaultBodyCheckWait = 2 * time.Second
 
 // errBusy answers a body that would exceed maxConcurrentBodyChecks; the caller retries.
 var errBusy = fmt.Errorf("%w: too many requests are being checked", ErrRefused)
@@ -78,6 +82,8 @@ type Handler struct {
 	restarts  *restartGuard
 	// bodyChecks holds a slot for each body being read and checked.
 	bodyChecks chan struct{}
+	// bodyCheckWait is how long a request waits for a slot before it is answered 503.
+	bodyCheckWait time.Duration
 }
 
 // NewHandler proxies allowed calls to target through transport.
@@ -94,7 +100,7 @@ func NewHandler(policy Policy, target *url.URL, transport http.RoundTripper) *Ha
 		FlushInterval: -1,
 	}
 	return &Handler{policy: policy, target: target, transport: transport, forward: forward,
-		bodyChecks: make(chan struct{}, maxConcurrentBodyChecks)}
+		bodyChecks: make(chan struct{}, maxConcurrentBodyChecks), bodyCheckWait: defaultBodyCheckWait}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -307,11 +313,15 @@ func (h *Handler) inspect(ctx context.Context, apiPath string, into any) error {
 }
 
 func (h *Handler) checkBody(r *http.Request, check func([]byte) error) error {
+	timer := time.NewTimer(h.bodyCheckWait)
+	defer timer.Stop()
 	select {
 	case h.bodyChecks <- struct{}{}:
 		defer func() { <-h.bodyChecks }()
-	default:
+	case <-timer.C:
 		return errBusy
+	case <-r.Context().Done():
+		return r.Context().Err()
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxCreateBody+1))
 	if err != nil {

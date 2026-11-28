@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/engineproxy"
+	"github.com/excalibase/provisioning-poc/internal/memlimit"
 )
 
 // containerPrefix is the name every provisioned container starts with.
@@ -56,6 +57,10 @@ type config struct {
 	mustBeRootless bool
 }
 
+// memoryShare is the percent of the container's memory the Go runtime aims to stay under,
+// leaving room for what it cannot collect.
+const memoryShare = 80
+
 // bridgesEvery is how often the bridges file is rewritten: a network
 // re-created by compose gets a new bridge.
 const bridgesEvery = 15 * time.Second
@@ -64,6 +69,9 @@ const bridgesEvery = 15 * time.Second
 const rootlessAttempts = 30
 
 func main() {
+	if limit, ok := memlimit.Apply(memoryShare); ok {
+		log.Printf("engine proxy: soft memory limit %d bytes, %d%% of the container's", limit, memoryShare)
+	}
 	if err := serve(os.Getenv); err != nil {
 		log.Fatalf("engine proxy: %v", err)
 	}
@@ -105,7 +113,11 @@ func serve(getenv func(string) string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("engine proxy: %s -> %s, networks %v prefix %q", cfg.listen, cfg.socket, cfg.policy.Networks, cfg.policy.NetworkPrefix)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	listener, err := listen(cfg.listen)
+	if err != nil {
+		return err
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

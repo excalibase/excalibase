@@ -383,6 +383,7 @@ func TestImagePullForwardsOnlyTheNamedQueryKeys(t *testing.T) {
 // A body check allocates a few dozen times the body, so only a few run at once.
 func TestBodyChecksBeyondTheLimitAreRefusedWithUnavailable(t *testing.T) {
 	engine, handler := newHandlerWith(t, testPolicy())
+	handler.bodyCheckWait = 10 * time.Millisecond
 	for range cap(handler.bodyChecks) {
 		handler.bodyChecks <- struct{}{}
 	}
@@ -421,5 +422,53 @@ func TestImagePullRefusesWhatIsNotOneNamedImage(t *testing.T) {
 		if engine.reached(imagesCreate) {
 			t.Errorf("pull ?%s reached the engine", query)
 		}
+	}
+}
+
+// A request that finds every slot taken waits for one rather than being turned away to
+// reconnect, which is what keeps a flood from piling up half-closed connections.
+func TestABodyCheckWaitsForASlotThatFreesInTime(t *testing.T) {
+	engine, handler := newHandlerWith(t, testPolicy())
+	handler.bodyCheckWait = 5 * time.Second
+	for range cap(handler.bodyChecks) {
+		handler.bodyChecks <- struct{}{}
+	}
+	time.AfterFunc(50*time.Millisecond, func() { <-handler.bodyChecks })
+	body := string(createBody(t, nil))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1.47/containers/create?name=excalibase-p1-postgres", strings.NewReader(body)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("create that waited for a slot = %d, want forwarded", recorder.Code)
+	}
+	if !engine.reached("POST /v1.47/containers/create") {
+		t.Fatal("the create never reached the engine")
+	}
+}
+
+func TestABodyCheckStopsWaitingWhenTheClientGoesAway(t *testing.T) {
+	engine, handler := newHandlerWith(t, testPolicy())
+	handler.bodyCheckWait = time.Minute
+	for range cap(handler.bodyChecks) {
+		handler.bodyChecks <- struct{}{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	request := httptest.NewRequest(http.MethodPost, "/v1.47/containers/create?name=excalibase-p1-postgres", strings.NewReader(string(createBody(t, nil)))).WithContext(ctx)
+	done := make(chan int, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		done <- recorder.Code
+	}()
+	select {
+	case code := <-done:
+		if code == http.StatusOK {
+			t.Fatalf("a cancelled request was answered %d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request kept waiting after its client went away")
+	}
+	if engine.reached("POST /v1.47/containers/create") {
+		t.Fatal("a cancelled create reached the engine")
 	}
 }
