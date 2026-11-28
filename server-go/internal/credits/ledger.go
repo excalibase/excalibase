@@ -98,10 +98,12 @@ type Ledger interface {
 	CreditAccount(ctx context.Context, orgID string) (Account, error)
 	CreditEntries(ctx context.Context, orgID string, beforeID int64, limit int) ([]Entry, error)
 	CreditStatement(ctx context.Context, orgID string, month time.Time) (Statement, error)
+	// CreditUsageBurn is what usage drew per UTC day since `from`.
+	CreditUsageBurn(ctx context.Context, orgID string, from time.Time) (UsageBurn, error)
 	DebitCredit(ctx context.Context, request DebitRequest) (DebitResult, error)
 	AdjustCredit(ctx context.Context, adjustment Adjustment, now time.Time) (Entry, error)
-	// ExpireCreditLots ends lots whose date the meter has passed. With requireWatermark an org the meter
-	// has not started on keeps its lots; without it such an org expires by the clock.
+	// ExpireCreditLots ends lots whose date has passed. With requireWatermark a lot also waits for its
+	// org's meter watermark to reach the date; without it the clock alone decides.
 	ExpireCreditLots(ctx context.Context, now time.Time, requireWatermark bool) (int, error)
 	CreditMeterWatermark(ctx context.Context, orgID string) (time.Time, bool, error)
 	AdvanceCreditMeterWatermark(ctx context.Context, orgID string, to time.Time) error

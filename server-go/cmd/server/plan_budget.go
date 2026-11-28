@@ -36,6 +36,10 @@ func planBudgetOn(ctx context.Context, cfg config.AppConfig) bool {
 // and runs every boot.
 func wirePlanBudget(cfg config.AppConfig, sqlStore storage.PlatformStore) *planbudget.Gate {
 	gate := planBudgetGate(cfg)
+	setCreditAllowance(cfg, sqlStore)
+	if observer := creditObserver(cfg, sqlStore); observer != nil {
+		gate.SetObserver(observer)
+	}
 	apphost.SetDefaultPlanBudget(gate)
 	pg, ok := sqlStore.(*pgstore.Store)
 	if !ok {

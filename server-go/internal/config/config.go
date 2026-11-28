@@ -346,6 +346,8 @@ type AppConfig struct {
 	Credits CreditsConfig
 	// PlanBudget is the plan table of the CPU/RAM budget (EXC-901).
 	PlanBudget PlanBudgetConfig
+	// CreditMeter is the price table and free allowances of usage metering (EXC-866).
+	CreditMeter CreditMeterConfig
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -481,6 +483,7 @@ func (c AppConfig) Validate() error {
 		c.validateTrust,
 		c.validatePlanBudget,
 		c.validateCredits,
+		c.validateCreditMeter,
 		c.validateSiteGit,
 		c.validateScheduler,
 		c.validateAppRoute,
@@ -518,6 +521,7 @@ func Load() AppConfig {
 	cfg.Trust = loadTrust()
 	cfg.Credits = loadCredits()
 	cfg.PlanBudget = loadPlanBudget()
+	cfg.CreditMeter = loadCreditMeter()
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"

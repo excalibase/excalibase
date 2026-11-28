@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { statementCsvHref, useAcceptCreditTerms, useOrgCredits, type CreditEntry, type CreditOverview } from '../../api/credits';
+import { statementCsvHref, useAcceptCreditTerms, useOrgCredits, type CreditBurn, type CreditEntry, type CreditOverview } from '../../api/credits';
 import { formatInstant } from '../../utils/instant';
 import { serverErrorMessage } from '../../utils/serverError';
 import { Line, Section } from './UsageParts';
@@ -14,6 +14,12 @@ const KIND_LABEL: Record<CreditEntry['kind'], string> = {
   expire: 'Credit expired',
 };
 const STATEMENT_MONTHS = 6;
+
+// What the credit could not pay of a usage line, in micros; 0 when it paid in full.
+function uncoveredMicros(entry: CreditEntry): number {
+  const value = entry.details?.uncovered_micros;
+  return typeof value === 'number' ? value : 0;
+}
 
 function TrialOffer({ orgId, overview }: { readonly orgId: string; readonly overview: CreditOverview }) {
   const [agreed, setAgreed] = useState(false);
@@ -45,21 +51,91 @@ function TrialOffer({ orgId, overview }: { readonly orgId: string; readonly over
   );
 }
 
+// A usage line nothing paid for: the hours after the credit is gone.
+const isUnpaid = (entry: CreditEntry) => entry.kind === 'usage' && entry.amountMicros === 0 && uncoveredMicros(entry) > 0;
+
+interface HistoryRow { key: string; when: string; what: string; amountMicros: number }
+
+// Entries as rows: every hour nothing paid for folds into one row per UTC day with the day's total, the rest stay as they are.
+function historyRows(entries: readonly CreditEntry[]): HistoryRow[] {
+  const rows: HistoryRow[] = [];
+  const unpaidByDay = new Map<string, HistoryRow & { uncovered: number }>();
+  for (const entry of entries) {
+    const note = uncoveredMicros(entry) > 0 ? ` · Not covered: ${dollars(uncoveredMicros(entry))}` : '';
+    if (!isUnpaid(entry)) {
+      const reason = entry.reason ? ` · ${entry.reason}` : '';
+      rows.push({ key: String(entry.id), when: formatInstant(entry.periodStart ?? entry.createdAt), what: `${KIND_LABEL[entry.kind]}${reason}${note}`, amountMicros: entry.amountMicros });
+      continue;
+    }
+    const day = (entry.periodStart ?? entry.createdAt).slice(0, 10);
+    const row = unpaidByDay.get(day);
+    if (row) {
+      row.uncovered += uncoveredMicros(entry);
+      row.what = `${KIND_LABEL.usage} · Not covered: ${dollars(row.uncovered)}`;
+      continue;
+    }
+    const folded = { key: `unpaid-${day}`, when: day, what: `${KIND_LABEL.usage} · Not covered: ${dollars(uncoveredMicros(entry))}`, amountMicros: 0, uncovered: uncoveredMicros(entry) };
+    unpaidByDay.set(day, folded);
+    rows.push(folded);
+  }
+  return rows;
+}
+
 function History({ entries }: { readonly entries: readonly CreditEntry[] }) {
   if (entries.length === 0) return <p className="text-text-secondary">No credit activity yet.</p>;
   return (
     <table className="w-full text-text-primary">
       <thead className="text-text-secondary"><tr><th className={CELL}>When</th><th className={CELL}>What</th><th className={`${CELL} text-right`}>Amount</th></tr></thead>
       <tbody>
-        {entries.map((entry) => (
-          <tr key={entry.id} className="border-t border-border-primary">
-            <td className={CELL}>{formatInstant(entry.periodStart ?? entry.createdAt)}</td>
-            <td className={CELL}>{KIND_LABEL[entry.kind]}{entry.reason ? ` · ${entry.reason}` : ''}</td>
-            <td className={`${CELL} text-right`}>{dollars(entry.amountMicros)}</td>
+        {historyRows(entries).map((row) => (
+          <tr key={row.key} className="border-t border-border-primary">
+            <td className={CELL}>{row.when}</td>
+            <td className={CELL}>{row.what}</td>
+            <td className={`${CELL} text-right`}>{dollars(row.amountMicros)}</td>
           </tr>
         ))}
       </tbody>
     </table>
+  );
+}
+
+const plural = (count: number) => `${count} day${count === 1 ? '' : 's'}`;
+
+function BurnDays({ days }: { readonly days: CreditBurn['days'] }) {
+  const largest = Math.max(1, ...days.map((day) => day.micros));
+  return (
+    <ul aria-label={`Burn over the last ${days.length} days`} className="grid grid-cols-7 gap-1 text-xs text-text-secondary">
+      {days.map((day) => (
+        <li key={day.day} className="flex flex-col items-center gap-1">
+          <span className="flex h-12 w-full items-end"><span className="w-full rounded-sm bg-purple-500/70" style={{ height: `${Math.max(2, Math.round((day.micros / largest) * 100))}%` }} /></span>
+          <span>{day.day}</span>
+          <span className="text-text-primary">{dollars(day.micros)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// The run-out line: a used-up credit has no run-out, a burn too slow to date says so, and only no burn says "No usage yet".
+function runOutText(overview: CreditOverview): string {
+  const { burn, balanceMicros } = overview;
+  if (balanceMicros <= 0) return 'Credit used up';
+  if (burn.runOutAt) return `${formatInstant(burn.runOutAt, 'date')} (${plural(daysLeft(burn.runOutAt, new Date()) ?? 0)})`;
+  return burn.perDayMicros > 0 ? 'More than 10 years away' : 'No usage yet';
+}
+
+// What the org spends a day and when that runs out; nothing while usage is not billed.
+function Burn({ overview }: { readonly overview: CreditOverview }) {
+  if (!overview.metering) return <p className="text-text-secondary">Usage is not billed yet, so your balance only changes when credit is added or expires.</p>;
+  const { burn, nextExpiry } = overview;
+  const expiresFirst = burn.runOutAt !== null && nextExpiry !== null && Date.parse(nextExpiry) < Date.parse(burn.runOutAt);
+  return (
+    <>
+      <Line label="Burn per day" value={dollars(burn.perDayMicros)} />
+      <Line label="Projected run-out" value={runOutText(overview)} />
+      {expiresFirst && <p className="text-text-secondary">Your credit expires before it runs out at this rate.</p>}
+      <BurnDays days={burn.days} />
+    </>
   );
 }
 
@@ -92,6 +168,7 @@ export function CreditsSection({ orgId }: { readonly orgId: string }) {
       {data.lots.length > 1 && data.lots.map((lot) => (
         <Line key={lot.id} label={lot.expiresAt ? `Expires ${formatInstant(lot.expiresAt, 'date')}` : 'Does not expire'} value={dollars(lot.remainingMicros)} />
       ))}
+      <Burn overview={data} />
       <TrialOffer orgId={orgId} overview={data} />
       <h3 className="pt-2 font-medium text-text-primary">History</h3>
       <History entries={data.entries} />

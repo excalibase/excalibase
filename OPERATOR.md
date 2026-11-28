@@ -1544,7 +1544,7 @@ member is unsuspended or the project is recreated.
 
 ## Credits (EXC-866)
 
-Off until `FEATURE_CREDITS=true` (Helm `env.FEATURE_CREDITS`, or `.env` on a single host; same on both). `FEATURE_CREDITS=true` refuses to boot unless `FEATURE_LIMITEDTRIAL` is also on, so credit never funds containers for unverified accounts. Off, no credit route is mounted (each answers like an unmounted route), nothing is granted or swept, and Studio shows the Usage page as before. This change builds the ledger, the sign-up credit, admin grants and the balance pages. Nothing meters usage yet, so the balance only moves by grants, adjustments and expiry.
+Off until `FEATURE_CREDITS=true` (Helm `env.FEATURE_CREDITS`, or `.env` on a single host; same on both). `FEATURE_CREDITS=true` refuses to boot unless `FEATURE_LIMITEDTRIAL` is also on, so credit never funds containers for unverified accounts. Off, no credit route is mounted (each answers like an unmounted route), nothing is granted or swept, and Studio shows the Usage page as before. This change builds the ledger, the sign-up credit, admin grants and the balance pages. Usage is metered only with `FEATURE_CREDITBURN` (see Usage metering below); without it the balance moves only by grants, adjustments and expiry.
 
 Sign-up: Studio's sign-up form (email and OAuth) shows a credit terms checkbox while the flag is on; ticking it records the terms version and time, and leaving it empty still creates the account, without the credit. Every email-verification path (the link and an admin marking an address verified) tries the grant straight away; the sweeper stays as a backstop and the grant is idempotent. The admin Organizations table gains a Credit column.
 
@@ -1572,6 +1572,24 @@ A failed resize puts the old size back without admitting it again, because the c
 With the flag on, a plan is a CPU/RAM budget, but its copies still run one per node (the database operator requires hostname anti-affinity), so the node-count refusal ("STANDARD needs 3 nodes") stays for any plan with more than one copy and a plan with one copy needs no node check. Studio shows the budget on Usage and Home (used against the limit, per service), what is left beside the create and resize forms, and per org in the admin orgs table; the route is `GET /api/orgs/{orgId}/plan-budget`, mounted only while the flag is on. Boot logs every org whose recorded usage already passes its plan (records only; a cluster's live size is not read, so drift between the record and a running cluster is not detected yet).
 
 `FEATURE_CREDITS` with `FEATURE_PLANBUDGET` off is allowed (the ledger without a ceiling). With the budget on and credits off the ceiling is the plan's budget, which every current Free shape fits.
+
+## Usage metering (EXC-866)
+
+**Keep `FEATURE_CREDITBURN` off until the $0 rules (EXC-866 C.5) ship.** Without them an org that runs out of credit keeps its services and is only recorded as owing.
+
+`FEATURE_CREDITBURN` (off by default, cloud only) draws what an org runs from its credit. It refuses to start unless `FEATURE_CREDITS` and `FEATURE_PLANBUDGET` are on: burning credit without admission would let usage outrun the ceiling. Off, nothing is sampled or billed and every credit lot expires by the clock. Self-hosted installs are never metered.
+
+Every five minutes, at a random point of the slot, the leading replica records what each org with a credit account reserves (the sizes the plan budget already keeps) into `usage_samples`, stamped with the database clock and with the plan's free allowance at that moment, so a later plan change never reprices a sampled hour. The plan budget also samples the org under its lock just before each step that changes it, and again once the step has committed, so a service paused, resumed or resized inside a slot still counts for that slot; a slot keeps the largest value it saw (and the larger allowance). A database whose size was never recorded is billed at its plan's default size and counted, not skipped. An org on a plan other than FREE or STANDARD is not charged: it is sampled at zero and counted.
+
+An hour is billed only after it ended plus 10 minutes. Its cost is, per slot, the reservation above that slot's allowance times the monthly price, over 730 hours of 12 slots, added exactly and rounded half up once per org-hour, in whole micro-dollars. A missing slot bills nothing. Each hour is one ledger entry keyed `usage:{org}:{hour}`, so a restart or a second replica never bills it twice; if a retry after a crash prices an hour differently (a price or plan change in between), the hour stays billed as first written and the difference is logged and counted. Catching up after downtime walks each missed hour once, at most a week per pass. An org's billing starts at the first whole hour after the latest of its credit, the first time metering was enabled and its first sample.
+
+A debit takes only what usable lots hold: a lot that expires before the hour ends cannot pay for it, soonest-expiring first. Every hour the credit cannot pay in full still gets its entry, with the shortfall on it as `uncovered_micros` (shown in Studio's history as "Not covered"); that shortfall is written off, never collected, and an hour is decided by the balance when it is billed, so credit added later pays for later hours only. The balance never goes below zero. A lot expires only once the org's meter watermark has passed its date. Billed samples older than 14 days are pruned; unbilled ones never are.
+
+Settings: `CREDIT_PRICES` is JSON, default `{"version":"v1","vcpuMonthMicros":12000000,"ramGiBMonthMicros":6000000,"diskGiBMonthMicros":120000}` ($12 per vCPU-month, $6 and $0.12 per GiB-month). Change the version when you change a price; it is written on every charge. The free allowance (never charged, subtracted per slot) lives with the plan budget: `PLANBUDGET_FREE_ALLOWANCE_CPU_MILLI`, `_MEMORY_MIB`, `_DISK_GIB`, default 1000, 1024, 10; STANDARD defaults to 0. A bad value stops the boot.
+
+Counters on `/metrics`: `excalibase_credit_meter_events_total{reason}` with `unmetered_plan`, `unrecorded_size`, `repriced_hour` and `shortfall_hour`.
+
+What happens at a zero balance (alerts, refusing growth, the grace period, pausing compute) is not built yet; the meter only records the shortfall. Studio's Usage page shows burn per day, the last seven days and the projected run-out ("Credit used up" at zero). Rollback is the flag: turning it off stops sampling and billing; a wrong debit is reversed with an admin adjustment.
 
 ## Limited trial until verified (EXC-899, in progress)
 

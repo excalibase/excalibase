@@ -335,7 +335,7 @@ func (s *Store) ExpireCreditLots(ctx context.Context, now time.Time, requireWate
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT l.id, l.org_id FROM credit_lots l LEFT JOIN credit_meter_watermarks w ON w.org_id = l.org_id
 		 WHERE l.remaining_micros > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= $1
-		   AND l.expires_at <= CASE WHEN $3::boolean THEN w.watermark ELSE COALESCE(w.watermark, $1) END
+		   AND l.expires_at <= CASE WHEN $3::boolean THEN w.watermark ELSE $1 END
 		 ORDER BY l.expires_at, l.id LIMIT $2`, now.UTC(), creditExpiryBatch, requireWatermark)
 	if err != nil {
 		return 0, err
@@ -379,7 +379,7 @@ func (s *Store) expireCreditLot(ctx context.Context, lotID int64, orgID string, 
 		err := tx.QueryRowContext(ctx,
 			`SELECT l.remaining_micros FROM credit_lots l LEFT JOIN credit_meter_watermarks w ON w.org_id = l.org_id
 			 WHERE l.id = $1 AND l.remaining_micros > 0 AND l.expires_at <= $2
-			   AND l.expires_at <= CASE WHEN $3::boolean THEN w.watermark ELSE COALESCE(w.watermark, $2) END FOR UPDATE OF l`,
+			   AND l.expires_at <= CASE WHEN $3::boolean THEN w.watermark ELSE $2 END FOR UPDATE OF l`,
 			lotID, now.UTC(), requireWatermark).Scan(&remaining)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil

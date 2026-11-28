@@ -23,15 +23,25 @@ export interface CreditEntry {
   periodStart?: string;
   periodEnd?: string;
   createdAt: string;
+  // A usage line also says what the credit could not pay (uncovered_micros).
+  details?: Record<string, unknown>;
 }
 
 export type TrialState = 'none' | 'needs_terms' | 'pending' | 'waitlisted' | 'granted' | 'refused';
+
+export interface CreditBurn {
+  perDayMicros: number;
+  days: { day: string; micros: number }[];
+  runOutAt: string | null;
+}
 
 export interface CreditOverview {
   orgId: string;
   balanceMicros: number;
   lots: CreditLot[];
   entries: CreditEntry[];
+  burn: CreditBurn;
+  metering: boolean;
   nextExpiry: string | null;
   trial: { state: TrialState; position?: number; amountMicros: number; days: number };
   billedIn: string;
