@@ -16,11 +16,9 @@ const (
 
 const userProfileSQL = `
 	SELECT u.id, u.email, u.username, u.role, ` + statusExpr + `, u.email_verified_at, u.created_at, u.last_login_at, u.last_login_ip,
-	       s.user_id IS NOT NULL, COALESCE(s.reason, ''), COALESCE(s.reason_code, ''), s.suspended_at,
-	       t.user_id IS NOT NULL, COALESCE(t.state::text, ''), COALESCE(t.method, ''), COALESCE(t.reason, ''), t.decided_at
+	       s.user_id IS NOT NULL, COALESCE(s.reason, ''), COALESCE(s.reason_code, ''), s.suspended_at
 	FROM users u
 	LEFT JOIN abuse_suspensions s ON s.user_id = u.id
-	LEFT JOIN user_trust t ON t.user_id = u.id
 	WHERE u.id = $1`
 
 // userOrgsSQL is the orgs the account belongs to or owns; an owner without a
@@ -46,13 +44,9 @@ const suspensionHistorySQL = `
 	SELECT a.action, COALESCE(a.user_id, ''), COALESCE(au.email, ''), COALESCE(a.details, ''), a.timestamp
 	FROM audit_log a
 	LEFT JOIN users au ON au.id = a.user_id
-	WHERE a.resource = 'user' AND a.resource_id = $1 AND a.action IN ($2, $3)
+	WHERE a.via = '' AND a.resource = 'user' AND a.resource_id = $1 AND a.action IN ($2, $3)
 	ORDER BY a.id DESC
 	LIMIT $4`
-
-const trustHistorySQL = `
-	SELECT COALESCE(from_state::text, ''), to_state::text, method, reason, actor, at
-	FROM trust_audit WHERE user_id = $1 ORDER BY id DESC LIMIT $2`
 
 const signInSQL = `SELECT provider, email, created_at FROM studio_identities WHERE user_id = $1 ORDER BY created_at, provider`
 
@@ -63,7 +57,7 @@ func (a *AdminConsole) ReadUserDetail(ctx context.Context, userID string) (*admi
 		return nil, err
 	}
 	steps := []func(context.Context, string, *adminconsole.UserDetail) error{
-		a.readOrgs, a.readProjects, a.readSuspensions, a.readTrustHistory, a.readSignIn, a.readRecentAudit,
+		a.readTrust, a.readOrgs, a.readProjects, a.readSuspensions, a.readSignIn, a.readRecentAudit,
 	}
 	for _, step := range steps {
 		if err := step(ctx, userID, detail); err != nil {
@@ -74,15 +68,12 @@ func (a *AdminConsole) ReadUserDetail(ctx context.Context, userID string) (*admi
 }
 
 func (a *AdminConsole) readProfile(ctx context.Context, userID string, detail *adminconsole.UserDetail) error {
-	var verified, signedUp, lastLogin, suspendedAt, decidedAt sql.NullTime
+	var verified, signedUp, lastLogin, suspendedAt sql.NullTime
 	var lastIP sql.NullString
-	var hasTrust bool
-	var trust adminconsole.TrustState
 	profile := &detail.Profile
 	err := a.db.QueryRowContext(ctx, userProfileSQL, userID).Scan(
 		&profile.ID, &profile.Email, &profile.Username, &profile.Role, &profile.Status, &verified, &signedUp, &lastLogin, &lastIP,
-		&detail.Suspension.Suspended, &detail.Suspension.Reason, &detail.Suspension.ReasonCode, &suspendedAt,
-		&hasTrust, &trust.State, &trust.Method, &trust.Reason, &decidedAt)
+		&detail.Suspension.Suspended, &detail.Suspension.Reason, &detail.Suspension.ReasonCode, &suspendedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return adminconsole.ErrUserNotFound
 	}
@@ -92,10 +83,6 @@ func (a *AdminConsole) readProfile(ctx context.Context, userID string, detail *a
 	profile.EmailVerified, profile.EmailVerifiedAt = verified.Valid, timePtr(verified)
 	profile.SignedUpAt, profile.LastLoginAt, profile.LastLoginIP = timePtr(signedUp), timePtr(lastLogin), lastIP.String
 	detail.Suspension.SuspendedAt = timePtr(suspendedAt)
-	if hasTrust {
-		trust.DecidedAt = timePtr(decidedAt)
-		profile.Trust = &trust
-	}
 	return nil
 }
 
@@ -145,24 +132,6 @@ func (a *AdminConsole) readSuspensions(ctx context.Context, userID string, detai
 		}
 		event.At = timePtr(at)
 		detail.Suspensions = append(detail.Suspensions, event)
-	}
-	return rows.Err()
-}
-
-func (a *AdminConsole) readTrustHistory(ctx context.Context, userID string, detail *adminconsole.UserDetail) error {
-	rows, err := a.db.QueryContext(ctx, trustHistorySQL, userID, userHistoryLimit)
-	if err != nil {
-		return fmt.Errorf("read trust history: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var change adminconsole.TrustChange
-		var at sql.NullTime
-		if err := rows.Scan(&change.From, &change.To, &change.Method, &change.Reason, &change.Actor, &at); err != nil {
-			return fmt.Errorf("scan trust change: %w", err)
-		}
-		change.At = timePtr(at)
-		detail.TrustHistory = append(detail.TrustHistory, change)
 	}
 	return rows.Err()
 }

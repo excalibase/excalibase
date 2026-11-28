@@ -167,3 +167,38 @@ func mustInt(t *testing.T, id string) int64 {
 	}
 	return n
 }
+
+func TestAdminUserDetailSuspensionHistoryLeavesOutToolCalls(t *testing.T) {
+	store, console := consoleFixture(t)
+	logAudit(t, store, domain.AuditEntry{UserID: "u-admin", Action: "user.suspend", Resource: "user", ResourceID: "u-cust", Details: "proxy"})
+	logAudit(t, store, domain.AuditEntry{UserID: "u-admin", Action: "user.suspend", Resource: "user", ResourceID: "u-cust", Via: "mcp", ProjectID: "p-cust", Details: "tenant call"})
+	detail, err := console.ReadUserDetail(context.Background(), "u-cust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Suspensions) != 1 || detail.Suspensions[0].Reason != "proxy" {
+		t.Fatalf("history = %+v, want only the platform's own entry", detail.Suspensions)
+	}
+}
+
+func TestAdminAuditFiltersAreIndexed(t *testing.T) {
+	store, _ := consoleFixture(t)
+	for _, name := range []string{"idx_audit_log_user_id_id", "idx_audit_log_resource_id_id", "idx_audit_log_project_id_id", "idx_audit_log_action_prefix"} {
+		var found bool
+		if err := store.db.QueryRowContext(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'audit_log' AND indexname = $1)`, name).Scan(&found); err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Errorf("index %s is missing: a filter that matches nothing would scan the whole log", name)
+		}
+	}
+}
+
+func TestAdminAuditActorFilterStillFindsAnAccountThatIsGone(t *testing.T) {
+	store, console := consoleFixture(t)
+	logAudit(t, store, domain.AuditEntry{UserID: "u-deleted", Action: "token.create", Resource: "token"})
+	page, err := console.ListAudit(context.Background(), adminconsole.AuditQuery{Actor: "u-deleted", Limit: 5})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("page = %+v, err = %v; the trail outlives the account", page, err)
+	}
+}

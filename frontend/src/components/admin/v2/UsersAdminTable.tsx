@@ -5,6 +5,7 @@ import { DataTable, type Column, type FilterDef } from '../../ui/DataTable';
 import { Button } from '../../Button';
 import { serverErrorMessage } from '../../../utils/serverError';
 import { useAccountAction, useConsoleUsers } from '../../../hooks/useAdminConsole';
+import { useStudioV2 } from '../../../hooks/useDeploymentMode';
 import { suspendUser, unsuspendUser, type ConsoleUser, type SuspendResult } from '../../../api/adminConsole';
 import { AccountStatusBadge } from '../AccountStatusBadge';
 import { SuspendReasonCode, type SuspendReasonCodeValue } from '../SuspendReasonCode';
@@ -31,13 +32,16 @@ export const USER_FILTERS: FilterDef<ConsoleUser>[] = [
   },
 ];
 
-export function userColumns(): Column<ConsoleUser>[] {
+// accountPages turns the email into a link to the account page, which exists with Studio v2.
+export function userColumns(accountPages = false): Column<ConsoleUser>[] {
   return [
     {
       id: 'email', header: 'Email', locked: true, sortValue: serverSorted, text: (user) => user.email,
       cell: (user) => (
         <div>
-          <Link to={`/admin/users/${encodeURIComponent(user.id)}`} className="font-medium underline-offset-2 hover:underline" title="Open this account">{user.email}</Link>
+          {accountPages
+            ? <Link to={`/admin/users/${encodeURIComponent(user.id)}`} className="font-medium underline-offset-2 hover:underline" title="Open this account">{user.email}</Link>
+            : <span className="font-medium">{user.email}</span>}
           <div className="flex gap-2 text-xs text-text-tertiary">
             {user.tempMail && <span className="text-amber-400">temp mail</span>}
             {!user.emailVerified && <span>unverified</span>}
@@ -89,7 +93,8 @@ export function UsersAdminTable() {
   const [bulk, setBulk] = useState<BulkRequest<ConsoleUser> | null>(null);
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
   const [result, setResult] = useState<SuspendResult | null>(null);
-  const columns = useMemo(userColumns, []);
+  const { enabled: accountPages } = useStudioV2();
+  const columns = useMemo(() => userColumns(accountPages), [accountPages]);
   const [reasonCode, setReasonCode] = useState<SuspendReasonCodeValue>('other');
   const mutation = pending?.action === 'unsuspend' ? unsuspend : suspend;
 

@@ -65,3 +65,15 @@ describe.each([
     expect(await screen.findByTestId(testId)).toBeInTheDocument();
   });
 });
+
+describe('/admin/users/:userId belongs to studio_v2', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('flag off: the account page is not served, even to a platform admin', async () => {
+    serve({ studio_v2: false });
+    renderAt('/admin/users/u1');
+    useAuthStore.setState({ user: { id: 'boss', username: 'boss', email: 'boss@example.test', role: 'platform_admin' }, isAuthenticated: true });
+    expect(await screen.findByTestId('feature-unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-user-detail')).not.toBeInTheDocument();
+  });
+});

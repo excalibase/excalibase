@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/trust"
 )
 
@@ -159,4 +160,40 @@ func (s *Store) GrandfatherUsersBefore(ctx context.Context, cutoff time.Time) (i
 		return 0, fmt.Errorf("grandfather users: %w", err)
 	}
 	return int(granted), nil
+}
+
+const (
+	adminTrustSQL        = `SELECT state::text, method, reason, decided_at FROM user_trust WHERE user_id = $1`
+	adminTrustHistorySQL = `SELECT COALESCE(from_state::text, ''), to_state::text, method, reason, actor, at
+		FROM trust_audit WHERE user_id = $1 ORDER BY id DESC LIMIT $2`
+	adminTrustHistoryLimit = 20
+)
+
+// readTrust fills the admin account page with the account's trust decision and its trail.
+func (a *AdminConsole) readTrust(ctx context.Context, userID string, detail *adminconsole.UserDetail) error {
+	var state adminconsole.TrustState
+	var decidedAt sql.NullTime
+	err := a.db.QueryRowContext(ctx, adminTrustSQL, userID).Scan(&state.State, &state.Method, &state.Reason, &decidedAt)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read trust: %w", err)
+	}
+	if err == nil {
+		state.DecidedAt = timePtr(decidedAt)
+		detail.Profile.Trust = &state
+	}
+	rows, err := a.db.QueryContext(ctx, adminTrustHistorySQL, userID, adminTrustHistoryLimit)
+	if err != nil {
+		return fmt.Errorf("read trust history: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var change adminconsole.TrustChange
+		var at sql.NullTime
+		if err := rows.Scan(&change.From, &change.To, &change.Method, &change.Reason, &change.Actor, &at); err != nil {
+			return fmt.Errorf("scan trust change: %w", err)
+		}
+		change.At = timePtr(at)
+		detail.TrustHistory = append(detail.TrustHistory, change)
+	}
+	return rows.Err()
 }

@@ -3,6 +3,7 @@ package adminconsole
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -44,5 +45,17 @@ func TestUserDetailKeepsNotFoundAndNeverReturnsNilLists(t *testing.T) {
 func TestUserDetailRefusesAnEmptyID(t *testing.T) {
 	if _, err := NewUserDetails(fakeDetailReader{}, nil).Detail(context.Background(), " "); !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("err = %v, want ErrUserNotFound", err)
+	}
+}
+
+func TestUserDetailCutsLongSuspensionReasons(t *testing.T) {
+	long := strings.Repeat("x", MaxAuditDetails+80)
+	reader := fakeDetailReader{detail: &UserDetail{Suspensions: []SuspensionEvent{{Action: AuditActionSuspend, Reason: long}}}}
+	got, err := NewUserDetails(reader, nil).Detail(context.Background(), "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len([]rune(got.Suspensions[0].Reason)); n > MaxAuditDetails+1 {
+		t.Fatalf("reason length = %d, want at most %d", n, MaxAuditDetails+1)
 	}
 }

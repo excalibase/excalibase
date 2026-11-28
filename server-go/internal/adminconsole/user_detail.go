@@ -154,6 +154,9 @@ func (d *UserDetail) fillEmptyLists() {
 	if d.Audit == nil {
 		d.Audit = []AuditRow{}
 	}
+	for i := range d.Suspensions {
+		d.Suspensions[i].Reason = ShortDetails(d.Suspensions[i].Reason)
+	}
 	for i := range d.Audit {
 		d.Audit[i].Details = ShortDetails(d.Audit[i].Details)
 	}

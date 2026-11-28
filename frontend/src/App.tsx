@@ -112,7 +112,7 @@ export default function App() {
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
             <Route path="/admin" element={<AdminRouteGuard><PlatformAdminPage /></AdminRouteGuard>} />
-            <Route path="/admin/users/:userId" element={<AdminRouteGuard><AdminUserDetailPage /></AdminRouteGuard>} />
+            <Route path="/admin/users/:userId" element={<AdminRouteGuard><FeatureGate feature="studio_v2"><AdminUserDetailPage /></FeatureGate></AdminRouteGuard>} />
             <Route path="/admin/host" element={<AdminRouteGuard><FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate></AdminRouteGuard>} />
             <Route path="/usage" element={<FeatureGate feature="studio_v2"><UsagePage /></FeatureGate>} />
             <Route path="/account" element={<FeatureGate feature="studio_v2"><AccountPage /></FeatureGate>} />

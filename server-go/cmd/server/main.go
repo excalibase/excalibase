@@ -2578,13 +2578,15 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 		// token may create the principals it manages, which the blanket
 		// unrestricted-write gate below would refuse before the handler runs.
 		r.Route("/service-accounts", func(r chi.Router) { d.svcAcctHandler.Routes(r) })
+		// Before the unrestricted-write gate below: that gate answers a narrowed token with a 403, and
+		// these routes must not answer anyone but a platform admin's session differently from a missing one.
+		mountAdminAudit(r, d)
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireUnrestrictedCredentialForWrites)
 			r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.adminConsoleHandler.Routes(r) })
 			r.Route("/analytics", func(r chi.Router) { d.adminAnalyticsHandler.Routes(r) })
 			r.Route("/attention", func(r chi.Router) { d.adminAttentionHandler.Routes(r) })
-			mountAdminAudit(r, d)
 			r.Group(func(r chi.Router) { d.orgHandler.ConsoleRoutes(r) })
 			r.Route("/tiers", func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermViewAny))

@@ -46,6 +46,15 @@ describe('column definitions', () => {
     expect(userColumns()[0].text?.(user(1) as never)).toBe('dev1@acme.test');
   });
 
+  test('the email opens the account page only while studio v2 is on', () => {
+    const open = userColumns(true)[0];
+    render(<MemoryRouter>{open.cell(user(7) as never)}</MemoryRouter>);
+    expect(screen.getByRole('link', { name: 'dev7@acme.test' })).toHaveAttribute('href', '/admin/users/u-7');
+    render(<MemoryRouter>{userColumns()[0].cell(user(8) as never)}</MemoryRouter>);
+    expect(screen.getByText('dev8@acme.test')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'dev8@acme.test' })).toBeNull();
+  });
+
   test('the credit column shows the balance, a dash for no account, and is absent while credits are off', () => {
     expect(orgColumns().map((c) => c.id)).not.toContain('credit');
     const credit = orgColumns(true).find((c) => c.id === 'credit');
