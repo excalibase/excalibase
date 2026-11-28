@@ -14,7 +14,9 @@ import (
 func burnConfig(mode string, flags ...features.Feature) config.AppConfig {
 	return config.AppConfig{DeploymentMode: mode, DarkFeatures: flags, CreditMeter: config.CreditMeterConfig{
 		PriceVersion: "v7", VCPUMonthMicros: 12_000_000, RAMGiBMonthMicros: 6_000_000, DiskGiBMonthMicros: 120_000,
-		Free: config.AllowanceNumbers{CPUMilli: 1000, MemoryMiB: 1024, DiskGiB: 10},
+	}, PlanBudget: config.PlanBudgetConfig{
+		Free:     config.PlanNumbers{AllowanceCPUMilli: 1000, AllowanceMemoryMiB: 1024, AllowanceDiskGiB: 10},
+		Standard: config.PlanNumbers{AllowanceDiskGiB: 2},
 	}}
 }
 
@@ -67,22 +69,46 @@ func TestSelfHostedIgnoresTheBurnFlag(t *testing.T) {
 	}
 }
 
-func TestPricesAndAllowancesComeFromConfig(t *testing.T) {
-	cfg := burnConfig("cloud")
-	cfg.CreditMeter.Standard = config.AllowanceNumbers{DiskGiB: 2}
-	prices := creditPrices(cfg)
+func TestPricesComeFromConfig(t *testing.T) {
+	prices := creditPrices(burnConfig("cloud"))
 	if prices.Version != "v7" || prices.VCPUMonth != credits.FromDollars(12) || prices.RAMGiBMonth != credits.FromDollars(6) || prices.DiskGiBMonth != 120_000 {
 		t.Fatalf("%+v", prices)
 	}
-	allow := creditAllowance(cfg)
-	if got := allow("free"); got != (creditmeter.Allowance{CPUMilli: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30}) {
-		t.Fatalf("free allowance %+v", got)
+}
+
+func TestTheAllowanceIsTheOneInThePlanBudget(t *testing.T) {
+	allow := creditAllowance(burnConfig("cloud"))
+	if got, ok := allow("free"); !ok || got != (creditmeter.Allowance{CPUMilli: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30}) {
+		t.Fatalf("free allowance %+v %v", got, ok)
 	}
-	if got := allow("STANDARD"); got.DiskBytes != 2<<30 || got.CPUMilli != 0 {
-		t.Fatalf("standard allowance %+v", got)
+	if got, ok := allow("STANDARD"); !ok || got.DiskBytes != 2<<30 || got.CPUMilli != 0 {
+		t.Fatalf("standard allowance %+v %v", got, ok)
 	}
-	if got := allow("ENTERPRISE"); got != (creditmeter.Allowance{}) {
-		t.Fatalf("a plan with no allowance charges everything: %+v", got)
+}
+
+func TestAPlanThatIsNotFreeOrStandardIsNotMetered(t *testing.T) {
+	allow := creditAllowance(burnConfig("cloud"))
+	for _, tier := range []string{"ENTERPRISE", "", "mystery"} {
+		if got, ok := allow(tier); ok {
+			t.Errorf("plan %q must be skipped, not charged at a zero allowance: %+v", tier, got)
+		}
+	}
+}
+
+type fakeAllowanceStore struct {
+	lookup func(string) (creditmeter.Allowance, bool)
+}
+
+func (f *fakeAllowanceStore) SetCreditAllowance(lookup func(string) (creditmeter.Allowance, bool)) {
+	f.lookup = lookup
+}
+
+func TestTheStoreIsGivenTheAllowancesOnlyWhileMetering(t *testing.T) {
+	off, on := &fakeAllowanceStore{}, &fakeAllowanceStore{}
+	setCreditAllowance(burnConfig("cloud"), off)
+	setCreditAllowance(burnConfig("cloud", features.CreditBurn), on)
+	if off.lookup != nil || on.lookup == nil {
+		t.Fatalf("off %v on %v", off.lookup != nil, on.lookup != nil)
 	}
 }
 

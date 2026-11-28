@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -116,20 +115,68 @@ func TestAnOrgWithNoCreditAccountIsNotSampled(t *testing.T) {
 	}
 }
 
-func TestADatabaseWhoseSizeIsUnknownSamplesNothingAndSaysSo(t *testing.T) {
+func TestADatabaseWhoseSizeIsUnknownIsSampledAtItsPlansDefaultSize(t *testing.T) {
 	store := testStore(t)
 	org := creditPerson(t, store, "uk")
 	fundOrg(t, store, org, "seed-uk", credits.FromDollars(5), nil)
 	newDatabase(t, store, "proj-uk-db", org)
-	if _, err := store.db.Exec(`UPDATE database_instances SET reserved_copies = 0 WHERE project_id = 'proj-uk-db'`); err != nil {
+	if _, err := store.db.Exec(`UPDATE database_instances SET reserved_copies = 0, reserved_cpu_milli = 0, reserved_memory_bytes = 0, reserved_disk_bytes = 0 WHERE project_id = 'proj-uk-db'`); err != nil {
 		t.Fatal(err)
 	}
-	err := store.SampleOrg(context.Background(), org)
-	if !errors.Is(err, planbudget.ErrUnrecordedSize) {
-		t.Fatalf("an unreadable size must be reported, got %v", err)
+	if err := store.SampleOrg(context.Background(), org); err != nil {
+		t.Fatalf("an unreadable size must be billed at the default, not refused: %v", err)
 	}
-	if rows := samplesOf(t, store, org); len(rows) != 0 {
-		t.Fatalf("a guess is never written, got %+v", rows)
+	rows := samplesOf(t, store, org)
+	if len(rows) != 1 || rows[0].cpu != freeDatabaseCPU || rows[0].disk != freeDatabaseDisk {
+		t.Fatalf("a free database defaults to 500m and 5 GiB, got %+v", rows)
+	}
+	var unrecorded int
+	if err := store.db.QueryRow(`SELECT unrecorded_services FROM usage_samples WHERE org_id = $1`, org).Scan(&unrecorded); err != nil || unrecorded != 1 {
+		t.Fatalf("the sample says one service was billed at a default: %d %v", unrecorded, err)
+	}
+}
+
+func TestTheSampleKeepsTheAllowanceOfThePlanItWasTakenUnder(t *testing.T) {
+	store := testStore(t)
+	org := creditPerson(t, store, "al")
+	fundOrg(t, store, org, "seed-al", credits.FromDollars(5), nil)
+	store.SetCreditAllowance(testAllowance)
+	if err := store.SampleOrg(context.Background(), org); err != nil {
+		t.Fatal(err)
+	}
+	var cpu, memory, disk int64
+	if err := store.db.QueryRow(`SELECT allowance_cpu_milli, allowance_memory_bytes, allowance_disk_bytes FROM usage_samples WHERE org_id = $1`, org).Scan(&cpu, &memory, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if cpu != 1000 || memory != 1<<30 || disk != 10<<30 {
+		t.Fatalf("a free org's sample carries the free allowance, got %d %d %d", cpu, memory, disk)
+	}
+	if _, err := store.db.Exec(`UPDATE orgs SET tier = 'STANDARD' WHERE id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SampleOrg(context.Background(), org); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT allowance_cpu_milli FROM usage_samples WHERE org_id = $1`, org).Scan(&cpu); err != nil || cpu != 1000 {
+		t.Fatalf("in the same slot the larger allowance stays (it errs toward the user): %d %v", cpu, err)
+	}
+}
+
+func TestAPlanTheMeterDoesNotChargeIsSampledAsZeroAndCounted(t *testing.T) {
+	store := testStore(t)
+	org := creditPerson(t, store, "en")
+	fundOrg(t, store, org, "seed-en", credits.FromDollars(5), nil)
+	newDatabase(t, store, "proj-en-db", org)
+	store.SetCreditAllowance(testAllowance)
+	if _, err := store.db.Exec(`UPDATE orgs SET tier = 'ENTERPRISE' WHERE id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SampleOrg(context.Background(), org); err != nil {
+		t.Fatal(err)
+	}
+	rows := samplesOf(t, store, org)
+	if len(rows) != 1 || rows[0].cpu != 0 || rows[0].disk != 0 {
+		t.Fatalf("an org on an unmetered plan is never charged, but is sampled at zero so its watermark and lots move: %+v", rows)
 	}
 }
 
@@ -213,7 +260,7 @@ func TestAFailingSampleInsideAStepNeverBreaksTheStep(t *testing.T) {
 	}
 }
 
-func TestMeterOrgsListsEveryCreditAccountWithItsPlanAndBalance(t *testing.T) {
+func TestMeterOrgsListsEveryCreditAccountWithWhenItsCreditAndSamplesBegan(t *testing.T) {
 	store := testStore(t)
 	org := creditPerson(t, store, "mo")
 	began := databaseNow(t, store).Add(-3 * time.Hour).Truncate(time.Second)
@@ -222,8 +269,14 @@ func TestMeterOrgsListsEveryCreditAccountWithItsPlanAndBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(orgs) != 1 || orgs[0].OrgID != org || orgs[0].Tier != "FREE" || orgs[0].Balance != credits.FromDollars(7) || !orgs[0].Since.Equal(began) {
+	if len(orgs) != 1 || orgs[0].OrgID != org || !orgs[0].Since.Equal(began) || orgs[0].FirstSample != nil {
 		t.Fatalf("got %+v", orgs)
+	}
+	first := databaseNow(t, store).Truncate(5 * time.Minute)
+	putSample(t, store, org, first, 100)
+	orgs, err = store.MeterOrgs(context.Background())
+	if err != nil || len(orgs) != 1 || orgs[0].FirstSample == nil || !orgs[0].FirstSample.Equal(first) {
+		t.Fatalf("the org's first sample is reported: %+v %v", orgs, err)
 	}
 }
 
@@ -256,7 +309,7 @@ func meterRig(t *testing.T, person string, hoursAgo int, expiresAt func(began ti
 	}
 	fundAt(t, store, org, "seed-"+person, credits.FromDollars(5), expiry, began)
 	prices := creditmeter.Prices{Version: "v1", VCPUMonth: credits.FromDollars(12), RAMGiBMonth: credits.FromDollars(6), DiskGiBMonth: 120_000}
-	meter := creditmeter.NewMeter(store, credits.NewService(store, trialRules(40), nil), prices, func(string) creditmeter.Allowance { return creditmeter.Allowance{} })
+	meter := creditmeter.NewMeter(store, credits.NewService(store, trialRules(40), nil), prices)
 	return store, meter, org, began.Add(time.Minute) // the first whole hour the org is billed from
 }
 
@@ -298,7 +351,7 @@ func TestAnHourIsNotBilledBeforeTenMinutesAfterItEndsOnTheDatabaseClock(t *testi
 		putSample(t, store, org, slot, 250)
 	}
 	prices := creditmeter.Prices{Version: "v1", VCPUMonth: credits.FromDollars(12)}
-	meter := creditmeter.NewMeter(store, credits.NewService(store, trialRules(40), nil), prices, func(string) creditmeter.Allowance { return creditmeter.Allowance{} })
+	meter := creditmeter.NewMeter(store, credits.NewService(store, trialRules(40), nil), prices)
 	if err := meter.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -337,32 +390,51 @@ func TestTwoMetersRunningAtOnceWriteOneEntryPerHour(t *testing.T) {
 	creditInvariant(t, store, org)
 }
 
-func TestACreditThatRunsOutNeverGoesBelowZeroAndTheMeterKeepsMoving(t *testing.T) {
+func TestEveryHourTheCreditCannotPayKeepsItsShortfallAndLaterCreditNeverPaysForIt(t *testing.T) {
 	store := testStore(t)
 	org := creditPerson(t, store, "zr")
-	began := databaseNow(t, store).Add(-5 * time.Hour).Truncate(time.Hour).Add(-time.Minute)
+	began := databaseNow(t, store).Add(-6 * time.Hour).Truncate(time.Hour).Add(-time.Minute)
 	fundAt(t, store, org, "seed-zr", 5000, nil, began) // pays one hour of 4110 and part of the next
 	first := began.Add(time.Minute)
-	for slot := first; slot.Before(first.Add(3 * time.Hour)); slot = slot.Add(5 * time.Minute) {
+	for slot := first; slot.Before(first.Add(4 * time.Hour)); slot = slot.Add(5 * time.Minute) {
 		putSample(t, store, org, slot, 250)
 	}
 	prices := creditmeter.Prices{Version: "v1", VCPUMonth: credits.FromDollars(12)}
-	meter := creditmeter.NewMeter(store, credits.NewService(store, trialRules(40), nil), prices, func(string) creditmeter.Allowance { return creditmeter.Allowance{} })
-	for range 2 {
-		if err := meter.Run(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+	ledger := credits.NewService(store, trialRules(40), nil)
+	meter := creditmeter.NewMeter(store, ledger, prices)
+	ctx := context.Background()
+	if err := meter.Run(ctx); err != nil {
+		t.Fatal(err)
 	}
 	if balance := creditInvariant(t, store, org); balance != 0 {
 		t.Fatalf("the credit is used up exactly, got %d", balance)
 	}
-	var entries int
-	if err := store.db.QueryRow(`SELECT count(*) FROM credit_entries WHERE org_id = $1 AND kind = 'usage'`, org).Scan(&entries); err != nil || entries != 2 {
-		t.Fatalf("the paid hour and the hour the credit ran out in, nothing after: %d %v", entries, err)
+	rows, err := store.db.Query(`SELECT amount_micros, COALESCE((details->>'uncovered_micros')::bigint, -1) FROM credit_entries WHERE org_id = $1 AND kind = 'usage' ORDER BY period_start`, org)
+	if err != nil {
+		t.Fatal(err)
 	}
-	mark, _, _ := store.CreditMeterWatermark(context.Background(), org)
-	if mark.Before(first.Add(3 * time.Hour)) {
-		t.Fatalf("every settled hour is passed even with nothing to pay it: %v", mark)
+	var taken, shortfall []int64
+	for rows.Next() {
+		var amount, uncovered int64
+		if err := rows.Scan(&amount, &uncovered); err != nil {
+			t.Fatal(err)
+		}
+		taken, shortfall = append(taken, -amount), append(shortfall, uncovered)
+	}
+	rows.Close()
+	if len(taken) != 4 || taken[0] != 4110 || taken[1] != 890 || taken[2] != 0 || taken[3] != 0 {
+		t.Fatalf("the credit pays the first hour and part of the second: %v", taken)
+	}
+	if shortfall[0] != 0 || shortfall[1] != 3220 || shortfall[2] != 4110 || shortfall[3] != 4110 {
+		t.Fatalf("each hour the credit could not pay records its shortfall: %v", shortfall)
+	}
+	// New credit arrives; the hours already passed are never billed again, so it pays only for later ones.
+	fundAt(t, store, org, "seed-zr-2", 10_000, nil, databaseNow(t, store))
+	if err := meter.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if balance := creditInvariant(t, store, org); balance != 10_000 {
+		t.Fatalf("credit added later pays for none of the earlier hours, got %d", balance)
 	}
 }
 
@@ -458,4 +530,157 @@ func TestTheBurnSumsUsagePerUTCDayAndSaysWhenItBegan(t *testing.T) {
 	if empty, err := store.CreditUsageBurn(ctx, "org-nobody", day); err != nil || len(empty.Days) != 0 || empty.Since != nil {
 		t.Fatalf("an org with no usage: %+v %v", empty, err)
 	}
+}
+
+func TestAnHourAlreadyBilledIsKeptWhenThePriceChangesBeforeTheRetry(t *testing.T) {
+	store, meter, org, first := meterRig(t, "rp", 3, nil)
+	for slot := first; slot.Before(first.Add(time.Hour)); slot = slot.Add(5 * time.Minute) {
+		putSample(t, store, org, slot, 250)
+	}
+	ctx := context.Background()
+	if err := meter.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM credit_meter_watermarks WHERE org_id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	repriced := creditmeter.Prices{Version: "v2", VCPUMonth: credits.FromDollars(24), RAMGiBMonth: credits.FromDollars(6), DiskGiBMonth: 120_000}
+	if err := creditmeter.NewMeter(store, credits.NewService(store, trialRules(40), nil), repriced).Run(ctx); err != nil {
+		t.Fatalf("a retry at another price must not fail: %v", err)
+	}
+	var entries int
+	var amount int64
+	if err := store.db.QueryRow(`SELECT count(*), COALESCE(sum(amount_micros), 0) FROM credit_entries WHERE org_id = $1 AND kind = 'usage'`, org).Scan(&entries, &amount); err != nil {
+		t.Fatal(err)
+	}
+	if entries != 1 || amount != -4110 {
+		t.Fatalf("the hour stays billed once at the first price: %d entries, %d", entries, amount)
+	}
+	if mark, ok, err := store.CreditMeterWatermark(ctx, org); err != nil || !ok || mark.Before(first.Add(time.Hour)) {
+		t.Fatalf("the watermark moved on past the billed hour: %v %v %v", mark, ok, err)
+	}
+}
+
+func TestWithMeteringOffALotExpiresByTheClockEvenIfAWatermarkExists(t *testing.T) {
+	store := testStore(t)
+	org := creditPerson(t, store, "of")
+	now := databaseNow(t, store)
+	expiry := now.Add(-2 * time.Hour)
+	fundAt(t, store, org, "seed-of", credits.FromDollars(5), &expiry, now.Add(-10*time.Hour))
+	ctx := context.Background()
+	if err := store.AdvanceCreditMeterWatermark(ctx, org, now.Add(-5*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := store.ExpireCreditLots(ctx, now, true); err != nil || n != 0 {
+		t.Fatalf("while metering, a watermark before the date holds the lot: %d %v", n, err)
+	}
+	if n, err := store.ExpireCreditLots(ctx, now, false); err != nil || n != 1 {
+		t.Fatalf("with metering off the clock decides: %d %v", n, err)
+	}
+	if balance := creditInvariant(t, store, org); balance != 0 {
+		t.Fatalf("the lot is expired, got %d", balance)
+	}
+}
+
+func TestAnOrgCreditedLongBeforeMeteringStartsAtItsFirstSampleNotAtItsCredit(t *testing.T) {
+	store := testStore(t)
+	org := creditPerson(t, store, "fw")
+	now := databaseNow(t, store)
+	fundAt(t, store, org, "seed-fw", credits.FromDollars(5), nil, now.Add(-60*24*time.Hour))
+	firstSlot := now.Add(-3 * time.Hour).Truncate(5 * time.Minute)
+	for slot := firstSlot; slot.Before(now.Add(-time.Hour)); slot = slot.Add(5 * time.Minute) {
+		putSample(t, store, org, slot, 250)
+	}
+	meter := creditmeter.NewMeter(store, credits.NewService(store, trialRules(40), nil), creditmeter.Prices{Version: "v1", VCPUMonth: credits.FromDollars(12)})
+	if err := meter.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var earliest time.Time
+	if err := store.db.QueryRow(`SELECT min(period_start) FROM credit_entries WHERE org_id = $1 AND kind = 'usage'`, org).Scan(&earliest); err != nil {
+		t.Fatal(err)
+	}
+	if earliest.Before(firstSlot) {
+		t.Fatalf("billing began at %v, before the first sample %v: sixty days of empty hours were walked", earliest, firstSlot)
+	}
+	mark, _, _ := store.CreditMeterWatermark(context.Background(), org)
+	if mark.Before(firstSlot) {
+		t.Fatalf("the watermark %v must not sit before the first sample", mark)
+	}
+}
+
+func TestNothingBeforeMeteringWasEnabledIsBilled(t *testing.T) {
+	store := testStore(t)
+	org := creditPerson(t, store, "en2")
+	now := databaseNow(t, store)
+	fundAt(t, store, org, "seed-en2", credits.FromDollars(5), nil, now.Add(-10*time.Hour))
+	for slot := now.Add(-4 * time.Hour).Truncate(5 * time.Minute); slot.Before(now.Add(-time.Hour)); slot = slot.Add(5 * time.Minute) {
+		putSample(t, store, org, slot, 250)
+	}
+	ctx := context.Background()
+	if err := store.MarkMeteringEnabled(ctx); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := store.MeteringEnabledAt(ctx)
+	if err != nil || enabled.Before(now) {
+		t.Fatalf("the enabling time is recorded at the first call: %v %v", enabled, err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := store.MarkMeteringEnabled(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := store.MeteringEnabledAt(ctx); err != nil || !again.Equal(enabled) {
+		t.Fatalf("a later call changes nothing: %v then %v (%v)", enabled, again, err)
+	}
+	meter := creditmeter.NewMeter(store, credits.NewService(store, trialRules(40), nil), creditmeter.Prices{Version: "v1", VCPUMonth: credits.FromDollars(12)})
+	if err := meter.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var entries int
+	if err := store.db.QueryRow(`SELECT count(*) FROM credit_entries WHERE org_id = $1 AND kind = 'usage'`, org).Scan(&entries); err != nil || entries != 0 {
+		t.Fatalf("usage sampled before metering was enabled is not billed: %d %v", entries, err)
+	}
+}
+
+func TestAResumeIsSampledAgainOnceItHasTakenEffect(t *testing.T) {
+	store := testStore(t)
+	org := creditPerson(t, store, "rs")
+	fundOrg(t, store, org, "seed-rs", credits.FromDollars(5), nil)
+	gate := gateOf(64000, 64*1024, 500, 50, true)
+	gate.SetObserver(store.ObserveOrgUsage)
+	store.SetPlanBudget(gate)
+	paused := instanceRow("proj-rs-db", org)
+	paused.Status = string(domain.StatusPaused)
+	newDatabase(t, store, "proj-rs-db", org)
+	if err := store.UpdateIfStatus(paused, string(domain.StatusActive)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM usage_samples WHERE org_id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	resumed := instanceRow("proj-rs-db", org)
+	if err := store.UpdateIfStatus(resumed, string(domain.StatusPaused)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		rows := samplesOf(t, store, org)
+		if len(rows) == 1 && rows[0].cpu == freeDatabaseCPU {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the running state after a resume was never sampled: %+v", rows)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// testAllowance is the plan budget's allowance table: FREE holds 1 vCPU, 1 GiB and 10 GiB, STANDARD none; others are not metered.
+func testAllowance(tier string) (creditmeter.Allowance, bool) {
+	switch tier {
+	case "FREE":
+		return creditmeter.Allowance{CPUMilli: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30}, true
+	case "STANDARD":
+		return creditmeter.Allowance{}, true
+	}
+	return creditmeter.Allowance{}, false
 }

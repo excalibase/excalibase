@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/creditmeter"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/golang-migrate/migrate/v4"
@@ -32,6 +33,8 @@ type Store struct {
 	lockDB *sql.DB
 	// budget admits the steps that grow an org's services (EXC-901); nil checks nothing.
 	budget *planbudget.Gate
+	// allowanceFor looks up a plan's free allowance for credit metering (EXC-866); nil means none.
+	allowanceFor func(tier string) (creditmeter.Allowance, bool)
 }
 
 // lifecycleLockShare is the share of the main pool's size given to the lock

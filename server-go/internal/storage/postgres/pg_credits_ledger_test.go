@@ -164,7 +164,7 @@ func TestLotExpiresOnlyOncetheMeterHasPassedIt(t *testing.T) {
 	if err := store.AdvanceCreditMeterWatermark(ctx, "org-w", creditsNow.Add(5*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := store.ExpireCreditLots(ctx, later, false); err != nil || n != 0 {
+	if n, err := store.ExpireCreditLots(ctx, later, true); err != nil || n != 0 {
 		t.Fatalf("the meter has not reached the expiry: expired %d %v", n, err)
 	}
 	if balance := creditInvariant(t, store, "org-w"); balance != 500 {
@@ -173,10 +173,10 @@ func TestLotExpiresOnlyOncetheMeterHasPassedIt(t *testing.T) {
 	if err := store.AdvanceCreditMeterWatermark(ctx, "org-w", creditsNow.Add(11*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := store.ExpireCreditLots(ctx, later, false); err != nil || n != 1 {
+	if n, err := store.ExpireCreditLots(ctx, later, true); err != nil || n != 1 {
 		t.Fatalf("the meter passed the expiry: expired %d %v", n, err)
 	}
-	if n, _ := store.ExpireCreditLots(ctx, later, false); n != 0 {
+	if n, _ := store.ExpireCreditLots(ctx, later, true); n != 0 {
 		t.Fatal("a lot expired twice")
 	}
 	if balance := creditInvariant(t, store, "org-w"); balance != 0 {
@@ -315,7 +315,7 @@ type watermarkCase struct {
 var watermarkCases = []watermarkCase{
 	{name: "no meter, clock rules", expires: true},
 	{name: "no meter, metering on", requireWatermark: true},
-	{name: "meter behind the expiry, clock rules", hasMeter: true, meterHour: 5},
+	{name: "meter behind the expiry, clock rules", hasMeter: true, meterHour: 5, expires: true},
 	{name: "meter behind the expiry, metering on", hasMeter: true, meterHour: 5, requireWatermark: true},
 	{name: "meter past the expiry, clock rules", hasMeter: true, meterHour: 11, expires: true},
 	{name: "meter past the expiry, metering on", hasMeter: true, meterHour: 11, requireWatermark: true, expires: true},

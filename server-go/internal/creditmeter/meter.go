@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/credits"
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 )
 
 const (
@@ -20,16 +21,18 @@ const (
 
 // MeterOrg is an org that holds a credit account, and where its billing starts.
 type MeterOrg struct {
-	OrgID   string
-	Tier    string
-	Balance credits.Micros
+	OrgID string
 	// Since is when the org's credit began; usage before it is never billed.
 	Since time.Time
+	// FirstSample is when the org was first sampled; nil until it has been.
+	FirstSample *time.Time
 }
 
 // Store is what the meter reads. Every time in it is the database clock.
 type Store interface {
 	MeterNow(ctx context.Context) (time.Time, error)
+	// MeteringEnabledAt is when metering first ran; nothing before it is billed.
+	MeteringEnabledAt(ctx context.Context) (time.Time, error)
 	MeterOrgs(ctx context.Context) ([]MeterOrg, error)
 	// UsageSlots are the samples taken in [from, to).
 	UsageSlots(ctx context.Context, orgID string, from, to time.Time) ([]Slot, error)
@@ -44,14 +47,13 @@ type Ledger interface {
 
 // Meter bills each org's sampled usage to its credit, an hour at a time.
 type Meter struct {
-	store     Store
-	ledger    Ledger
-	prices    Prices
-	allowance func(tier string) Allowance
+	store  Store
+	ledger Ledger
+	prices Prices
 }
 
-func NewMeter(store Store, ledger Ledger, prices Prices, allowance func(tier string) Allowance) *Meter {
-	return &Meter{store: store, ledger: ledger, prices: prices, allowance: allowance}
+func NewMeter(store Store, ledger Ledger, prices Prices) *Meter {
+	return &Meter{store: store, ledger: ledger, prices: prices}
 }
 
 // Run bills every hour that has settled since each org's watermark. A failure
@@ -61,33 +63,31 @@ func (m *Meter) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read the database clock: %w", err)
 	}
+	enabledAt, err := m.store.MeteringEnabledAt(ctx)
+	if err != nil {
+		return fmt.Errorf("read when metering was enabled: %w", err)
+	}
 	orgs, err := m.store.MeterOrgs(ctx)
 	if err != nil {
 		return fmt.Errorf("list metered orgs: %w", err)
 	}
 	var failures []error
 	for _, org := range orgs {
-		if err := m.meterOrg(ctx, org, now); err != nil {
+		if err := m.meterOrg(ctx, org, enabledAt, now); err != nil {
 			failures = append(failures, fmt.Errorf("org %s: %w", org.OrgID, err))
 		}
 	}
 	return errors.Join(failures...)
 }
 
-func (m *Meter) meterOrg(ctx context.Context, org MeterOrg, now time.Time) error {
-	hour, err := m.firstUnbilledHour(ctx, org)
-	if err != nil {
+func (m *Meter) meterOrg(ctx context.Context, org MeterOrg, enabledAt, now time.Time) error {
+	hour, ready, err := m.firstUnbilledHour(ctx, org, enabledAt)
+	if err != nil || !ready {
 		return err
 	}
-	allowance := m.allowance(org.Tier)
-	exhausted := org.Balance <= 0
 	for billed := 0; billed < maxHoursPerPass && !hour.Add(time.Hour+settle).After(now); billed++ {
-		if !exhausted {
-			ranOut, err := m.billHour(ctx, org.OrgID, hour, allowance)
-			if err != nil {
-				return err
-			}
-			exhausted = ranOut
+		if err := m.billHour(ctx, org.OrgID, hour); err != nil {
+			return err
 		}
 		// The watermark moves past hours that bill nothing too, so credit added
 		// later never pays for them and a lot's expiry is never held back.
@@ -99,15 +99,28 @@ func (m *Meter) meterOrg(ctx context.Context, org MeterOrg, now time.Time) error
 	return nil
 }
 
-func (m *Meter) firstUnbilledHour(ctx context.Context, org MeterOrg) (time.Time, error) {
+// firstUnbilledHour is where the watermark stands, or for an org never metered the
+// first whole hour after the latest of its credit, the enabling of metering and
+// its first sample, so no empty hours before any of them are walked. An org with
+// no sample yet is not ready.
+func (m *Meter) firstUnbilledHour(ctx context.Context, org MeterOrg, enabledAt time.Time) (time.Time, bool, error) {
 	mark, started, err := m.ledger.MeterWatermark(ctx, org.OrgID)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("read the watermark: %w", err)
+		return time.Time{}, false, fmt.Errorf("read the watermark: %w", err)
 	}
 	if started {
-		return mark.UTC(), nil
+		return mark.UTC(), true, nil
 	}
-	return ceilHour(org.Since.UTC()), nil
+	if org.FirstSample == nil {
+		return time.Time{}, false, nil
+	}
+	latest := org.Since
+	for _, at := range []time.Time{enabledAt, *org.FirstSample} {
+		if at.After(latest) {
+			latest = at
+		}
+	}
+	return ceilHour(latest.UTC()), true, nil
 }
 
 func ceilHour(at time.Time) time.Time {
@@ -118,17 +131,20 @@ func ceilHour(at time.Time) time.Time {
 	return floor.Add(time.Hour)
 }
 
-// billHour debits one hour. ranOut says the credit could not pay for all of it.
-func (m *Meter) billHour(ctx context.Context, orgID string, hour time.Time, allowance Allowance) (ranOut bool, err error) {
+// billHour debits one hour. The ledger takes what the lots hold and records the
+// rest on the entry as uncovered, so every hour the credit could not pay stays
+// visible, and an hour is decided by the balance when it is billed: credit added
+// later never pays for it.
+func (m *Meter) billHour(ctx context.Context, orgID string, hour time.Time) error {
 	end := hour.Add(time.Hour)
 	slots, err := m.store.UsageSlots(ctx, orgID, hour, end)
 	if err != nil {
-		return false, fmt.Errorf("read the samples of %s: %w", hour.Format(time.RFC3339), err)
+		return fmt.Errorf("read the samples of %s: %w", hour.Format(time.RFC3339), err)
 	}
-	used := SumOver(slots, allowance)
+	used := SumOver(slots)
 	cost := used.Cost(m.prices)
 	if cost <= 0 {
-		return false, nil
+		return nil
 	}
 	result, err := m.ledger.Debit(ctx, credits.DebitRequest{
 		OrgID: orgID, Amount: cost, PeriodStart: hour, PeriodEnd: end,
@@ -138,15 +154,20 @@ func (m *Meter) billHour(ctx context.Context, orgID string, hour time.Time, allo
 			"cpuMilliSlots": used.CPUMilliSlots, "memoryByteSlots": used.MemoryByteSlots, "diskByteSlots": used.DiskByteSlots,
 		},
 	})
+	if errors.Is(err, credits.ErrIdempotencyConflict) {
+		// A crash after the debit and before the watermark, then a change of price,
+		// makes the retry come out differently. The hour is on the ledger: it is billed.
+		log.Printf("credit meter: org %s hour %s is already billed at another amount than %d micros; keeping what was billed", orgID, hour.Format(time.RFC3339), cost)
+		metrics.CountCreditMeterEvent(metrics.CreditMeterRepricedHour)
+		return nil
+	}
 	if err != nil {
-		return false, fmt.Errorf("debit %s: %w", hour.Format(time.RFC3339), err)
+		return fmt.Errorf("debit %s: %w", hour.Format(time.RFC3339), err)
 	}
 	if result.Uncovered > 0 {
-		// TODO(EXC-866 C.5): the $0 rules. The ledger takes at most what the lots hold and records the
-		// rest as uncovered; here the pass only stops debiting. Alerts, the refusal of growth, the
-		// grace period and pausing compute above the allowance are a separate step.
-		log.Printf("credit meter: org %s ran out of credit in the hour of %s (%d micros uncovered)", orgID, hour.Format(time.RFC3339), result.Uncovered)
-		return true, nil
+		// TODO(EXC-866 C.5): the $0 rules. The shortfall is written off here (recorded, never collected);
+		// alerts, the refusal of growth, the grace period and pausing compute above the allowance are a separate step.
+		metrics.CountCreditMeterEvent(metrics.CreditMeterShortfallHour)
 	}
-	return false, nil
+	return nil
 }

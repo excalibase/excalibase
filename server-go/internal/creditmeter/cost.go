@@ -26,11 +26,13 @@ type Prices struct {
 	DiskGiBMonth credits.Micros
 }
 
-// Slot is what an org reserved at one sample.
+// Slot is what an org reserved at one sample, with the allowance of the plan it
+// was on then, so a later plan change never reprices an hour already sampled.
 type Slot struct {
-	CPUMilli    int64 `json:"cpuMilli"`
-	MemoryBytes int64 `json:"memoryBytes"`
-	DiskBytes   int64 `json:"diskBytes"`
+	CPUMilli    int64
+	MemoryBytes int64
+	DiskBytes   int64
+	Allowance   Allowance
 }
 
 // Allowance is the part of a plan that is never charged, subtracted from every slot.
@@ -49,14 +51,14 @@ type Usage struct {
 	DiskByteSlots   int64
 }
 
-// SumOver adds up, slot by slot, what is reserved above the allowance. A slot
+// SumOver adds up, slot by slot, what is reserved above the allowance the slot was sampled under. A slot
 // below its allowance in one dimension never offsets another dimension or slot.
-func SumOver(slots []Slot, allowance Allowance) Usage {
+func SumOver(slots []Slot) Usage {
 	var used Usage
 	for _, slot := range slots {
-		used.CPUMilliSlots += over(slot.CPUMilli, allowance.CPUMilli)
-		used.MemoryByteSlots += over(slot.MemoryBytes, allowance.MemoryBytes)
-		used.DiskByteSlots += over(slot.DiskBytes, allowance.DiskBytes)
+		used.CPUMilliSlots += over(slot.CPUMilli, slot.Allowance.CPUMilli)
+		used.MemoryByteSlots += over(slot.MemoryBytes, slot.Allowance.MemoryBytes)
+		used.DiskByteSlots += over(slot.DiskBytes, slot.Allowance.DiskBytes)
 	}
 	return used
 }
@@ -73,8 +75,8 @@ func (u Usage) Cost(prices Prices) credits.Micros {
 }
 
 // HourCost is what the slots of one hour cost. A slot that was not sampled bills nothing.
-func HourCost(slots []Slot, allowance Allowance, prices Prices) credits.Micros {
-	return SumOver(slots, allowance).Cost(prices)
+func HourCost(slots []Slot, prices Prices) credits.Micros {
+	return SumOver(slots).Cost(prices)
 }
 
 func over(reserved, allowed int64) int64 { return max(0, reserved-allowed) }

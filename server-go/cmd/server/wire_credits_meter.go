@@ -60,18 +60,36 @@ func creditPrices(cfg config.AppConfig) creditmeter.Prices {
 	}
 }
 
-// creditAllowance is what a plan is never charged for. A plan with no allowance
-// row, such as ENTERPRISE, is charged for everything.
-func creditAllowance(cfg config.AppConfig) func(tier string) creditmeter.Allowance {
-	return func(tier string) creditmeter.Allowance {
-		var numbers config.AllowanceNumbers
+// creditAllowance is what a plan is never charged for, read from the plan budget's
+// table: one source for the ceiling and the allowance. ok is false for a plan the
+// meter does not charge (ENTERPRISE, or one it does not know): it is skipped and
+// counted, never charged at a zero allowance.
+func creditAllowance(cfg config.AppConfig) func(tier string) (creditmeter.Allowance, bool) {
+	return func(tier string) (creditmeter.Allowance, bool) {
+		var plan config.PlanNumbers
 		switch domain.TierType(strings.ToUpper(tier)) {
 		case domain.Free:
-			numbers = cfg.CreditMeter.Free
+			plan = cfg.PlanBudget.Free
 		case domain.Standard:
-			numbers = cfg.CreditMeter.Standard
+			plan = cfg.PlanBudget.Standard
+		default:
+			return creditmeter.Allowance{}, false
 		}
-		return creditmeter.Allowance{CPUMilli: int64(numbers.CPUMilli), MemoryBytes: int64(numbers.MemoryMiB) << 20, DiskBytes: int64(numbers.DiskGiB) << 30}
+		return creditmeter.Allowance{
+			CPUMilli: int64(plan.AllowanceCPUMilli), MemoryBytes: int64(plan.AllowanceMemoryMiB) << 20, DiskBytes: int64(plan.AllowanceDiskGiB) << 30,
+		}, true
+	}
+}
+
+// allowanceSetter is a store that stamps each sample with the plan's allowance.
+type allowanceSetter interface {
+	SetCreditAllowance(lookup func(tier string) (creditmeter.Allowance, bool))
+}
+
+// setCreditAllowance gives the store the plan allowances, while metering is on.
+func setCreditAllowance(cfg config.AppConfig, store any) {
+	if setter, ok := store.(allowanceSetter); ok && creditBurnOn(cfg) {
+		setter.SetCreditAllowance(creditAllowance(cfg))
 	}
 }
 
@@ -100,7 +118,10 @@ func startCreditMeter(cfg config.AppConfig, sqlStore storage.PlatformStore, svc 
 			// metering is off: nothing to sample or bill
 		}
 	}
-	meter := creditmeter.NewMeter(pg, svc, creditPrices(cfg), creditAllowance(cfg))
+	if err := pg.MarkMeteringEnabled(context.Background()); err != nil {
+		log.Fatalf("credit meter: record when metering began: %v", err)
+	}
+	meter := creditmeter.NewMeter(pg, svc, creditPrices(cfg))
 	sampler := creditmeter.NewSampler(pg)
 	lock := standingLock(sqlStore, creditMeterLockID)
 	runner := creditmeter.NewRunner(service.NewLeadership(lock), sampler.Pass, func(ctx context.Context) error {
