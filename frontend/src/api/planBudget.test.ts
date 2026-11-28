@@ -24,6 +24,13 @@ describe('plan budget text', () => {
     expect(budgetRefusal({ response: { status: 409, data: { ...body, creditExhausted: true } } })?.creditExhausted).toBe(true);
     expect(budgetRefusal({ response: { status: 409, data: body } })?.creditExhausted).toBe(false);
     expect(budgetRefusal({ response: { status: 409, data: { ...body, creditExhausted: 'yes' } } })?.creditExhausted).toBe(false);
+    const budget = { cpuMilli: 1000, memoryBytes: 1000 };
+    const fits = (need: unknown, ceiling: unknown = budget) => budgetRefusal({ response: { status: 409, data: { ...body, need, budget: ceiling } } })?.fitsCeilingAlone;
+    expect(fits({ cpuMilli: 1000, memoryBytes: 1000 })).toBe(true);
+    expect(fits({ cpuMilli: 1001, memoryBytes: 10 })).toBe(false);
+    expect(fits({ cpuMilli: 10, memoryBytes: 1001 })).toBe(false);
+    expect(fits(undefined)).toBe(false);
+    expect(fits({ cpuMilli: 10, memoryBytes: 10 }, {})).toBe(false);
   });
 
   test('any other failure is not a budget refusal', () => {

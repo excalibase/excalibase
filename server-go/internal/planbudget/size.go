@@ -49,7 +49,7 @@ type Refusal struct {
 
 func (r *Refusal) Error() string {
 	if r.CreditExhausted {
-		return fmt.Sprintf("your credit is used up, so this cannot start or grow: it needs %s more %s but only %s is left of your free allowance. Add credit, or pause or delete other services",
+		return fmt.Sprintf("your credit is used up, so this cannot start or grow: it needs %s more %s but only %s is left of your free allowance. Contact support to add credit, or pause or delete other services",
 			r.amount(r.Need), r.Dimension, r.amount(r.Left))
 	}
 	return fmt.Sprintf("plan budget exceeded: this needs %s more %s but only %s is left (your plan allows %s)",

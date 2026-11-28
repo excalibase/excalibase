@@ -101,6 +101,7 @@ describe('database panel', () => {
     renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'credits' }) });
     expect(await screen.findByText(/paused because your credit is used up/i)).toBeInTheDocument();
     expect(screen.getByText(/starts again by itself when credit is added/i)).toBeInTheDocument();
+    expect(screen.queryByText(/upgrade/i)).not.toBeInTheDocument();
   });
 
   test('a database paused by the user says nothing about credit', async () => {
@@ -109,15 +110,38 @@ describe('database panel', () => {
     expect(screen.queryByText(/credit is used up/i)).not.toBeInTheDocument();
   });
 
-  test('resuming at $0 explains that it fits the free allowance once other services are paused, or credit is added', async () => {
-    const refusal = { response: { status: 409, data: { code: 'plan_budget_exceeded', creditExhausted: true, dimension: 'CPU', error: 'your credit is used up, so this cannot start or grow: it needs 0.50 vCPU more CPU but only 0.00 vCPU is left of your free allowance. Add credit, or pause or delete other services' } } };
-    vi.mocked(api.post).mockRejectedValueOnce(refusal as never);
+  const creditRefusal = (need: { cpuMilli: number; memoryBytes: number }) => ({
+    response: { status: 409, data: { code: 'plan_budget_exceeded', creditExhausted: true, dimension: 'CPU', need, budget: { cpuMilli: 1000, memoryBytes: 1024 * 1024 ** 2, diskBytes: 0, services: 5 }, error: 'your credit is used up, so this cannot start or grow: it needs 0.50 vCPU more CPU but only 0.00 vCPU is left of your free allowance. Contact support to add credit, or pause or delete other services' } },
+  });
+
+  test('resuming at $0 explains that a database that fits the free allowance starts once other services are paused', async () => {
+    vi.mocked(api.post).mockRejectedValueOnce(creditRefusal({ cpuMilli: 500, memoryBytes: 512 * 1024 ** 2 }) as never);
     renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'idle_7d' }) });
     await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/your credit is used up/i);
     expect(alert).toHaveTextContent(/fits your free allowance once other services are paused/i);
+    expect(alert).toHaveTextContent(/contact support to add credit: hello@excalibase\.io/i);
     expect(within(alert).getByRole('link', { name: 'Usage & credits' })).toHaveAttribute('href', '/usage');
+  });
+
+  test('resuming at $0 a database bigger than the free allowance gets no claim that it would fit', async () => {
+    vi.mocked(api.post).mockRejectedValueOnce(creditRefusal({ cpuMilli: 2000, memoryBytes: 512 * 1024 ** 2 }) as never);
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'idle_7d' }) });
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/your credit is used up/i);
+    expect(alert).not.toHaveTextContent(/fits your free allowance/i);
+  });
+
+  test('a plan budget refusal that is not about credit gets no credit hint even when the database is small', async () => {
+    const refusal = creditRefusal({ cpuMilli: 500, memoryBytes: 512 * 1024 ** 2 });
+    refusal.response.data.creditExhausted = false;
+    vi.mocked(api.post).mockRejectedValueOnce(refusal as never);
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'idle_7d' }) });
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).not.toHaveTextContent(/fits your free allowance/i);
   });
 
   test('any other failed resume shows only the server sentence, with no credit hint', async () => {

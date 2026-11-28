@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS credit_paused_services (
     project_id        TEXT        NOT NULL,
     service_id        TEXT        NOT NULL,
     service_name      TEXT        NOT NULL DEFAULT '',
-    previous_replicas INTEGER     NOT NULL DEFAULT 0 CHECK (previous_replicas >= 0),
     paused_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (org_id, kind, project_id, service_id)
 );

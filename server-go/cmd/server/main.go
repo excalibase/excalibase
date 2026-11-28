@@ -2583,11 +2583,11 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 		// Before the unrestricted-write gate below: that gate answers a narrowed token with a 403, and
 		// these routes must not answer anyone but a platform admin's session differently from a missing one.
 		mountAdminAudit(r, d)
+		r.Route("/analytics", func(r chi.Router) { d.adminAnalyticsHandler.Routes(r) })
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireUnrestrictedCredentialForWrites)
 			r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.adminConsoleHandler.Routes(r) })
-			r.Route("/analytics", func(r chi.Router) { d.adminAnalyticsHandler.Routes(r) })
 			r.Route("/attention", func(r chi.Router) { d.adminAttentionHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.orgHandler.ConsoleRoutes(r) })
 			r.Route("/tiers", func(r chi.Router) {

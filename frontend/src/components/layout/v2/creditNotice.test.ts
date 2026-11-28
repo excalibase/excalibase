@@ -23,6 +23,7 @@ describe('the credit banner', () => {
     expect(notice?.text).toMatch(/new services and growth are blocked/i);
     expect(notice?.text).toContain(new Date('2026-12-05T00:00:00Z').toLocaleDateString());
     expect(notice?.text).toMatch(/4 days/);
+    expect(notice?.text).toContain('hello@excalibase.io');
   });
 
   test('on the last day of the grace period it counts one day, not zero', () => {
@@ -36,11 +37,21 @@ describe('the credit banner', () => {
     expect(notice?.text).toMatch(/paused/i);
     expect(notice?.text).toMatch(/data is kept/i);
     expect(notice?.text).not.toMatch(/will pause/i);
+    expect(notice?.text).toContain('Contact support to add credit: hello@excalibase.io');
+    expect(notice?.text).not.toMatch(/upgrade/i);
+  });
+
+  test('past the grace period with nothing paused it does not say anything is paused', () => {
+    const notice = creditNotice(overview({ balanceMicros: 0, zero: zero({ atZero: true, graceEndsAt: '2026-11-25T00:00:00Z', paused: [] }) }), NOW);
+    expect(notice?.text).toMatch(/nothing is paused/i);
+    expect(notice?.text).not.toMatch(/is paused and/i);
+    expect(notice?.text).toMatch(/new services and growth are blocked/i);
   });
 
   test('at the very moment the grace ends the compute is paused', () => {
-    const notice = creditNotice(overview({ balanceMicros: 0, zero: zero({ atZero: true, graceEndsAt: NOW.toISOString() }) }), NOW);
-    expect(notice?.text).toMatch(/is paused/i);
+    const paused = [{ kind: 'database' as const, projectId: 'p', serviceId: 'p', name: 'db', pausedAt: NOW.toISOString() }];
+    const notice = creditNotice(overview({ balanceMicros: 0, zero: zero({ atZero: true, graceEndsAt: NOW.toISOString(), paused }) }), NOW);
+    expect(notice?.text).toMatch(/is paused and your data is kept/i);
   });
 
   test('low credit warns without alarming, with the amount left', () => {

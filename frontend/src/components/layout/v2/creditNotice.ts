@@ -1,6 +1,7 @@
 import type { CreditOverview, CreditZero } from '../../../api/credits';
 import { daysLeft, dollars } from '../../../pages/usage/creditsFormat';
 import { parseInstant } from '../../../utils/instant';
+import { ADD_CREDIT_TEXT } from '../../../utils/support';
 
 export interface CreditNotice {
   tone: 'bad' | 'warn';
@@ -18,9 +19,12 @@ function usedUp(zero: CreditZero, now: Date): CreditNotice {
   const ends = zero.graceEndsAt ? parseInstant(zero.graceEndsAt) : Number.NaN;
   if (Number.isNaN(ends) || ends > now.getTime()) {
     const when = zero.graceEndsAt ? ` on ${dateOf(zero.graceEndsAt)} (in ${plural(daysLeft(zero.graceEndsAt, now) ?? 0)})` : ' soon';
-    return { tone: 'bad', text: `${start} New services and growth are blocked now, and compute above your free allowance pauses${when}. Add credit or upgrade to keep everything running.` };
+    return { tone: 'bad', text: `${start} New services and growth are blocked now, and compute above your free allowance pauses${when}. ${ADD_CREDIT_TEXT}` };
   }
-  return { tone: 'bad', text: `${start} Compute above your free allowance is paused and your data is kept. Add credit or upgrade and it starts again by itself.` };
+  if (zero.paused.length === 0) {
+    return { tone: 'bad', text: `${start} New services and growth are blocked. Nothing is paused: what you run fits your free allowance. ${ADD_CREDIT_TEXT}` };
+  }
+  return { tone: 'bad', text: `${start} Compute above your free allowance is paused and your data is kept. ${ADD_CREDIT_TEXT} Paused services then start again by themselves.` };
 }
 
 // The one thing the global banner says about an org's credit, or nothing: used up,

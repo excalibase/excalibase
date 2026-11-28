@@ -3,11 +3,13 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/lib/pq"
+
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/credits"
 	"github.com/excalibase/provisioning-poc/internal/creditzero"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -34,6 +36,20 @@ func (z *CreditZeroStore) Now(ctx context.Context) (time.Time, error) {
 // Orgs lists every org that holds a credit account, a grace period or a service
 // paused for credit. An org with none of them has nothing to enforce or release.
 func (z *CreditZeroStore) Orgs(ctx context.Context) ([]creditzero.OrgState, error) {
+	return z.readOrgs(ctx, "")
+}
+
+// Org reads one org again, for the check just before a pause. An org that holds no
+// account, grace period or paused service comes back as a bare id: never at $0.
+func (z *CreditZeroStore) Org(ctx context.Context, orgID string) (creditzero.OrgState, error) {
+	orgs, err := z.readOrgs(ctx, orgID)
+	if err != nil || len(orgs) == 0 {
+		return creditzero.OrgState{OrgID: orgID}, err
+	}
+	return orgs[0], nil
+}
+
+func (z *CreditZeroStore) readOrgs(ctx context.Context, onlyOrg string) ([]creditzero.OrgState, error) {
 	rows, err := z.db.QueryContext(ctx, `
 		SELECT o.id, o.tier,
 		       (a.org_id IS NOT NULL AND a.balance_micros <= 0 AND upper(o.tier) = $1),
@@ -42,9 +58,10 @@ func (z *CreditZeroStore) Orgs(ctx context.Context) ([]creditzero.OrgState, erro
 		LEFT JOIN credit_accounts a ON a.org_id = o.id
 		LEFT JOIN credit_zero_orgs z ON z.org_id = o.id
 		LEFT JOIN abuse_suspensions s ON s.user_id = o.owner_id
-		WHERE a.org_id IS NOT NULL OR z.org_id IS NOT NULL
-		   OR EXISTS (SELECT 1 FROM credit_paused_services p WHERE p.org_id = o.id)
-		ORDER BY o.id`, string(domain.Free))
+		WHERE ($2 = '' OR o.id = $2)
+		  AND (a.org_id IS NOT NULL OR z.org_id IS NOT NULL
+		       OR EXISTS (SELECT 1 FROM credit_paused_services p WHERE p.org_id = o.id))
+		ORDER BY o.id`, string(domain.Free), onlyOrg)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +101,9 @@ func (z *CreditZeroStore) Holdings(ctx context.Context, orgID string) (creditzer
 		return creditzero.Holdings{}, err
 	}
 	held := creditzero.Holdings{CPUMilli: used.CPUMilli, MemoryBytes: used.MemoryBytes}
+	if held.Transitioning, err = z.inTransition(ctx, orgID); err != nil {
+		return held, err
+	}
 	if held.Pausable, err = z.runningDatabases(ctx, orgID); err != nil {
 		return held, err
 	}
@@ -92,9 +112,25 @@ func (z *CreditZeroStore) Holdings(ctx context.Context, orgID string) (creditzer
 	return held, err
 }
 
+// inTransition says whether any database or app of the org is starting, stopping, resuming or being restored.
+func (z *CreditZeroStore) inTransition(ctx context.Context, orgID string) (bool, error) {
+	var moving bool
+	err := z.db.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM database_instances WHERE org_id = $1 AND status = ANY($2))
+		    OR EXISTS (SELECT 1 FROM apps a JOIN database_instances d ON d.project_id = a.project_id
+		               WHERE d.org_id = $1 AND a.status = ANY($3))`,
+		orgID, pq.Array(transitionalDatabaseStatuses), pq.Array(transitionalAppStatuses)).Scan(&moving)
+	return moving, err
+}
+
+var (
+	transitionalDatabaseStatuses = []string{string(domain.StatusPausing), string(domain.StatusResuming), domain.StatusProvisioning, string(domain.StatusRestoring)}
+	transitionalAppStatuses      = []string{apphost.StatusPausing, apphost.StatusResuming, apphost.StatusCreated}
+)
+
 func (z *CreditZeroStore) runningDatabases(ctx context.Context, orgID string) ([]creditzero.Service, error) {
 	rows, err := z.db.QueryContext(ctx, `
-		SELECT project_id, project_name, reserved_cpu_milli, reserved_memory_bytes, reserved_disk_bytes, reserved_copies, COALESCE(created_at, now())
+		SELECT project_id, project_name, reserved_cpu_milli, reserved_memory_bytes, reserved_disk_bytes, reserved_copies, COALESCE(created_at, 'epoch'::timestamptz)
 		FROM database_instances
 		WHERE org_id = $1 AND status = $2 AND NOT no_database AND reserved_copies > 0`, orgID, string(domain.StatusActive))
 	if err != nil {
@@ -111,7 +147,7 @@ func (z *CreditZeroStore) runningDatabases(ctx context.Context, orgID string) ([
 		db.Status = string(domain.StatusActive)
 		size := planbudget.ReservedDatabase(db)
 		service.Kind, service.ServiceID = creditzero.KindDatabase, service.ProjectID
-		service.CPUMilli, service.MemoryBytes, service.Replicas = size.CPUMilli, size.MemoryBytes, int(db.Copies)
+		service.CPUMilli, service.MemoryBytes = size.CPUMilli, size.MemoryBytes
 		services = append(services, service)
 	}
 	return services, rows.Err()
@@ -121,7 +157,7 @@ func (z *CreditZeroStore) runningApps(ctx context.Context, orgID string) ([]cred
 	rows, err := z.db.QueryContext(ctx, `
 		SELECT a.project_id, a.id, a.name, a.doc, a.created_at
 		FROM apps a JOIN database_instances d ON d.project_id = a.project_id
-		WHERE d.org_id = $1 AND a.status IN ($2, $3)`, orgID, string(domain.StatusActive), string(domain.StageFailed))
+		WHERE d.org_id = $1 AND a.status = $2 AND COALESCE((a.doc->>'replicas')::int, 0) > 0`, orgID, apphost.StatusRunning)
 	if err != nil {
 		return nil, fmt.Errorf("read running apps: %w", err)
 	}
@@ -137,13 +173,7 @@ func (z *CreditZeroStore) runningApps(ctx context.Context, orgID string) ([]cred
 		if err != nil {
 			return nil, fmt.Errorf("size of app %s: %w", service.ServiceID, err)
 		}
-		var facts struct {
-			Replicas int `json:"replicas"`
-		}
-		if err := json.Unmarshal(doc, &facts); err != nil {
-			return nil, fmt.Errorf("read app %s: %w", service.ServiceID, err)
-		}
-		service.Kind, service.CPUMilli, service.MemoryBytes, service.Replicas = creditzero.KindApp, size.CPUMilli, size.MemoryBytes, facts.Replicas
+		service.Kind, service.CPUMilli, service.MemoryBytes = creditzero.KindApp, size.CPUMilli, size.MemoryBytes
 		services = append(services, service)
 	}
 	return services, rows.Err()
@@ -152,11 +182,11 @@ func (z *CreditZeroStore) runningApps(ctx context.Context, orgID string) ([]cred
 // RecordPause writes down a service the credit is about to pause; recording it again refreshes the row.
 func (z *CreditZeroStore) RecordPause(ctx context.Context, orgID string, row creditzero.Paused) error {
 	_, err := z.db.ExecContext(ctx, `
-		INSERT INTO credit_paused_services (org_id, kind, project_id, service_id, service_name, previous_replicas)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO credit_paused_services (org_id, kind, project_id, service_id, service_name)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (org_id, kind, project_id, service_id)
-		DO UPDATE SET service_name = EXCLUDED.service_name, previous_replicas = EXCLUDED.previous_replicas, paused_at = now()`,
-		orgID, row.Kind, row.ProjectID, row.ServiceID, row.Name, row.PreviousReplicas)
+		DO UPDATE SET service_name = EXCLUDED.service_name, paused_at = now()`,
+		orgID, row.Kind, row.ProjectID, row.ServiceID, row.Name)
 	return err
 }
 
@@ -170,7 +200,7 @@ func (z *CreditZeroStore) ForgetPause(ctx context.Context, orgID string, row cre
 // Paused lists the org's recorded services, each with what became of it, read from the live service.
 func (z *CreditZeroStore) Paused(ctx context.Context, orgID string) ([]creditzero.Paused, error) {
 	rows, err := z.db.QueryContext(ctx, `
-		SELECT p.kind, p.project_id, p.service_id, p.service_name, p.previous_replicas, p.paused_at,
+		SELECT p.kind, p.project_id, p.service_id, p.service_name, p.paused_at,
 		       d.status, COALESCE(d.pause_reason, ''), a.status
 		FROM credit_paused_services p
 		LEFT JOIN database_instances d ON p.kind = 'database' AND d.project_id = p.project_id
@@ -185,7 +215,7 @@ func (z *CreditZeroStore) Paused(ctx context.Context, orgID string) ([]creditzer
 		var row creditzero.Paused
 		var databaseStatus, appStatus sql.NullString
 		var reason string
-		if err := rows.Scan(&row.Kind, &row.ProjectID, &row.ServiceID, &row.Name, &row.PreviousReplicas, &row.PausedAt, &databaseStatus, &reason, &appStatus); err != nil {
+		if err := rows.Scan(&row.Kind, &row.ProjectID, &row.ServiceID, &row.Name, &row.PausedAt, &databaseStatus, &reason, &appStatus); err != nil {
 			return nil, err
 		}
 		row.PausedAt = row.PausedAt.UTC()
@@ -196,6 +226,9 @@ func (z *CreditZeroStore) Paused(ctx context.Context, orgID string) ([]creditzer
 }
 
 // holdOf says whether a service is still paused for credit, from its live status.
+// Only a settled pause is credit's to resume; a service changing state is looked at
+// again on the next pass with its row kept, because resuming it now would do nothing
+// and forgetting the row would leave it paused for good.
 func holdOf(kind string, databaseStatus sql.NullString, databaseReason string, appStatus sql.NullString) creditzero.Hold {
 	status := appStatus
 	if kind == creditzero.KindDatabase {
@@ -204,16 +237,22 @@ func holdOf(kind string, databaseStatus sql.NullString, databaseReason string, a
 	if !status.Valid || domain.IsDeletionStatus(status.String) || status.String == string(domain.StatusPendingDeletion) {
 		return creditzero.HoldGone
 	}
+	creditsOwn := kind == creditzero.KindApp || databaseReason == domain.PauseReasonCredits
 	switch status.String {
-	case string(domain.StatusResuming):
-		return creditzero.HoldBusy
-	case string(domain.StatusPaused), string(domain.StatusPausing):
-		if kind == creditzero.KindDatabase && databaseReason != domain.PauseReasonCredits {
-			return creditzero.HoldReleased
+	case string(domain.StatusPaused):
+		if creditsOwn {
+			return creditzero.HoldPaused
 		}
-		return creditzero.HoldPaused
+		return creditzero.HoldReleased
+	case string(domain.StatusActive):
+		return creditzero.HoldReleased
+	case string(domain.StatusPausing):
+		if creditsOwn {
+			return creditzero.HoldBusy
+		}
+		return creditzero.HoldReleased
 	}
-	return creditzero.HoldReleased
+	return creditzero.HoldBusy
 }
 
 // PurgeOrphans drops what outlived its org: the ledger keeps accounts for deleted

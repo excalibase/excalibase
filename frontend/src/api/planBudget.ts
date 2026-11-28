@@ -59,6 +59,8 @@ export interface BudgetRefusal {
   dimension: string;
   // The ceiling is the free allowance because the credit is used up.
   creditExhausted: boolean;
+  // The step alone is no bigger than the ceiling, so it would start once other services are paused.
+  fitsCeilingAlone: boolean;
 }
 
 interface RefusalBody {
@@ -66,12 +68,24 @@ interface RefusalBody {
   error?: unknown;
   dimension?: unknown;
   creditExhausted?: unknown;
+  need?: unknown;
+  budget?: unknown;
 }
 
 const textOf = (value: unknown): string => (typeof value === 'string' ? value : '');
 
+const numberOf = (size: unknown, key: 'cpuMilli' | 'memoryBytes'): number => {
+  const value = (size as Record<string, unknown> | null | undefined)?.[key];
+  return typeof value === 'number' ? value : Number.NaN;
+};
+
+// False when either size is missing: an unreadable answer never claims the step would fit.
+function fitsAlone(need: unknown, budget: unknown): boolean {
+  return numberOf(need, 'cpuMilli') <= numberOf(budget, 'cpuMilli') && numberOf(need, 'memoryBytes') <= numberOf(budget, 'memoryBytes');
+}
+
 export function budgetRefusal(error: unknown): BudgetRefusal | undefined {
   const response = (error as { response?: { status?: number; data?: RefusalBody } } | null | undefined)?.response;
   if (response?.status !== 409 || response.data?.code !== 'plan_budget_exceeded') return undefined;
-  return { message: textOf(response.data.error), dimension: textOf(response.data.dimension), creditExhausted: response.data.creditExhausted === true };
+  return { message: textOf(response.data.error), dimension: textOf(response.data.dimension), creditExhausted: response.data.creditExhausted === true, fitsCeilingAlone: fitsAlone(response.data.need, response.data.budget) };
 }

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { statementCsvHref, useAcceptCreditTerms, useOrgCredits, type CreditBurn, type CreditEntry, type CreditOverview, type CreditZero, type PausedForCredit } from '../../api/credits';
 import { formatInstant, parseInstant } from '../../utils/instant';
 import { serverErrorMessage } from '../../utils/serverError';
+import { ADD_CREDIT_TEXT } from '../../utils/support';
 import { Line, Section } from './UsageParts';
 import { dollars, daysLeft, recentMonths } from './creditsFormat';
 
@@ -131,10 +132,10 @@ function Burn({ overview }: { readonly overview: CreditOverview }) {
   const expiresFirst = burn.runOutAt !== null && nextExpiry !== null && Date.parse(nextExpiry) < Date.parse(burn.runOutAt);
   return (
     <>
-        <Line label="Burn per day" value={dollars(burn.perDayMicros)} />
-        <Line label="Projected run-out" value={runOutText(overview)} />
-        {expiresFirst && <p className="text-text-secondary">Your credit expires before it runs out at this rate.</p>}
-        <BurnDays days={burn.days} />
+      <Line label="Burn per day" value={dollars(burn.perDayMicros)} />
+      <Line label="Projected run-out" value={runOutText(overview)} />
+      {expiresFirst && <p className="text-text-secondary">Your credit expires before it runs out at this rate.</p>}
+      <BurnDays days={burn.days} />
     </>
   );
 }
@@ -157,7 +158,7 @@ function PausedServices({ paused }: { readonly paused: readonly PausedForCredit[
   if (paused.length === 0) return null;
   return (
     <Section title="Paused for credit">
-      <p className="text-text-secondary">These services were paused because your credit ran out. They start again by themselves when credit is added or you upgrade. Their data is kept.</p>
+      <p className="text-text-secondary">These services were paused because your credit ran out. They start again by themselves when credit is added. Their data is kept. {ADD_CREDIT_TEXT}</p>
       <ul className="space-y-1 text-text-primary">
         {paused.map((service) => (
           <li key={`${service.kind}/${service.projectId}/${service.serviceId}`} className="flex justify-between gap-3 border-b border-border-primary py-1 last:border-0">

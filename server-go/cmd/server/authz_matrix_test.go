@@ -409,10 +409,6 @@ var permissionRoutes = []permissionRoute{
 	{group: "admin console users", method: http.MethodGet, path: "/api/admin/console/users", unrestrictedOnly: true},
 	{group: "admin attention suspensions", method: http.MethodGet, path: "/api/admin/attention/suspensions", unrestrictedOnly: true},
 	{group: "admin attention failed projects", method: http.MethodGet, path: "/api/admin/attention/failed-projects", unrestrictedOnly: true},
-	{group: "admin analytics users", method: http.MethodGet, path: "/api/admin/analytics/users", unrestrictedOnly: true},
-	{group: "admin analytics abuse", method: http.MethodGet, path: "/api/admin/analytics/abuse", unrestrictedOnly: true},
-	{group: "admin analytics traffic", method: http.MethodGet, path: "/api/admin/analytics/traffic", unrestrictedOnly: true},
-	{group: "admin analytics credits", method: http.MethodGet, path: "/api/admin/analytics/credits", unrestrictedOnly: true},
 	{group: "admin console suspend", method: http.MethodPost, path: "/api/admin/console/users/u-1/suspend", unrestrictedOnly: true},
 }
 

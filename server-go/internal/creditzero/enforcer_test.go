@@ -8,6 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 )
 
 var epoch = time.Date(2026, 12, 1, 12, 0, 0, 0, time.UTC)
@@ -46,6 +50,16 @@ func (f *fakeStore) Orgs(context.Context) ([]OrgState, error) {
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeStore) Org(ctx context.Context, orgID string) (OrgState, error) {
+	orgs, _ := f.Orgs(ctx)
+	for _, org := range orgs {
+		if org.OrgID == orgID {
+			return org, nil
+		}
+	}
+	return OrgState{}, fmt.Errorf("no org %s", orgID)
 }
 
 func (f *fakeStore) MarkZero(_ context.Context, orgID string) error {
@@ -99,9 +113,17 @@ type fakeWorkloads struct {
 	events    *[]string
 	pauseErr  map[string]error
 	resumeErr map[string]error
+	// onPause runs as a service's pause begins, before the check under its lease.
+	onPause func(serviceID string)
 }
 
-func (w *fakeWorkloads) Pause(_ context.Context, row Paused) error {
+func (w *fakeWorkloads) Pause(_ context.Context, row Paused, admitted func() error) error {
+	if w.onPause != nil {
+		w.onPause(row.ServiceID)
+	}
+	if err := admitted(); err != nil {
+		return err
+	}
 	*w.events = append(*w.events, "pause "+row.ServiceID)
 	return w.pauseErr[row.ServiceID]
 }
@@ -137,7 +159,7 @@ func zeroOrg(since *time.Time) OrgState {
 }
 
 func service(kind, id string, cpu, memMiB int64, age time.Duration) Service {
-	return Service{Kind: kind, ProjectID: "proj-" + id, ServiceID: id, Name: id, CPUMilli: cpu, MemoryBytes: memMiB * mib, CreatedAt: epoch.Add(-age), Replicas: 1}
+	return Service{Kind: kind, ProjectID: "proj-" + id, ServiceID: id, Name: id, CPUMilli: cpu, MemoryBytes: memMiB * mib, CreatedAt: epoch.Add(-age)}
 }
 
 func holding(cpu, memMiB int64, pausable ...Service) Holdings {
@@ -234,7 +256,7 @@ func TestThePauseIsRecordedBeforeItRunsSoACrashCannotLoseTheService(t *testing.T
 	}
 }
 
-func TestAPauseThatFailsLeavesNoRowAndTheRestStillPause(t *testing.T) {
+func TestAPauseThatFailsKeepsItsRowAndTheRestStillPause(t *testing.T) {
 	r := newRig(zeroOrg(at(-grace)))
 	r.store.holdings["org-1"] = holding(1500, 1536,
 		service(KindApp, "old", 500, 512, 2*time.Hour),
@@ -244,21 +266,132 @@ func TestAPauseThatFailsLeavesNoRowAndTheRestStillPause(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "pods remain") {
 		t.Fatalf("the failure is reported, not swallowed: %v", err)
 	}
-	if got := r.store.pausedIDs("org-1"); !slices.Equal(got, []string{"old"}) {
-		t.Fatalf("the failed one has no row and the next newest was tried: %v", got)
+	if got := r.store.pausedIDs("org-1"); !slices.Equal(got, []string{"new", "old"}) {
+		t.Fatalf("a pause that failed part way may still finish, so its row stays: %v", got)
 	}
 }
 
-func TestPausedAppRecordsTheReplicasItRan(t *testing.T) {
+func TestAPauseThatFoundNothingToPauseLeavesNoRow(t *testing.T) {
 	r := newRig(zeroOrg(at(-grace)))
-	big := service(KindApp, "a1", 2000, 2048, time.Hour)
-	big.Replicas = 3
-	r.store.holdings["org-1"] = holding(2000, 2048, big)
+	r.store.holdings["org-1"] = holding(2000, 2048, service(KindApp, "stopped-by-user", 2000, 2048, time.Hour))
+	r.work.pauseErr = map[string]error{"stopped-by-user": fmt.Errorf("%w: it is stopped", ErrNotCredits)}
+	if err := r.enforcer.Pass(context.Background()); err != nil {
+		t.Fatalf("a service the user already stopped is not a failure: %v", err)
+	}
+	if got := r.store.pausedIDs("org-1"); len(got) != 0 {
+		t.Fatalf("credit never claims a service it did not stop: %v", got)
+	}
+}
+
+func TestCreditReturningBetweenTheReadAndAPauseStopsThePausesThatRemain(t *testing.T) {
+	r := newRig(zeroOrg(at(-grace)))
+	r.store.holdings["org-1"] = holding(2000, 2048,
+		service(KindApp, "old", 1000, 1024, 3*time.Hour),
+		service(KindApp, "new", 1000, 1024, time.Hour))
+	r.work.onPause = func(id string) {
+		if id == "new" {
+			r.store.orgs[0].AtZero = false
+		}
+	}
+	if err := r.enforcer.Pass(context.Background()); err != nil {
+		t.Fatalf("an org that got credit is not a failure: %v", err)
+	}
+	joined := strings.Join(*r.events, ",")
+	if strings.Contains(joined, "pause") || len(r.store.paused["org-1"]) != 0 {
+		t.Fatalf("the check under the lease refused the pause: %v", *r.events)
+	}
+}
+
+func TestAnOrgWhoseOwnerIsSuspendedIsNotPaused(t *testing.T) {
+	org := zeroOrg(at(-grace))
+	org.OwnerSuspended = true
+	r := newRig(org)
+	r.store.holdings["org-1"] = holding(2000, 2048, service(KindApp, "a1", 2000, 2048, time.Hour))
 	if err := r.enforcer.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.store.paused["org-1"][0].PreviousReplicas; got != 3 {
-		t.Fatalf("replicas %d", got)
+	if len(*r.events) != 0 {
+		t.Fatalf("the suspension already stopped them: %v", *r.events)
+	}
+}
+
+func TestAnOrgWithAServiceInTransitionIsSkippedForThePass(t *testing.T) {
+	r := newRig(zeroOrg(at(-grace)))
+	held := holding(2000, 2048, service(KindApp, "a1", 1000, 1024, time.Hour), service(KindApp, "a2", 1000, 1024, 2*time.Hour))
+	held.Transitioning = true
+	r.store.holdings["org-1"] = held
+	r.store.paused["org-1"] = []Paused{{Kind: KindApp, ProjectID: "p9", ServiceID: "gone", State: HoldGone}}
+	if err := r.enforcer.Pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(*r.events, ","), "pause") || strings.Contains(strings.Join(*r.events, ","), "record") {
+		t.Fatalf("nothing is paused to make room while sizes are unsettled: %v", *r.events)
+	}
+	if len(r.store.paused["org-1"]) != 0 {
+		t.Fatal("stale rows are still dropped")
+	}
+	held.Transitioning = false
+	r.store.holdings["org-1"] = held
+	if err := r.enforcer.Pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.store.paused["org-1"]) != 1 {
+		t.Fatalf("it pauses on the pass after it settles: %v", r.store.pausedIDs("org-1"))
+	}
+}
+
+func TestAServiceThatFailedToPauseIsNotRetriedUntilItsBackoffPasses(t *testing.T) {
+	r := newRig(zeroOrg(at(-grace)))
+	r.store.holdings["org-1"] = holding(2000, 2048, service(KindApp, "a1", 2000, 2048, time.Hour))
+	r.work.pauseErr = map[string]error{"a1": errors.New("pods remain")}
+	attempts := func() int { return strings.Count(strings.Join(*r.events, ","), "pause a1") }
+	_ = r.enforcer.Pass(context.Background())
+	if attempts() != 1 {
+		t.Fatalf("first attempt: %v", *r.events)
+	}
+	r.store.now = r.store.now.Add(10 * time.Second)
+	_ = r.enforcer.Pass(context.Background())
+	if attempts() != 1 {
+		t.Fatalf("too soon, so not retried: %v", *r.events)
+	}
+	r.store.now = r.store.now.Add(creditPauseBackoffBase)
+	_ = r.enforcer.Pass(context.Background())
+	if attempts() != 2 {
+		t.Fatalf("retried once the backoff passed: %v", *r.events)
+	}
+	r.store.now = r.store.now.Add(creditPauseBackoffBase)
+	_ = r.enforcer.Pass(context.Background())
+	if attempts() != 2 {
+		t.Fatalf("the second failure waits longer than the first: %v", *r.events)
+	}
+}
+
+func TestABackoffEndsWithASuccessfulPause(t *testing.T) {
+	r := newRig(zeroOrg(at(-grace)))
+	r.store.holdings["org-1"] = holding(2000, 2048, service(KindApp, "a1", 2000, 2048, time.Hour))
+	r.work.pauseErr = map[string]error{"a1": errors.New("pods remain")}
+	_ = r.enforcer.Pass(context.Background())
+	r.work.pauseErr = nil
+	r.store.now = r.store.now.Add(creditPauseBackoffBase)
+	if err := r.enforcer.Pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(*r.events, ","), "pause a1,") && !strings.HasSuffix(strings.Join(*r.events, ","), "pause a1") {
+		t.Fatalf("%v", *r.events)
+	}
+	if len(r.enforcer.backoff) != 0 {
+		t.Fatalf("a pause that worked forgets its failures: %v", r.enforcer.backoff)
+	}
+}
+
+func TestEveryFailedPauseIsCounted(t *testing.T) {
+	before := testutil.ToFloat64(metrics.CreditMeterEvents(metrics.CreditMeterPauseFailed))
+	r := newRig(zeroOrg(at(-grace)))
+	r.store.holdings["org-1"] = holding(2000, 2048, service(KindApp, "a1", 2000, 2048, time.Hour))
+	r.work.pauseErr = map[string]error{"a1": errors.New("pods remain")}
+	_ = r.enforcer.Pass(context.Background())
+	if got := testutil.ToFloat64(metrics.CreditMeterEvents(metrics.CreditMeterPauseFailed)) - before; got != 1 {
+		t.Fatalf("pause failures += %v, want 1", got)
 	}
 }
 
@@ -486,5 +619,33 @@ func TestATickOnAReplicaThatDoesNotLeadDoesNothing(t *testing.T) {
 		if len(*r.events) != 0 {
 			t.Fatalf("%s acted: %v", name, *r.events)
 		}
+	}
+}
+
+func TestTheBackoffGrowsToAnHourAndStaysThereHoweverManyTimesItFails(t *testing.T) {
+	e := New(newFakeStore(&[]string{}), &fakeWorkloads{events: &[]string{}}, freeAllowance, grace)
+	for failures := 1; failures <= 80; failures++ {
+		e.backOff("app/p/a", epoch)
+		want := min(creditPauseBackoffBase<<(failures-1), creditPauseBackoffMax)
+		if failures > 6 {
+			want = creditPauseBackoffMax
+		}
+		if got := e.backoff["app/p/a"].retryAt.Sub(epoch); got != want {
+			t.Fatalf("after %d failures it waits %s, want %s", failures, got, want)
+		}
+	}
+}
+
+func TestAnOwnerSuspendedAfterThePassBeganHasNothingMorePaused(t *testing.T) {
+	r := newRig(zeroOrg(at(-grace)))
+	r.store.holdings["org-1"] = holding(2000, 2048,
+		service(KindApp, "old", 1000, 1024, 3*time.Hour),
+		service(KindApp, "new", 1000, 1024, time.Hour))
+	r.work.onPause = func(string) { r.store.orgs[0].OwnerSuspended = true }
+	if err := r.enforcer.Pass(context.Background()); err != nil {
+		t.Fatalf("a suspension is not a failure: %v", err)
+	}
+	if strings.Contains(strings.Join(*r.events, ","), "pause") || len(r.store.paused["org-1"]) != 0 {
+		t.Fatalf("the suspension already stopped them: %v", *r.events)
 	}
 }

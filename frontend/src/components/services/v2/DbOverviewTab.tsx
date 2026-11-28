@@ -19,6 +19,7 @@ import { databaseServiceStatus } from '../serviceStatus';
 import { panelSearch } from './panelState';
 import { card, Fact } from './sections';
 import { formatInstant } from '../../../utils/instant';
+import { ADD_CREDIT_TEXT } from '../../../utils/support';
 
 const NOT_AVAILABLE = 'Not available';
 
@@ -102,7 +103,8 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
   const paused = project.status === 'PAUSED';
   const busy = pause.isPending || resume.isPending;
   const failure = pause.error ?? resume.error;
-  const creditRefused = budgetRefusal(resume.error)?.creditExhausted === true;
+  const refusal = budgetRefusal(resume.error);
+  const fitsAfterPauses = refusal?.creditExhausted === true && refusal.fitsCeilingAlone;
   const pausedForCredit = paused && project.pauseReason === 'credits';
   const settled = paused || project.status === 'ACTIVE';
   const [asking, setAsking] = useState(false);
@@ -125,14 +127,14 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
         </div>
       )}
       {pausedForCredit && (
-        <p className="text-sm text-amber-400">Paused because your credit is used up. It starts again by itself when credit is added or you upgrade.</p>
+        <p className="text-sm text-amber-400">Paused because your credit is used up. It starts again by itself when credit is added. {ADD_CREDIT_TEXT}</p>
       )}
       {failure != null && (
         <p role="alert" className="break-words text-xs text-red-400">
           {projectOperationMessage(failure, 'The database could not be changed')}
-          {creditRefused && (
+          {fitsAfterPauses && (
             <>
-              {' '}This database fits your free allowance once other services are paused, or add credit.{' '}
+              {' '}This database fits your free allowance once other services are paused. {ADD_CREDIT_TEXT}{' '}
               <Link to="/usage" className="underline">Usage &amp; credits</Link>
             </>
           )}

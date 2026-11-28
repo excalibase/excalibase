@@ -237,6 +237,7 @@ func TestHoldingsAreWhatTheBudgetSumsAndListOnlyServicesThatCanBePaused(t *testi
 	newDatabase(t, store, "proj-zh-idle", org)
 	newDatabase(t, store, "proj-zh-new", org)
 	ageDatabase(t, store, "proj-zh-a", 10*24*time.Hour)
+	ageDatabase(t, store, "proj-zh-new", time.Hour)
 	idle := mustFind(t, store, "proj-zh-idle")
 	idle.Status, idle.PauseReason = string(domain.StatusPaused), domain.PauseReasonIdle
 	if err := store.UpdateIfStatus(idle, "ACTIVE"); err != nil {
@@ -246,6 +247,7 @@ func TestHoldingsAreWhatTheBudgetSumsAndListOnlyServicesThatCanBePaused(t *testi
 	addApp(t, store, "proj-zh-new", "app-stop", "PAUSED", 1, 4*24*time.Hour)
 	addApp(t, store, "proj-zh-new", "app-roll", "RESUMING", 1, 3*24*time.Hour)
 	addApp(t, store, "proj-zh-new", "app-fail", "FAILED", 1, 2*24*time.Hour)
+	addApp(t, store, "proj-zh-new", "app-zero", "ACTIVE", 0, 2*24*time.Hour)
 
 	held, err := NewCreditZeroStore(store).Holdings(context.Background(), org)
 	if err != nil {
@@ -263,15 +265,15 @@ func TestHoldingsAreWhatTheBudgetSumsAndListOnlyServicesThatCanBePaused(t *testi
 		ids = append(ids, s.ServiceID)
 	}
 	slices.Sort(ids)
-	want := []string{"app-fail", "app-run", "proj-zh-a", "proj-zh-new"}
+	want := []string{"app-run", "proj-zh-a", "proj-zh-new"}
 	if !slices.Equal(ids, want) {
-		t.Fatalf("running databases and running or failed apps only; a paused database, a stopped app and one still starting are not candidates: %v", ids)
+		t.Fatalf("running databases and running apps with replicas only; a paused database, a stopped app, a failed one, one with no replicas and one still starting are not candidates: %v", ids)
 	}
 	for _, s := range held.Pausable {
-		if s.ServiceID == "app-run" && (s.Replicas != 2 || s.CPUMilli <= 0 || s.MemoryBytes <= 0 || s.Kind != creditzero.KindApp || s.ProjectID != "proj-zh-a") {
-			t.Fatalf("an app carries its replicas and size: %+v", s)
+		if s.ServiceID == "app-run" && (s.CPUMilli <= 0 || s.MemoryBytes <= 0 || s.Kind != creditzero.KindApp || s.ProjectID != "proj-zh-a") {
+			t.Fatalf("an app carries its size: %+v", s)
 		}
-		if s.ServiceID == "proj-zh-a" && (s.Kind != creditzero.KindDatabase || s.CPUMilli != 500 || s.Replicas != 1) {
+		if s.ServiceID == "proj-zh-a" && (s.Kind != creditzero.KindDatabase || s.CPUMilli != 500) {
 			t.Fatalf("a database carries its size: %+v", s)
 		}
 	}
@@ -311,11 +313,13 @@ func TestPausedRowsReadTheLiveStateOfEachService(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, p := range []string{"d-credit", "d-pausing", "d-idle", "d-active", "d-resuming", "d-deleting"} {
+	for _, p := range []string{"d-credit", "d-pausing", "d-userpausing", "d-provisioning", "d-idle", "d-active", "d-resuming", "d-deleting"} {
 		newDatabase(t, store, "proj-"+p, org)
 	}
 	set("proj-d-credit", "PAUSED", domain.PauseReasonCredits)
 	set("proj-d-pausing", "PAUSING", domain.PauseReasonCredits)
+	set("proj-d-userpausing", "PAUSING", domain.PauseReasonIdle)
+	set("proj-d-provisioning", "PROVISIONING", "")
 	set("proj-d-idle", "PAUSED", domain.PauseReasonIdle)
 	set("proj-d-resuming", "RESUMING", domain.PauseReasonCredits)
 	set("proj-d-deleting", "DELETING", "")
@@ -325,22 +329,24 @@ func TestPausedRowsReadTheLiveStateOfEachService(t *testing.T) {
 	addApp(t, store, "proj-d-active", "a-pausing", "PAUSING", 1, time.Hour)
 
 	rows := map[string]creditzero.Hold{
-		"database/proj-d-credit/proj-d-credit":     creditzero.HoldPaused,
-		"database/proj-d-pausing/proj-d-pausing":   creditzero.HoldPaused,
-		"database/proj-d-idle/proj-d-idle":         creditzero.HoldReleased,
-		"database/proj-d-active/proj-d-active":     creditzero.HoldReleased,
-		"database/proj-d-resuming/proj-d-resuming": creditzero.HoldBusy,
-		"database/proj-d-deleting/proj-d-deleting": creditzero.HoldGone,
-		"database/proj-nowhere/proj-nowhere":       creditzero.HoldGone,
-		"app/proj-d-active/a-stopped":              creditzero.HoldPaused,
-		"app/proj-d-active/a-pausing":              creditzero.HoldPaused,
-		"app/proj-d-active/a-running":              creditzero.HoldReleased,
-		"app/proj-d-active/a-resuming":             creditzero.HoldBusy,
-		"app/proj-d-active/a-missing":              creditzero.HoldGone,
+		"database/proj-d-credit/proj-d-credit":             creditzero.HoldPaused,
+		"database/proj-d-pausing/proj-d-pausing":           creditzero.HoldBusy,
+		"database/proj-d-userpausing/proj-d-userpausing":   creditzero.HoldReleased,
+		"database/proj-d-provisioning/proj-d-provisioning": creditzero.HoldBusy,
+		"database/proj-d-idle/proj-d-idle":                 creditzero.HoldReleased,
+		"database/proj-d-active/proj-d-active":             creditzero.HoldReleased,
+		"database/proj-d-resuming/proj-d-resuming":         creditzero.HoldBusy,
+		"database/proj-d-deleting/proj-d-deleting":         creditzero.HoldGone,
+		"database/proj-nowhere/proj-nowhere":               creditzero.HoldGone,
+		"app/proj-d-active/a-stopped":                      creditzero.HoldPaused,
+		"app/proj-d-active/a-pausing":                      creditzero.HoldBusy,
+		"app/proj-d-active/a-running":                      creditzero.HoldReleased,
+		"app/proj-d-active/a-resuming":                     creditzero.HoldBusy,
+		"app/proj-d-active/a-missing":                      creditzero.HoldGone,
 	}
 	for key := range rows {
 		kind, project, service := splitKey(key)
-		if err := zero.RecordPause(ctx, org, creditzero.Paused{Kind: kind, ProjectID: project, ServiceID: service, Name: service, PreviousReplicas: 1}); err != nil {
+		if err := zero.RecordPause(ctx, org, creditzero.Paused{Kind: kind, ProjectID: project, ServiceID: service, Name: service}); err != nil {
 			t.Fatalf("record %s: %v", key, err)
 		}
 	}
@@ -367,14 +373,14 @@ func TestRecordingTheSamePauseTwiceKeepsOneRowAndForgetRemovesIt(t *testing.T) {
 	store, org := zeroStore(t, "zk")
 	zero := NewCreditZeroStore(store)
 	ctx := context.Background()
-	row := creditzero.Paused{Kind: creditzero.KindApp, ProjectID: "proj-x", ServiceID: "a1", Name: "web", PreviousReplicas: 2}
+	row := creditzero.Paused{Kind: creditzero.KindApp, ProjectID: "proj-x", ServiceID: "a1", Name: "web"}
 	for range 2 {
 		if err := zero.RecordPause(ctx, org, row); err != nil {
 			t.Fatal(err)
 		}
 	}
 	rows, _ := zero.Paused(ctx, org)
-	if len(rows) != 1 || rows[0].Name != "web" || rows[0].PreviousReplicas != 2 {
+	if len(rows) != 1 || rows[0].Name != "web" {
 		t.Fatalf("%+v", rows)
 	}
 	if err := zero.ForgetPause(ctx, org, row); err != nil {
@@ -438,7 +444,10 @@ type pauseApplying struct {
 	calls []string
 }
 
-func (p *pauseApplying) Pause(_ context.Context, row creditzero.Paused) error {
+func (p *pauseApplying) Pause(_ context.Context, row creditzero.Paused, admitted func() error) error {
+	if err := admitted(); err != nil {
+		return err
+	}
 	p.calls = append(p.calls, "pause "+row.ServiceID)
 	if row.Kind == creditzero.KindDatabase {
 		_, err := p.store.db.Exec(`UPDATE database_instances SET status = 'PAUSED', pause_reason = $2 WHERE project_id = $1`, row.ProjectID, domain.PauseReasonCredits)
@@ -679,5 +688,97 @@ func TestCreditAnalyticsCountsOrgsAtZeroAndWhatCreditPaused(t *testing.T) {
 	}
 	if got.OrgsAtZero != 2 || got.OrgsWithCredit != 1 || got.OrgsWithPausedServices != 1 || got.ServicesPaused != 2 {
 		t.Fatalf("two FREE orgs are at zero, one has credit, a paid org is neither: %+v", got)
+	}
+}
+
+func TestADatabaseWithNoCreationTimeCountsAsTheOldest(t *testing.T) {
+	store, org := zeroStore(t, "zo")
+	fund(t, store, org, 5)
+	newDatabase(t, store, "proj-zo-undated", org)
+	newDatabase(t, store, "proj-zo-dated", org)
+	ageDatabase(t, store, "proj-zo-dated", 400*24*time.Hour)
+	if _, err := store.db.Exec(`UPDATE database_instances SET created_at = NULL WHERE project_id = 'proj-zo-undated'`); err != nil {
+		t.Fatal(err)
+	}
+	held, err := NewCreditZeroStore(store).Holdings(context.Background(), org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !heldByID(held, "proj-zo-undated").CreatedAt.Before(heldByID(held, "proj-zo-dated").CreatedAt) {
+		t.Fatal("what has no date is the last to be paused, not the first")
+	}
+}
+
+func TestHoldingsReportAnOrgWithAServiceInTransition(t *testing.T) {
+	for name, seed := range map[string]func(t *testing.T, store *Store, org string){
+		"a database pausing": func(t *testing.T, store *Store, org string) {
+			setDatabaseStatus(t, store, "proj-zt-d", "PAUSING")
+		},
+		"a database resuming": func(t *testing.T, store *Store, org string) {
+			setDatabaseStatus(t, store, "proj-zt-d", "RESUMING")
+		},
+		"a database provisioning": func(t *testing.T, store *Store, org string) {
+			setDatabaseStatus(t, store, "proj-zt-d", "PROVISIONING")
+		},
+		"an app pausing": func(t *testing.T, store *Store, org string) {
+			addApp(t, store, "proj-zt-d", "a1", "PAUSING", 1, time.Hour)
+		},
+		"an app resuming": func(t *testing.T, store *Store, org string) {
+			addApp(t, store, "proj-zt-d", "a1", "RESUMING", 1, time.Hour)
+		},
+		"an app still being created": func(t *testing.T, store *Store, org string) {
+			addApp(t, store, "proj-zt-d", "a1", "PROVISIONING", 1, time.Hour)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, org := zeroStore(t, "zt"+strings.ReplaceAll(name, " ", ""))
+			fund(t, store, org, 5)
+			newDatabase(t, store, "proj-zt-d", org)
+			zero := NewCreditZeroStore(store)
+			settled, err := zero.Holdings(context.Background(), org)
+			if err != nil || settled.Transitioning {
+				t.Fatalf("a settled org is not in transition: %v %+v", err, settled)
+			}
+			seed(t, store, org)
+			moving, err := zero.Holdings(context.Background(), org)
+			if err != nil || !moving.Transitioning {
+				t.Fatalf("expected a transition: %v %+v", err, moving)
+			}
+		})
+	}
+}
+
+func setDatabaseStatus(t *testing.T, store *Store, project, status string) {
+	t.Helper()
+	if _, err := store.db.Exec(`UPDATE database_instances SET status = $2 WHERE project_id = $1`, project, status); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOrgReadsOneOrgAgainAndAnOrgWithNoAccountIsNeverAtZero(t *testing.T) {
+	store, spent := zeroStore(t, "zr")
+	fund(t, store, spent, 5)
+	drain(t, store, spent)
+	bare := creditPerson(t, store, "zr-bare")
+	zero := NewCreditZeroStore(store)
+	ctx := context.Background()
+	got, err := zero.Org(ctx, spent)
+	if err != nil || got.OrgID != spent || !got.AtZero || got.Tier != "FREE" {
+		t.Fatalf("%v %+v", err, got)
+	}
+	fund(t, store, spent, 5)
+	if again, _ := zero.Org(ctx, spent); again.AtZero {
+		t.Fatal("it reads the state now, not a cached one")
+	}
+	other := creditPerson(t, store, "zr-other")
+	fund(t, store, other, 5)
+	for _, id := range []string{spent, other, bare} {
+		if one, err := zero.Org(ctx, id); err != nil || one.OrgID != id {
+			t.Fatalf("asked for %s, got %+v %v", id, one, err)
+		}
+	}
+	none, err := zero.Org(ctx, bare)
+	if err != nil || none.AtZero {
+		t.Fatalf("%v %+v", err, none)
 	}
 }

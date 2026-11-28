@@ -7,6 +7,8 @@ import (
 	"log"
 	"slices"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 )
 
 // Enforcer pauses and releases services for credit. Run it on the leading replica only.
@@ -15,10 +17,22 @@ type Enforcer struct {
 	work      Workloads
 	allowance Allowance
 	grace     time.Duration
+	backoff   map[string]pauseBackoff
 }
 
+// pauseBackoff is how long a service that failed to pause is left alone.
+type pauseBackoff struct {
+	failures int
+	retryAt  time.Time
+}
+
+const (
+	creditPauseBackoffBase = time.Minute
+	creditPauseBackoffMax  = time.Hour
+)
+
 func New(store Store, work Workloads, allowance Allowance, grace time.Duration) *Enforcer {
-	return &Enforcer{store: store, work: work, allowance: allowance, grace: grace}
+	return &Enforcer{store: store, work: work, allowance: allowance, grace: grace, backoff: map[string]pauseBackoff{}}
 }
 
 // Pass looks at every org once. A failure for one service is reported at the end
@@ -50,10 +64,28 @@ func (e *Enforcer) passOrg(ctx context.Context, org OrgState, now time.Time) err
 		}
 		since = &now
 	}
-	if now.Before(since.Add(e.grace)) {
-		return e.dropStaleRows(ctx, org)
+	stale := e.dropStaleRows(ctx, org)
+	if org.OwnerSuspended || now.Before(since.Add(e.grace)) {
+		return stale
 	}
-	return errors.Join(e.dropStaleRows(ctx, org), e.pauseAboveAllowance(ctx, org))
+	return errors.Join(stale, e.pauseAboveAllowance(ctx, org, now))
+}
+
+// due reads the org again: at $0, past its grace, owner not suspended. The state a
+// pass read at its start can be minutes old by the time a pause runs.
+func (e *Enforcer) due(ctx context.Context, orgID string) error {
+	now, err := e.store.Now(ctx)
+	if err != nil {
+		return fmt.Errorf("read the database clock: %w", err)
+	}
+	org, err := e.store.Org(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("read org %s again: %w", orgID, err)
+	}
+	if !org.AtZero || org.OwnerSuspended || org.Since == nil || now.Before(org.Since.Add(e.grace)) {
+		return ErrNoLongerDue
+	}
+	return nil
 }
 
 // ReleaseAll resumes every service the credit paused and ends every grace period,
@@ -124,8 +156,9 @@ func (e *Enforcer) dropStaleRows(ctx context.Context, org OrgState) error {
 }
 
 // pauseAboveAllowance pauses the newest services until CPU and memory both fit
-// the plan's free allowance.
-func (e *Enforcer) pauseAboveAllowance(ctx context.Context, org OrgState) error {
+// the plan's free allowance. An org with a service in transition waits: its
+// numbers are not settled, and nothing is paused to make room for them.
+func (e *Enforcer) pauseAboveAllowance(ctx context.Context, org OrgState, now time.Time) error {
 	cpuAllowed, memoryAllowed, ok := e.allowance(org.Tier)
 	if !ok {
 		return nil
@@ -134,6 +167,9 @@ func (e *Enforcer) pauseAboveAllowance(ctx context.Context, org OrgState) error 
 	if err != nil {
 		return fmt.Errorf("org %s: read what it reserves: %w", org.OrgID, err)
 	}
+	if held.Transitioning {
+		return nil
+	}
 	candidates := slices.Clone(held.Pausable)
 	slices.SortFunc(candidates, newestFirst)
 	var failures []error
@@ -141,7 +177,14 @@ func (e *Enforcer) pauseAboveAllowance(ctx context.Context, org OrgState) error 
 		if held.CPUMilli <= cpuAllowed && held.MemoryBytes <= memoryAllowed {
 			break
 		}
-		if err := e.pauseOne(ctx, org.OrgID, service); err != nil {
+		err := e.pauseOne(ctx, org.OrgID, service, now)
+		if errors.Is(err, ErrNoLongerDue) {
+			break
+		}
+		if errors.Is(err, ErrNotCredits) {
+			continue
+		}
+		if err != nil {
 			failures = append(failures, fmt.Errorf("org %s: pause %s: %w", org.OrgID, service.ServiceID, err))
 			continue
 		}
@@ -170,19 +213,46 @@ func compareStrings(a, b string) int {
 
 // pauseOne writes the row first and pauses second: a crash between the two leaves
 // a row for a running service, which the next pass drops, never a paused service
-// nobody remembers.
-func (e *Enforcer) pauseOne(ctx context.Context, orgID string, service Service) error {
-	row := Paused{Kind: service.Kind, ProjectID: service.ProjectID, ServiceID: service.ServiceID, Name: service.Name, PreviousReplicas: service.Replicas}
+// nobody remembers. A pause that fails keeps its row, since it may have stopped
+// part of the service and be finished later by the retry that finishes any
+// stuck pause; the next pass drops the row if the service is running after all.
+// A pause that changed nothing, because the service was not running or the org
+// is no longer due, loses its row.
+func (e *Enforcer) pauseOne(ctx context.Context, orgID string, service Service, now time.Time) error {
+	row := Paused{Kind: service.Kind, ProjectID: service.ProjectID, ServiceID: service.ServiceID, Name: service.Name}
+	if waiting, ok := e.backoff[row.Key()]; ok && now.Before(waiting.retryAt) {
+		return ErrNotCredits
+	}
+	if err := e.due(ctx, orgID); err != nil {
+		return err
+	}
 	if err := e.store.RecordPause(ctx, orgID, row); err != nil {
 		return err
 	}
-	if err := e.work.Pause(ctx, row); err != nil {
+	err := e.work.Pause(ctx, row, func() error { return e.due(ctx, orgID) })
+	switch {
+	case err == nil:
+		delete(e.backoff, row.Key())
+		return nil
+	case errors.Is(err, ErrNotCredits):
 		if forgetErr := e.store.ForgetPause(ctx, orgID, row); forgetErr != nil {
-			log.Printf("ERROR: credit pause of %s failed and its row could not be removed: %v", row.Key(), forgetErr)
+			return errors.Join(err, forgetErr)
 		}
 		return err
 	}
-	return nil
+	e.backOff(row.Key(), now)
+	metrics.CountCreditMeterEvent(metrics.CreditMeterPauseFailed)
+	return err
+}
+
+// backOff makes a service that failed to pause wait twice as long after each failure.
+func (e *Enforcer) backOff(key string, now time.Time) {
+	failures := e.backoff[key].failures + 1
+	wait := creditPauseBackoffBase << (failures - 1)
+	if wait > creditPauseBackoffMax || wait <= 0 {
+		wait = creditPauseBackoffMax
+	}
+	e.backoff[key] = pauseBackoff{failures: failures, retryAt: now.Add(wait)}
 }
 
 // Leader says whether this replica is the one that enforces.

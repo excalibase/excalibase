@@ -79,7 +79,7 @@ func (s *AppDeployService) holdAppQueued(ctx context.Context, projectID, appID s
 // PauseApp scales the app to zero and records PAUSED only once no pod of it is
 // left. A pause that stops part way stays PAUSING and is finished by pausing again.
 func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string) (paused *apphost.App, err error) {
-	return s.pause(ctx, projectID, appID, pausableStatuses)
+	return s.pause(ctx, projectID, appID, pausableStatuses, nil)
 }
 
 // StopApp is PauseApp for a suspension (EXC-845): it also takes an app whose
@@ -87,12 +87,35 @@ func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string
 // reads ACTIVE and would converge to running after the suspension. A user's
 // pause still refuses those; the rollout is not theirs to cut short.
 func (s *AppDeployService) StopApp(ctx context.Context, projectID, appID string) (*apphost.App, error) {
-	return s.pause(ctx, projectID, appID, append([]string{apphost.StatusCreated, apphost.StatusResuming}, pausableStatuses...))
+	return s.pause(ctx, projectID, appID, append([]string{apphost.StatusCreated, apphost.StatusResuming}, pausableStatuses...), nil)
 }
 
 var pausableStatuses = []string{apphost.StatusRunning, apphost.StatusFailed, apphost.StatusPausing}
 
-func (s *AppDeployService) pause(ctx context.Context, projectID, appID string, from []string) (paused *apphost.App, err error) {
+// ErrAppNotRunning is a pause for credit finding the app not running: stopped by its
+// owner, still starting, or failed. Credit stops only what is running, so it did nothing.
+var ErrAppNotRunning = errors.New("the app is not running")
+
+// PauseAppForCredit stops a running app for used-up credit. It acts only on an app
+// running under its lease, runs admitted once just before, and never takes an app
+// its owner stopped or one mid-rollout, so credit cannot later restart what it did
+// not stop. A refusal is ErrAppNotRunning, and nothing has changed.
+func (s *AppDeployService) PauseAppForCredit(ctx context.Context, projectID, appID string, admitted func() error) (*apphost.App, error) {
+	app, err := s.pause(ctx, projectID, appID, []string{apphost.StatusRunning}, func(app *apphost.App) error {
+		if app.Status != apphost.StatusRunning {
+			return fmt.Errorf("%w: %s is %s", ErrAppNotRunning, appID, app.Status)
+		}
+		return admitted()
+	})
+	if errors.Is(err, apphost.ErrAppStatusConflict) {
+		return nil, fmt.Errorf("%w: %v", ErrAppNotRunning, err)
+	}
+	return app, err
+}
+
+// pause stops an app. admit, when set, runs on the app as read under the lease,
+// before anything changes, and refuses the pause by returning an error.
+func (s *AppDeployService) pause(ctx context.Context, projectID, appID string, from []string, admit func(*apphost.App) error) (paused *apphost.App, err error) {
 	defer func() { s.settleLifecycle(projectID, appID, OperationPause, err) }()
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdAppForLifecycle(ctx, projectID, appID, OperationPause)
@@ -102,6 +125,9 @@ func (s *AppDeployService) pause(ctx context.Context, projectID, appID string, f
 	defer release()
 
 	app, err := s.lookupApp(projectID, appID)
+	if err == nil && admit != nil {
+		err = admit(app)
+	}
 	if err != nil || app.Status == apphost.StatusStopped {
 		return app, err
 	}

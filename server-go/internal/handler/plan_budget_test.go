@@ -98,7 +98,7 @@ func TestAResumeRefusedForUsedUpCreditSaysSoThroughTheLifecycleAnswer(t *testing
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if !body.CreditExhausted || !strings.Contains(body.Error, "Add credit") {
+	if !body.CreditExhausted || !strings.Contains(body.Error, "Contact support to add credit") {
 		t.Fatalf("%+v", body)
 	}
 }

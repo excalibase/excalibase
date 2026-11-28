@@ -28,12 +28,12 @@ const (
 
 // creditZeroApps and creditZeroDatabases are the lifecycle a person's own pause and resume use.
 type creditZeroApps interface {
-	StopApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
+	PauseAppForCredit(ctx context.Context, projectID, appID string, admitted func() error) (*apphost.App, error)
 	ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error)
 }
 
 type creditZeroDatabases interface {
-	Pause(ctx context.Context, projectID, reason string) error
+	PauseIdle(ctx context.Context, projectID, reason string, admitted func() error) error
 	Resume(ctx context.Context, projectID string) error
 }
 
@@ -47,19 +47,28 @@ type creditZeroWorkloads struct {
 
 var errNoCreditPause = errors.New("this kind of service cannot be paused for credit")
 
-func (w creditZeroWorkloads) Pause(ctx context.Context, row creditzero.Paused) error {
+// notCreditsWhenRefused turns a lifecycle service's "nothing to do here" into creditzero.ErrNotCredits.
+func notCreditsWhenRefused(err, refusal error) error {
+	if errors.Is(err, refusal) && !errors.Is(err, creditzero.ErrNotCredits) {
+		return fmt.Errorf("%w: %v", creditzero.ErrNotCredits, err)
+	}
+	return err
+}
+
+func (w creditZeroWorkloads) Pause(ctx context.Context, row creditzero.Paused, admitted func() error) error {
 	switch row.Kind {
 	case creditzero.KindApp:
 		if w.apps == nil {
 			return errNoCreditPause
 		}
-		_, err := w.apps.StopApp(ctx, row.ProjectID, row.ServiceID)
-		return err
+		_, err := w.apps.PauseAppForCredit(ctx, row.ProjectID, row.ServiceID, admitted)
+		return notCreditsWhenRefused(err, service.ErrAppNotRunning)
 	case creditzero.KindDatabase:
 		if w.databases == nil {
 			return errNoCreditPause
 		}
-		return w.databases.Pause(ctx, row.ProjectID, domain.PauseReasonCredits)
+		err := w.databases.PauseIdle(ctx, row.ProjectID, domain.PauseReasonCredits, admitted)
+		return notCreditsWhenRefused(err, service.ErrNoLongerIdle)
 	}
 	return fmt.Errorf("%w: %s", errNoCreditPause, row.Kind)
 }
@@ -176,8 +185,8 @@ func startCreditZero(cfg config.AppConfig, sqlStore storage.PlatformStore, deps 
 // databasePauser adapts the pause service to the two calls credit needs.
 type databasePauser struct{ pauses *service.PauseService }
 
-func (d databasePauser) Pause(ctx context.Context, projectID, reason string) error {
-	return d.pauses.Pause(ctx, projectID, reason)
+func (d databasePauser) PauseIdle(ctx context.Context, projectID, reason string, admitted func() error) error {
+	return d.pauses.PauseIdle(ctx, projectID, reason, admitted)
 }
 
 func (d databasePauser) Resume(ctx context.Context, projectID string) error {

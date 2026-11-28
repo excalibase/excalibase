@@ -309,9 +309,17 @@ describe('StudioShell', () => {
       expect(within(banner).getByRole('link', { name: 'Usage & credits' })).toHaveAttribute('href', '/usage');
     });
 
-    test('past the grace period it says compute is paused', async () => {
+    test('past the grace period with nothing paused it does not claim anything is paused', async () => {
       renderShell('user', { features: { credits: true }, credits: credit(0, { zero: zero({ atZero: true, graceEndsAt: '2020-01-10T00:00:00Z' }) }) });
-      expect(await screen.findByTestId('credit-banner')).toHaveTextContent(/is paused and your data is kept/i);
+      expect(await screen.findByTestId('credit-banner')).toHaveTextContent(/nothing is paused/i);
+    });
+
+    test('past the grace period with something paused it says compute is paused and who to write to', async () => {
+      const paused = [{ kind: 'app' as const, projectId: 'p1', serviceId: 'a1', name: 'web', pausedAt: '2020-01-10T00:00:00Z' }];
+      renderShell('user', { features: { credits: true }, credits: credit(0, { zero: zero({ atZero: true, graceEndsAt: '2020-01-10T00:00:00Z', paused }) }) });
+      const banner = await screen.findByTestId('credit-banner');
+      expect(banner).toHaveTextContent(/is paused and your data is kept/i);
+      expect(banner).toHaveTextContent(/contact support to add credit: hello@excalibase\.io/i);
     });
 
     test('low credit shows the amount left', async () => {

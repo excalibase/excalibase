@@ -15,6 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/planbudget"
+	"github.com/excalibase/provisioning-poc/internal/service"
 )
 
 type recordedApps struct {
@@ -22,8 +23,11 @@ type recordedApps struct {
 	err   error
 }
 
-func (r *recordedApps) StopApp(_ context.Context, projectID, appID string) (*apphost.App, error) {
+func (r *recordedApps) PauseAppForCredit(_ context.Context, projectID, appID string, admitted func() error) (*apphost.App, error) {
 	r.calls = append(r.calls, "stop "+projectID+"/"+appID)
+	if err := admitted(); err != nil {
+		return nil, err
+	}
 	return nil, r.err
 }
 
@@ -37,8 +41,11 @@ type recordedDatabases struct {
 	err   error
 }
 
-func (r *recordedDatabases) Pause(_ context.Context, projectID, reason string) error {
+func (r *recordedDatabases) PauseIdle(_ context.Context, projectID, reason string, admitted func() error) error {
 	r.calls = append(r.calls, "pause "+projectID+" for "+reason)
+	if err := admitted(); err != nil {
+		return err
+	}
 	return r.err
 }
 
@@ -51,9 +58,10 @@ func TestCreditPausesGoThroughTheSameLifecycleAPersonUses(t *testing.T) {
 	apps, dbs := &recordedApps{}, &recordedDatabases{}
 	work := creditZeroWorkloads{apps: apps, databases: dbs}
 	ctx := context.Background()
+	admit := func() error { return nil }
 	for _, step := range []error{
-		work.Pause(ctx, creditzero.Paused{Kind: creditzero.KindApp, ProjectID: "p1", ServiceID: "a1"}),
-		work.Pause(ctx, creditzero.Paused{Kind: creditzero.KindDatabase, ProjectID: "p2", ServiceID: "p2"}),
+		work.Pause(ctx, creditzero.Paused{Kind: creditzero.KindApp, ProjectID: "p1", ServiceID: "a1"}, admit),
+		work.Pause(ctx, creditzero.Paused{Kind: creditzero.KindDatabase, ProjectID: "p2", ServiceID: "p2"}, admit),
 		work.Resume(ctx, creditzero.Paused{Kind: creditzero.KindApp, ProjectID: "p1", ServiceID: "a1"}),
 		work.Resume(ctx, creditzero.Paused{Kind: creditzero.KindDatabase, ProjectID: "p2", ServiceID: "p2"}),
 	} {
@@ -69,12 +77,37 @@ func TestCreditPausesGoThroughTheSameLifecycleAPersonUses(t *testing.T) {
 	}
 }
 
+func noCheck() error { return nil }
+
+func TestAServiceTheLifecycleRefusedAsNotRunningIsNotCreditsAndTheCheckReachesIt(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		kind string
+		err  error
+	}{
+		"an app its owner stopped":    {creditzero.KindApp, service.ErrAppNotRunning},
+		"a database no longer ACTIVE": {creditzero.KindDatabase, service.ErrNoLongerIdle},
+	} {
+		work := creditZeroWorkloads{apps: &recordedApps{err: tc.err}, databases: &recordedDatabases{err: tc.err}}
+		if err := work.Pause(ctx, creditzero.Paused{Kind: tc.kind}, noCheck); !errors.Is(err, creditzero.ErrNotCredits) {
+			t.Errorf("%s: a refusal must read as not credit's: %v", name, err)
+		}
+	}
+	work := creditZeroWorkloads{apps: &recordedApps{}, databases: &recordedDatabases{}}
+	refuse := func() error { return creditzero.ErrNoLongerDue }
+	for _, kind := range []string{creditzero.KindApp, creditzero.KindDatabase} {
+		if err := work.Pause(ctx, creditzero.Paused{Kind: kind}, refuse); !errors.Is(err, creditzero.ErrNoLongerDue) {
+			t.Errorf("%s: the check just before the pause is the lifecycle's own admission: %v", kind, err)
+		}
+	}
+}
+
 func TestAKindWithNoLifecycleIsRefusedNotIgnored(t *testing.T) {
 	work := creditZeroWorkloads{apps: &recordedApps{}, databases: &recordedDatabases{}}
-	if err := work.Pause(context.Background(), creditzero.Paused{Kind: "functions"}); err == nil {
+	if err := work.Pause(context.Background(), creditzero.Paused{Kind: "functions"}, noCheck); err == nil {
 		t.Fatal("pausing something this cannot pause must fail, not report success")
 	}
-	if err := (creditZeroWorkloads{}).Pause(context.Background(), creditzero.Paused{Kind: creditzero.KindDatabase}); err == nil {
+	if err := (creditZeroWorkloads{}).Pause(context.Background(), creditzero.Paused{Kind: creditzero.KindDatabase}, noCheck); err == nil {
 		t.Fatal("no database pauser (no pausers configured) is an error")
 	}
 }
@@ -83,7 +116,7 @@ func TestAWorkloadFailureReachesTheEnforcer(t *testing.T) {
 	boom := errors.New("pods remain")
 	work := creditZeroWorkloads{apps: &recordedApps{err: boom}, databases: &recordedDatabases{err: boom}}
 	for _, kind := range []string{creditzero.KindApp, creditzero.KindDatabase} {
-		if err := work.Pause(context.Background(), creditzero.Paused{Kind: kind}); !errors.Is(err, boom) {
+		if err := work.Pause(context.Background(), creditzero.Paused{Kind: kind}, noCheck); !errors.Is(err, boom) {
 			t.Errorf("%s pause: %v", kind, err)
 		}
 		if err := work.Resume(context.Background(), creditzero.Paused{Kind: kind}); !errors.Is(err, boom) {
