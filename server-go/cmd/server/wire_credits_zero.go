@@ -99,6 +99,10 @@ func creditZeroAllowance(cfg config.AppConfig) creditzero.Allowance {
 	}
 }
 
+func creditTransitionAge(cfg config.AppConfig) time.Duration {
+	return time.Duration(cfg.CreditMeter.TransitionMaxAgeMinutes) * time.Minute
+}
+
 func creditGrace(cfg config.AppConfig) time.Duration {
 	return time.Duration(cfg.CreditMeter.GraceDays) * 24 * time.Hour
 }
@@ -164,7 +168,7 @@ func startCreditZero(cfg config.AppConfig, sqlStore storage.PlatformStore, deps 
 			// nothing is metered here: no credit to run out
 		}
 	}
-	zero := pgstore.NewCreditZeroStore(pg)
+	zero := pgstore.NewCreditZeroStore(pg).WithTransitionAge(creditTransitionAge(cfg))
 	deps.credits.SetZero(zeroSourceWhenMetered(cfg, zero), creditGrace(cfg))
 	if deps.suspensions != nil {
 		deps.suspensions.SetCreditHold(creditHoldWhenMetered(cfg, zero))

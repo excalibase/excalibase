@@ -3,6 +3,7 @@ import { ProvisionFailure } from '../../shared/ProvisionFailure';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, PauseCircle, PlayCircle } from 'lucide-react';
 import { useCurrentMetrics } from '../../../hooks/useMetrics';
+import { useSupportEmail } from '../../../hooks/useDeploymentMode';
 import { useProjectRole } from '../../../hooks/useProjectRole';
 import { useDeprovisionDatabase, useListBackups, usePauseProject, useResumeProject } from '../../../hooks/useProvisioning';
 import { projectOperationMessage } from '../../../hooks/projectFollow';
@@ -19,7 +20,7 @@ import { databaseServiceStatus } from '../serviceStatus';
 import { panelSearch } from './panelState';
 import { card, Fact } from './sections';
 import { formatInstant } from '../../../utils/instant';
-import { ADD_CREDIT_TEXT } from '../../../utils/support';
+import { addCreditText } from '../../../utils/support';
 
 const NOT_AVAILABLE = 'Not available';
 
@@ -105,6 +106,7 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
   const failure = pause.error ?? resume.error;
   const refusal = budgetRefusal(resume.error);
   const fitsAfterPauses = refusal?.creditExhausted === true && refusal.fitsCeilingAlone;
+  const supportEmail = useSupportEmail();
   const pausedForCredit = paused && project.pauseReason === 'credits';
   const settled = paused || project.status === 'ACTIVE';
   const [asking, setAsking] = useState(false);
@@ -127,14 +129,14 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
         </div>
       )}
       {pausedForCredit && (
-        <p className="text-sm text-amber-400">Paused because your credit is used up. It starts again by itself when credit is added. {ADD_CREDIT_TEXT}</p>
+        <p className="text-sm text-amber-400">Paused because your credit is used up. It starts again by itself when credit is added. {addCreditText(supportEmail)}</p>
       )}
       {failure != null && (
         <p role="alert" className="break-words text-xs text-red-400">
           {projectOperationMessage(failure, 'The database could not be changed')}
           {fitsAfterPauses && (
             <>
-              {' '}This database fits your free allowance once other services are paused. {ADD_CREDIT_TEXT}{' '}
+              {' '}This database fits your free allowance once other services are paused. {addCreditText(supportEmail)}{' '}
               <Link to="/usage" className="underline">Usage &amp; credits</Link>
             </>
           )}

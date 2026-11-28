@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { useOrgCredits } from '../../../api/credits';
-import { useFeatureEnabled } from '../../../hooks/useDeploymentMode';
+import { useFeatureEnabled, useSupportEmail } from '../../../hooks/useDeploymentMode';
 import { useCurrentOrg } from '../../../hooks/useMemberOrgs';
 import { cn } from '../../../utils/cn';
 import { creditNotice } from './creditNotice';
@@ -18,13 +18,14 @@ export function CreditBanner() {
   const { org } = useCurrentOrg();
   const creditsOn = useFeatureEnabled('credits').enabled;
   const { data } = useOrgCredits(org?.id, creditsOn);
-  const notice = creditNotice(data, new Date());
+  const supportEmail = useSupportEmail();
+  const notice = creditNotice(data, new Date(), supportEmail);
   if (!notice) return null;
   return (
-    <div role="status" data-testid="credit-banner" className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-sm', TONE[notice.tone])}>
+    <output data-testid="credit-banner" className={cn('flex w-full flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-sm', TONE[notice.tone])}>
       <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="min-w-0 flex-1">{notice.text}</span>
       <Link to="/usage" className="font-medium underline">Usage &amp; credits</Link>
-    </div>
+    </output>
   );
 }

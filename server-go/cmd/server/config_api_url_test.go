@@ -26,3 +26,16 @@ func TestConfigReportsThePublicAPIURL(t *testing.T) {
 		t.Fatalf("apiUrl = %q, want the public base without a trailing slash", body.APIURL)
 	}
 }
+
+func TestTheConfigNamesWhereToWriteForSupport(t *testing.T) {
+	for _, tc := range []struct{ configured, want string }{{"help@example.test", "help@example.test"}, {"", ""}} {
+		recorder := httptest.NewRecorder()
+		serveConfig(config.AppConfig{DeploymentMode: "cloud", SupportEmail: tc.configured}, features.NewStatic())(recorder, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+		var body struct {
+			SupportEmail string `json:"supportEmail"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.SupportEmail != tc.want {
+			t.Fatalf("%q: %q %v", tc.configured, body.SupportEmail, err)
+		}
+	}
+}

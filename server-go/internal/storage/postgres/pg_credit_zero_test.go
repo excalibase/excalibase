@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/credits"
 	"github.com/excalibase/provisioning-poc/internal/creditzero"
@@ -18,11 +19,11 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/planbudget"
 )
 
-// zeroGate: a Free plan of 4000m / 8 GiB RAM / 100 GiB disk, whose free allowance is 1000m / 1 GiB / 20 GiB,
+// zeroGate: a Free plan of 5000m / 10 GiB RAM / 100 GiB disk, whose free allowance is 1000m / 1 GiB / 20 GiB,
 // with the credit check wired as the platform wires it.
 func zeroGate() *planbudget.Gate {
 	free := config.PlanNumbers{
-		CPUMilli: 4000, MemoryMiB: 8192, DiskGiB: 100, MaxProjects: 50, MaxServices: 50,
+		CPUMilli: 5000, MemoryMiB: 10240, DiskGiB: 100, MaxProjects: 50, MaxServices: 50,
 		AllowanceCPUMilli: 1000, AllowanceMemoryMiB: 1024, AllowanceDiskGiB: 20,
 	}
 	gate := planbudget.NewGate(func(context.Context) bool { return true }, config.PlanBudgetConfig{Free: free, Standard: free})
@@ -313,13 +314,14 @@ func TestPausedRowsReadTheLiveStateOfEachService(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, p := range []string{"d-credit", "d-pausing", "d-userpausing", "d-provisioning", "d-idle", "d-active", "d-resuming", "d-deleting"} {
+	for _, p := range []string{"d-credit", "d-pausing", "d-userpausing", "d-provisioning", "d-failed", "d-idle", "d-active", "d-resuming", "d-deleting"} {
 		newDatabase(t, store, "proj-"+p, org)
 	}
 	set("proj-d-credit", "PAUSED", domain.PauseReasonCredits)
 	set("proj-d-pausing", "PAUSING", domain.PauseReasonCredits)
 	set("proj-d-userpausing", "PAUSING", domain.PauseReasonIdle)
 	set("proj-d-provisioning", "PROVISIONING", "")
+	set("proj-d-failed", "FAILED", "")
 	set("proj-d-idle", "PAUSED", domain.PauseReasonIdle)
 	set("proj-d-resuming", "RESUMING", domain.PauseReasonCredits)
 	set("proj-d-deleting", "DELETING", "")
@@ -327,12 +329,15 @@ func TestPausedRowsReadTheLiveStateOfEachService(t *testing.T) {
 	addApp(t, store, "proj-d-active", "a-running", "ACTIVE", 1, time.Hour)
 	addApp(t, store, "proj-d-active", "a-resuming", "RESUMING", 1, time.Hour)
 	addApp(t, store, "proj-d-active", "a-pausing", "PAUSING", 1, time.Hour)
+	addApp(t, store, "proj-d-active", "a-failed", "FAILED", 1, time.Hour)
 
 	rows := map[string]creditzero.Hold{
 		"database/proj-d-credit/proj-d-credit":             creditzero.HoldPaused,
 		"database/proj-d-pausing/proj-d-pausing":           creditzero.HoldBusy,
 		"database/proj-d-userpausing/proj-d-userpausing":   creditzero.HoldReleased,
 		"database/proj-d-provisioning/proj-d-provisioning": creditzero.HoldBusy,
+		"database/proj-d-failed/proj-d-failed":             creditzero.HoldReleased,
+		"app/proj-d-active/a-failed":                       creditzero.HoldReleased,
 		"database/proj-d-idle/proj-d-idle":                 creditzero.HoldReleased,
 		"database/proj-d-active/proj-d-active":             creditzero.HoldReleased,
 		"database/proj-d-resuming/proj-d-resuming":         creditzero.HoldBusy,
@@ -710,25 +715,52 @@ func TestADatabaseWithNoCreationTimeCountsAsTheOldest(t *testing.T) {
 }
 
 func TestHoldingsReportAnOrgWithAServiceInTransition(t *testing.T) {
-	for name, seed := range map[string]func(t *testing.T, store *Store, org string){
-		"a database pausing": func(t *testing.T, store *Store, org string) {
-			setDatabaseStatus(t, store, "proj-zt-d", "PAUSING")
-		},
-		"a database resuming": func(t *testing.T, store *Store, org string) {
-			setDatabaseStatus(t, store, "proj-zt-d", "RESUMING")
-		},
-		"a database provisioning": func(t *testing.T, store *Store, org string) {
-			setDatabaseStatus(t, store, "proj-zt-d", "PROVISIONING")
-		},
-		"an app pausing": func(t *testing.T, store *Store, org string) {
-			addApp(t, store, "proj-zt-d", "a1", "PAUSING", 1, time.Hour)
-		},
-		"an app resuming": func(t *testing.T, store *Store, org string) {
-			addApp(t, store, "proj-zt-d", "a1", "RESUMING", 1, time.Hour)
-		},
-		"an app still being created": func(t *testing.T, store *Store, org string) {
-			addApp(t, store, "proj-zt-d", "a1", "PROVISIONING", 1, time.Hour)
-		},
+	addDeploy := func(t *testing.T, store *Store, status string, age time.Duration) {
+		t.Helper()
+		if _, err := store.db.Exec(`INSERT INTO app_deploys (id, app_id, project_id, revision, image, spec, config, status, created_by, created_at)
+			VALUES ('d1', 'a1', 'proj-zt-d', 1, 'img', '{}'::jsonb, '{}'::jsonb, $1, 'u', now() - $2::interval)`, status, fmt.Sprintf("%d seconds", int(age.Seconds()))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dbStatus := func(status string, age time.Duration) func(*testing.T, *Store) {
+		return func(t *testing.T, store *Store) {
+			setDatabaseStatus(t, store, "proj-zt-d", status)
+			if _, err := store.db.Exec(`UPDATE database_instances SET updated_at = now() - $2::interval WHERE project_id = $1`, "proj-zt-d", fmt.Sprintf("%d seconds", int(age.Seconds()))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	appStatus := func(status string, age time.Duration) func(*testing.T, *Store) {
+		return func(t *testing.T, store *Store) {
+			addApp(t, store, "proj-zt-d", "a1", status, 1, time.Hour)
+			if _, err := store.db.Exec(`UPDATE apps SET updated_at = now() - $1::interval WHERE id = 'a1'`, fmt.Sprintf("%d seconds", int(age.Seconds()))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	const fresh, stale = time.Minute, 31 * time.Minute
+	for name, tc := range map[string]struct {
+		seed func(*testing.T, *Store)
+		want bool
+	}{
+		"a database pausing":                        {dbStatus("PAUSING", fresh), true},
+		"a database resuming":                       {dbStatus("RESUMING", fresh), true},
+		"a database provisioning":                   {dbStatus("PROVISIONING", fresh), true},
+		"a database being restored":                 {dbStatus("RESTORING", fresh), true},
+		"an app pausing":                            {appStatus("PAUSING", fresh), true},
+		"an app resuming":                           {appStatus("RESUMING", fresh), true},
+		"an app with a deploy pending":              {func(t *testing.T, s *Store) { appStatus("ACTIVE", time.Hour)(t, s); addDeploy(t, s, "pending", fresh) }, true},
+		"an app with a deploy rolling":              {func(t *testing.T, s *Store) { appStatus("ACTIVE", time.Hour)(t, s); addDeploy(t, s, "rolling", fresh) }, true},
+		"an app created and never deployed":         {appStatus("PROVISIONING", fresh), false},
+		"a database stuck provisioning for an age":  {dbStatus("PROVISIONING", stale), false},
+		"a database stuck pausing for an age":       {dbStatus("PAUSING", stale), false},
+		"a database stuck restoring for an age":     {dbStatus("RESTORING", stale), false},
+		"an app stuck resuming for an age":          {appStatus("RESUMING", stale), false},
+		"an app whose deploy has rolled for an age": {func(t *testing.T, s *Store) { appStatus("ACTIVE", time.Hour)(t, s); addDeploy(t, s, "rolling", stale) }, false},
+		"an app whose deploy already finished": {func(t *testing.T, s *Store) {
+			appStatus("ACTIVE", time.Hour)(t, s)
+			addDeploy(t, s, "succeeded", fresh)
+		}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			store, org := zeroStore(t, "zt"+strings.ReplaceAll(name, " ", ""))
@@ -739,12 +771,28 @@ func TestHoldingsReportAnOrgWithAServiceInTransition(t *testing.T) {
 			if err != nil || settled.Transitioning {
 				t.Fatalf("a settled org is not in transition: %v %+v", err, settled)
 			}
-			seed(t, store, org)
-			moving, err := zero.Holdings(context.Background(), org)
-			if err != nil || !moving.Transitioning {
-				t.Fatalf("expected a transition: %v %+v", err, moving)
+			tc.seed(t, store)
+			got, err := zero.Holdings(context.Background(), org)
+			if err != nil || got.Transitioning != tc.want {
+				t.Fatalf("in transition = %v, want %v (%v)", got.Transitioning, tc.want, err)
 			}
 		})
+	}
+}
+
+func TestTheTransitionAgeComesFromTheStoresSetting(t *testing.T) {
+	store, org := zeroStore(t, "zta")
+	fund(t, store, org, 5)
+	newDatabase(t, store, "proj-zta", org)
+	setDatabaseStatus(t, store, "proj-zta", "PROVISIONING")
+	if _, err := store.db.Exec(`UPDATE database_instances SET updated_at = now() - interval '10 minutes' WHERE project_id = 'proj-zta'`); err != nil {
+		t.Fatal(err)
+	}
+	for age, want := range map[time.Duration]bool{5 * time.Minute: false, 15 * time.Minute: true} {
+		got, err := NewCreditZeroStore(store).WithTransitionAge(age).Holdings(context.Background(), org)
+		if err != nil || got.Transitioning != want {
+			t.Fatalf("age %s: %v %v", age, got.Transitioning, err)
+		}
 	}
 }
 
@@ -780,5 +828,26 @@ func TestOrgReadsOneOrgAgainAndAnOrgWithNoAccountIsNeverAtZero(t *testing.T) {
 	none, err := zero.Org(ctx, bare)
 	if err != nil || none.AtZero {
 		t.Fatalf("%v %+v", err, none)
+	}
+}
+
+func TestAnAppStatusChangeStampsWhenItHappenedSoAStateHasAnAge(t *testing.T) {
+	store, org := zeroStore(t, "zst")
+	newDatabase(t, store, "proj-zst", org)
+	addApp(t, store, "proj-zst", "a1", "ACTIVE", 1, time.Hour)
+	if _, err := store.db.Exec(`UPDATE apps SET updated_at = now() - interval '3 days' WHERE id = 'a1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apphost.NewPostgresAppStore(store.db).Transition("proj-zst", "a1", []string{"ACTIVE"}, "PAUSING"); err != nil {
+		t.Fatal(err)
+	}
+	var age time.Duration
+	var seconds float64
+	if err := store.db.QueryRow(`SELECT extract(epoch FROM now() - updated_at) FROM apps WHERE id = 'a1'`).Scan(&seconds); err != nil {
+		t.Fatal(err)
+	}
+	age = time.Duration(seconds) * time.Second
+	if age > time.Minute {
+		t.Fatalf("the change was %s ago on the row, so a stuck PAUSING cannot be told from a fresh one", age)
 	}
 }

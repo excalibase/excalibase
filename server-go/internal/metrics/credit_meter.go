@@ -19,6 +19,8 @@ const (
 	CreditMeterDroppedPostStepSample = "dropped_post_step_sample"
 	// CreditMeterPauseFailed: pausing a service for used-up credit failed and will be retried after a backoff.
 	CreditMeterPauseFailed = "pause_failed"
+	// CreditMeterPauseStuck: a service that still fails to pause after waiting the longest backoff was skipped so it cannot block the org.
+	CreditMeterPauseStuck = "pause_stuck"
 )
 
 var creditMeterEvents = promauto.NewCounterVec(

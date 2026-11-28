@@ -1,3 +1,4 @@
-// Where a customer writes to add credit: there is no self-serve purchase or upgrade yet.
-export const SUPPORT_EMAIL = 'hello@excalibase.io';
-export const ADD_CREDIT_TEXT = `Contact support to add credit: ${SUPPORT_EMAIL}.`;
+// The sentence that tells a customer how to add credit: there is no self-serve purchase or upgrade yet.
+// The address is the server's own SUPPORT_EMAIL, so a self-hosted install names its own.
+export const addCreditText = (supportEmail: string | undefined) =>
+  supportEmail ? `Contact support to add credit: ${supportEmail}.` : 'Contact support to add credit.';

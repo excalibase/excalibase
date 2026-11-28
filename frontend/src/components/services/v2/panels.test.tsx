@@ -22,7 +22,7 @@ let orgRole = 'owner';
 function route(url: string) {
   const ok = (data: unknown) => Promise.resolve({ data });
   if (url === '/orgs') return ok([{ id: 'org-1', name: 'Acme', role: orgRole }]);
-  if (url === '/config') return ok({ deploymentMode: 'cloud', appHosting: true, sites: true, features: { studio_v2: true } });
+  if (url === '/config') return ok({ deploymentMode: 'cloud', appHosting: true, sites: true, features: { studio_v2: true }, supportEmail: 'help@example.test' });
   if (url === '/tiers') return ok([{ tier: 'FREE', cpu: '1', memory: '2Gi', autoPauseAfterDays: 7 }]);
   if (url === '/provision/p1') return ok(database());
   if (url.endsWith('/metrics/current')) return ok({ activeConnections: 3, maxConnections: 50, diskUsageGB: 2, databaseSizeBytes: 2048 });
@@ -110,8 +110,8 @@ describe('database panel', () => {
     expect(screen.queryByText(/credit is used up/i)).not.toBeInTheDocument();
   });
 
-  const creditRefusal = (need: { cpuMilli: number; memoryBytes: number }) => ({
-    response: { status: 409, data: { code: 'plan_budget_exceeded', creditExhausted: true, dimension: 'CPU', need, budget: { cpuMilli: 1000, memoryBytes: 1024 * 1024 ** 2, diskBytes: 0, services: 5 }, error: 'your credit is used up, so this cannot start or grow: it needs 0.50 vCPU more CPU but only 0.00 vCPU is left of your free allowance. Contact support to add credit, or pause or delete other services' } },
+  const creditRefusal = (step: { cpuMilli: number; memoryBytes: number }) => ({
+    response: { status: 409, data: { code: 'plan_budget_exceeded', creditExhausted: true, dimension: 'CPU', need: { cpuMilli: 500 }, step, budget: { cpuMilli: 1000, memoryBytes: 1024 * 1024 ** 2, diskBytes: 0, services: 5 }, error: 'your credit is used up, so this cannot start or grow: it needs 0.50 vCPU more CPU but only 0.00 vCPU is left of your free allowance. Contact support to add credit, or pause or delete other services' } },
   });
 
   test('resuming at $0 explains that a database that fits the free allowance starts once other services are paused', async () => {
@@ -121,7 +121,7 @@ describe('database panel', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/your credit is used up/i);
     expect(alert).toHaveTextContent(/fits your free allowance once other services are paused/i);
-    expect(alert).toHaveTextContent(/contact support to add credit: hello@excalibase\.io/i);
+    expect(alert).toHaveTextContent(/contact support to add credit: help@example\.test/i);
     expect(within(alert).getByRole('link', { name: 'Usage & credits' })).toHaveAttribute('href', '/usage');
   });
 

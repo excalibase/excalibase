@@ -18,6 +18,9 @@ type CreditMeterConfig struct {
 	DiskGiBMonthMicros int64
 	// GraceDays is how long compute above the free allowance keeps running once the credit is used up.
 	GraceDays int
+	// TransitionMaxAgeMinutes is how long a service may sit in a changing state (starting, pausing,
+	// resuming, restoring) and still hold its org out of credit pauses; after that it is ignored.
+	TransitionMaxAgeMinutes int
 
 	err error
 }
@@ -47,6 +50,7 @@ func loadCreditMeter() CreditMeterConfig {
 		cfg.VCPUMonthMicros, cfg.RAMGiBMonthMicros, cfg.DiskGiBMonthMicros = *prices.VCPUMonthMicros, *prices.RAMGiBMonthMicros, *prices.DiskGiBMonthMicros
 	}
 	cfg.GraceDays = graceDays(&errs)
+	cfg.TransitionMaxAgeMinutes = transitionMaxAgeMinutes(&errs)
 	if len(errs) > 0 {
 		cfg.err = fmt.Errorf("credit meter settings: %s", strings.Join(errs, "; "))
 	}
@@ -70,6 +74,24 @@ func graceDays(errs *[]string) int {
 		return defaultGraceDays
 	}
 	return days
+}
+
+const (
+	defaultTransitionMaxAgeMinutes = 30
+	maxTransitionMaxAgeMinutes     = 24 * 60
+)
+
+func transitionMaxAgeMinutes(errs *[]string) int {
+	raw := strings.TrimSpace(envOr("CREDIT_TRANSITION_MAX_AGE_MINUTES", ""))
+	if raw == "" {
+		return defaultTransitionMaxAgeMinutes
+	}
+	minutes, err := strconv.Atoi(raw)
+	if err != nil || minutes < 1 || minutes > maxTransitionMaxAgeMinutes {
+		*errs = append(*errs, fmt.Sprintf("CREDIT_TRANSITION_MAX_AGE_MINUTES=%q is not a whole number of minutes from 1 to %d", raw, maxTransitionMaxAgeMinutes))
+		return defaultTransitionMaxAgeMinutes
+	}
+	return minutes
 }
 
 func (c AppConfig) validateCreditMeter() error { return c.CreditMeter.err }

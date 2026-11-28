@@ -17,13 +17,13 @@ describe('the credit banner', () => {
   });
 
   test('at $0 in the grace period it names the pause date and what is refused now', () => {
-    const notice = creditNotice(overview({ balanceMicros: 0, zero: zero({ atZero: true, graceEndsAt: '2026-12-05T00:00:00Z' }) }), NOW);
+    const notice = creditNotice(overview({ balanceMicros: 0, zero: zero({ atZero: true, graceEndsAt: '2026-12-05T00:00:00Z' }) }), NOW, 'help@example.test');
     expect(notice?.tone).toBe('bad');
     expect(notice?.text).toMatch(/credit is used up/i);
     expect(notice?.text).toMatch(/new services and growth are blocked/i);
     expect(notice?.text).toContain(new Date('2026-12-05T00:00:00Z').toLocaleDateString());
     expect(notice?.text).toMatch(/4 days/);
-    expect(notice?.text).toContain('hello@excalibase.io');
+    expect(notice?.text).toContain('help@example.test');
   });
 
   test('on the last day of the grace period it counts one day, not zero', () => {
@@ -32,13 +32,19 @@ describe('the credit banner', () => {
   });
 
   test('past the grace period it says compute is paused and the data kept', () => {
-    const notice = creditNotice(overview({ balanceMicros: 0, zero: zero({ atZero: true, graceEndsAt: '2026-11-25T00:00:00Z', paused: [{ kind: 'app', projectId: 'p', serviceId: 'a', name: 'web', pausedAt: '2026-11-25T00:00:00Z' }] }) }), NOW);
+    const notice = creditNotice(overview({ balanceMicros: 0, zero: zero({ atZero: true, graceEndsAt: '2026-11-25T00:00:00Z', paused: [{ kind: 'app', projectId: 'p', serviceId: 'a', name: 'web', pausedAt: '2026-11-25T00:00:00Z' }] }) }), NOW, 'help@example.test');
     expect(notice?.tone).toBe('bad');
     expect(notice?.text).toMatch(/paused/i);
     expect(notice?.text).toMatch(/data is kept/i);
     expect(notice?.text).not.toMatch(/will pause/i);
-    expect(notice?.text).toContain('Contact support to add credit: hello@excalibase.io');
+    expect(notice?.text).toContain('Contact support to add credit: help@example.test');
     expect(notice?.text).not.toMatch(/upgrade/i);
+  });
+
+  test('without an address on the server it still says to contact support', () => {
+    const notice = creditNotice(overview({ balanceMicros: 0, zero: zero({ atZero: true, graceEndsAt: '2026-12-05T00:00:00Z' }) }), NOW);
+    expect(notice?.text).toContain('Contact support to add credit.');
+    expect(notice?.text).not.toMatch(/@/);
   });
 
   test('past the grace period with nothing paused it does not say anything is paused', () => {

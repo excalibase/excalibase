@@ -170,6 +170,8 @@ describe('CreditsSection', () => {
       expect(items[1]).toHaveTextContent('Database');
       expect(region.getByText(/start again by themselves/i)).toBeInTheDocument();
       expect(region.getByText(/data is kept/i)).toBeInTheDocument();
+      expect(region.getByText(/contact support to add credit/i)).toBeInTheDocument();
+      expect(region.queryByText(/upgrade/i)).toBeNull();
     });
 
     test('in the grace period it says the day compute above the allowance pauses', async () => {

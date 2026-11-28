@@ -51,7 +51,7 @@ function renderShell(role = 'user', { orgs = ORGS, credits, features = {}, path 
       answer = orgsFail ? Promise.reject(new Error('orgs down')) : Promise.resolve({ data: orgs });
     } else if (url === '/provision') answer = Promise.resolve({ data: PROJECTS });
     else if (url === '/orgs/org-1/credits/') answer = credits ? Promise.resolve({ data: credits }) : Promise.reject(new Error('credits down'));
-    else answer = Promise.resolve({ data: { deploymentMode: 'cloud', adminHost, features: { studio_v2: true, ...features } } });
+    else answer = Promise.resolve({ data: { deploymentMode: 'cloud', adminHost, supportEmail: 'help@example.test', features: { studio_v2: true, ...features } } });
     answers.push(answer);
     return answer as never;
   });
@@ -318,8 +318,9 @@ describe('StudioShell', () => {
       const paused = [{ kind: 'app' as const, projectId: 'p1', serviceId: 'a1', name: 'web', pausedAt: '2020-01-10T00:00:00Z' }];
       renderShell('user', { features: { credits: true }, credits: credit(0, { zero: zero({ atZero: true, graceEndsAt: '2020-01-10T00:00:00Z', paused }) }) });
       const banner = await screen.findByTestId('credit-banner');
+      expect(banner.tagName).toBe('OUTPUT');
       expect(banner).toHaveTextContent(/is paused and your data is kept/i);
-      expect(banner).toHaveTextContent(/contact support to add credit: hello@excalibase\.io/i);
+      expect(banner).toHaveTextContent(/contact support to add credit: help@example\.test/i);
     });
 
     test('low credit shows the amount left', async () => {

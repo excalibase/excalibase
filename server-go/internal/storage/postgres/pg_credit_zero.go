@@ -20,11 +20,24 @@ import (
 // It satisfies creditzero.Store.
 type CreditZeroStore struct {
 	db *sql.DB
+	// transitionAge is how long a service may sit in a changing state before it stops holding up its org.
+	transitionAge time.Duration
+}
+
+// DefaultTransitionAge bounds how long a state that is meant to pass blocks credit pauses.
+const DefaultTransitionAge = 30 * time.Minute
+
+// WithTransitionAge sets how old a changing state may be and still hold its org's pass.
+func (z *CreditZeroStore) WithTransitionAge(age time.Duration) *CreditZeroStore {
+	z.transitionAge = age
+	return z
 }
 
 var _ creditzero.Store = (*CreditZeroStore)(nil)
 
-func NewCreditZeroStore(store *Store) *CreditZeroStore { return &CreditZeroStore{db: store.db} }
+func NewCreditZeroStore(store *Store) *CreditZeroStore {
+	return &CreditZeroStore{db: store.db, transitionAge: DefaultTransitionAge}
+}
 
 // Now is the database clock: the grace period is measured on it.
 func (z *CreditZeroStore) Now(ctx context.Context) (time.Time, error) {
@@ -112,20 +125,29 @@ func (z *CreditZeroStore) Holdings(ctx context.Context, orgID string) (creditzer
 	return held, err
 }
 
-// inTransition says whether any database or app of the org is starting, stopping, resuming or being restored.
+// inTransition says whether a database or app of the org is starting, stopping, resuming or being
+// restored right now. A state that is meant to pass but has lasted longer than the transition age
+// (a provision that failed, a restore that never ended) no longer counts: it must not hold the org
+// out of enforcement for good. An app counts only while a deploy is pending or rolling, or while it
+// pauses or resumes: one that was created and never deployed sits in PROVISIONING indefinitely.
 func (z *CreditZeroStore) inTransition(ctx context.Context, orgID string) (bool, error) {
 	var moving bool
 	err := z.db.QueryRowContext(ctx, `
-		SELECT EXISTS (SELECT 1 FROM database_instances WHERE org_id = $1 AND status = ANY($2))
+		SELECT EXISTS (SELECT 1 FROM database_instances
+		               WHERE org_id = $1 AND status = ANY($2)
+		                 AND COALESCE(updated_at, created_at, 'epoch'::timestamptz) > now() - make_interval(secs => $4))
 		    OR EXISTS (SELECT 1 FROM apps a JOIN database_instances d ON d.project_id = a.project_id
-		               WHERE d.org_id = $1 AND a.status = ANY($3))`,
-		orgID, pq.Array(transitionalDatabaseStatuses), pq.Array(transitionalAppStatuses)).Scan(&moving)
+		               WHERE d.org_id = $1 AND a.status = ANY($3) AND a.updated_at > now() - make_interval(secs => $4))
+		    OR EXISTS (SELECT 1 FROM app_deploys x JOIN database_instances d ON d.project_id = x.project_id
+		               WHERE d.org_id = $1 AND x.status IN ($5, $6) AND x.created_at > now() - make_interval(secs => $4))`,
+		orgID, pq.Array(transitionalDatabaseStatuses), pq.Array(transitionalAppStatuses), z.transitionAge.Seconds(),
+		apphost.DeployStatusPending, apphost.DeployStatusRolling).Scan(&moving)
 	return moving, err
 }
 
 var (
 	transitionalDatabaseStatuses = []string{string(domain.StatusPausing), string(domain.StatusResuming), domain.StatusProvisioning, string(domain.StatusRestoring)}
-	transitionalAppStatuses      = []string{apphost.StatusPausing, apphost.StatusResuming, apphost.StatusCreated}
+	transitionalAppStatuses      = []string{apphost.StatusPausing, apphost.StatusResuming}
 )
 
 func (z *CreditZeroStore) runningDatabases(ctx context.Context, orgID string) ([]creditzero.Service, error) {
@@ -244,7 +266,8 @@ func holdOf(kind string, databaseStatus sql.NullString, databaseReason string, a
 			return creditzero.HoldPaused
 		}
 		return creditzero.HoldReleased
-	case string(domain.StatusActive):
+	case string(domain.StatusActive), string(domain.StageFailed):
+		// A failed service is not paused for credit and nothing will resume it: its row has no job left.
 		return creditzero.HoldReleased
 	case string(domain.StatusPausing):
 		if creditsOwn {

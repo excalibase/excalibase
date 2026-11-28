@@ -68,7 +68,7 @@ interface RefusalBody {
   error?: unknown;
   dimension?: unknown;
   creditExhausted?: unknown;
-  need?: unknown;
+  step?: unknown;
   budget?: unknown;
 }
 
@@ -79,13 +79,13 @@ const numberOf = (size: unknown, key: 'cpuMilli' | 'memoryBytes'): number => {
   return typeof value === 'number' ? value : Number.NaN;
 };
 
-// False when either size is missing: an unreadable answer never claims the step would fit.
-function fitsAlone(need: unknown, budget: unknown): boolean {
-  return numberOf(need, 'cpuMilli') <= numberOf(budget, 'cpuMilli') && numberOf(need, 'memoryBytes') <= numberOf(budget, 'memoryBytes');
+// The whole step against the ceiling, in CPU and memory. False when either size is missing: an unreadable answer never claims the step would fit.
+function fitsAlone(step: unknown, budget: unknown): boolean {
+  return numberOf(step, 'cpuMilli') <= numberOf(budget, 'cpuMilli') && numberOf(step, 'memoryBytes') <= numberOf(budget, 'memoryBytes');
 }
 
 export function budgetRefusal(error: unknown): BudgetRefusal | undefined {
   const response = (error as { response?: { status?: number; data?: RefusalBody } } | null | undefined)?.response;
   if (response?.status !== 409 || response.data?.code !== 'plan_budget_exceeded') return undefined;
-  return { message: textOf(response.data.error), dimension: textOf(response.data.dimension), creditExhausted: response.data.creditExhausted === true, fitsCeilingAlone: fitsAlone(response.data.need, response.data.budget) };
+  return { message: textOf(response.data.error), dimension: textOf(response.data.dimension), creditExhausted: response.data.creditExhausted === true, fitsCeilingAlone: fitsAlone(response.data.step, response.data.budget) };
 }

@@ -102,3 +102,16 @@ func TestAResumeRefusedForUsedUpCreditSaysSoThroughTheLifecycleAnswer(t *testing
 		t.Fatalf("%+v", body)
 	}
 }
+
+func TestTheRefusalBodyCarriesTheWholeStep(t *testing.T) {
+	w := httptest.NewRecorder()
+	step := planbudget.Size{CPUMilli: 500, MemoryBytes: 512 << 20, DiskBytes: 1 << 30}
+	writePlanBudgetRefusal(w, &planbudget.Refusal{Dimension: "CPU", Need: planbudget.Size{CPUMilli: 500}, Step: step, CreditExhausted: true})
+	var body planBudgetBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Step != step || !strings.Contains(w.Body.String(), `"step":`) {
+		t.Fatalf("%s", w.Body.String())
+	}
+}

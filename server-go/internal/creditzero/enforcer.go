@@ -24,6 +24,8 @@ type Enforcer struct {
 type pauseBackoff struct {
 	failures int
 	retryAt  time.Time
+	// atCap is true once the wait has reached its longest: the service is stuck.
+	atCap bool
 }
 
 const (
@@ -178,20 +180,35 @@ func (e *Enforcer) pauseAboveAllowance(ctx context.Context, org OrgState, now ti
 			break
 		}
 		err := e.pauseOne(ctx, org.OrgID, service, now)
-		if errors.Is(err, ErrNoLongerDue) {
+		if errors.Is(err, ErrNoLongerDue) || errors.Is(err, errWaiting) {
 			break
 		}
-		if errors.Is(err, ErrNotCredits) {
+		if errors.Is(err, ErrNotCredits) || errors.Is(err, errStuck) {
 			continue
 		}
 		if err != nil {
 			failures = append(failures, fmt.Errorf("org %s: pause %s: %w", org.OrgID, service.ServiceID, err))
-			continue
+			if e.stuck(service) {
+				continue
+			}
+			break
 		}
 		held.CPUMilli -= service.CPUMilli
 		held.MemoryBytes -= service.MemoryBytes
 	}
 	return errors.Join(failures...)
+}
+
+var (
+	// errWaiting: the service failed to pause and is waiting out its backoff. The org's
+	// pass stops: pausing older services in its place would turn our failure into an outage.
+	errWaiting = errors.New("waiting to retry a failed pause")
+	// errStuck: the service still fails after the longest backoff, so the pass moves past it.
+	errStuck = errors.New("a pause that stays stuck")
+)
+
+func (e *Enforcer) stuck(service Service) bool {
+	return e.backoff[Paused{Kind: service.Kind, ProjectID: service.ProjectID, ServiceID: service.ServiceID}.Key()].atCap
 }
 
 func newestFirst(a, b Service) int {
@@ -221,7 +238,11 @@ func compareStrings(a, b string) int {
 func (e *Enforcer) pauseOne(ctx context.Context, orgID string, service Service, now time.Time) error {
 	row := Paused{Kind: service.Kind, ProjectID: service.ProjectID, ServiceID: service.ServiceID, Name: service.Name}
 	if waiting, ok := e.backoff[row.Key()]; ok && now.Before(waiting.retryAt) {
-		return ErrNotCredits
+		if waiting.atCap {
+			metrics.CountCreditMeterEvent(metrics.CreditMeterPauseStuck)
+			return errStuck
+		}
+		return errWaiting
 	}
 	if err := e.due(ctx, orgID); err != nil {
 		return err
@@ -252,7 +273,7 @@ func (e *Enforcer) backOff(key string, now time.Time) {
 	if wait > creditPauseBackoffMax || wait <= 0 {
 		wait = creditPauseBackoffMax
 	}
-	e.backoff[key] = pauseBackoff{failures: failures, retryAt: now.Add(wait)}
+	e.backoff[key] = pauseBackoff{failures: failures, retryAt: now.Add(wait), atCap: wait == creditPauseBackoffMax}
 }
 
 // Leader says whether this replica is the one that enforces.

@@ -145,3 +145,15 @@ func TestSizeSubtractionAndEmptiness(t *testing.T) {
 		t.Fatal("IsZero")
 	}
 }
+
+func TestARefusalCarriesTheWholeStepNotOnlyTheDimensionThatDidNotFit(t *testing.T) {
+	step := Size{CPUMilli: 600, MemoryBytes: gib, DiskBytes: 2 * gib, Services: 1}
+	err := Decide(Size{CPUMilli: 1500, MemoryBytes: gib}, step, freeBudget)
+	var refusal *Refusal
+	if !errors.As(err, &refusal) || refusal.Dimension != "CPU" {
+		t.Fatalf("%v", err)
+	}
+	if refusal.Step != step {
+		t.Fatalf("the step is all of what was asked for, so a caller can tell whether it fits alone: %+v", refusal.Step)
+	}
+}

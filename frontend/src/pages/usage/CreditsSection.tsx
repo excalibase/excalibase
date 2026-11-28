@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { statementCsvHref, useAcceptCreditTerms, useOrgCredits, type CreditBurn, type CreditEntry, type CreditOverview, type CreditZero, type PausedForCredit } from '../../api/credits';
 import { formatInstant, parseInstant } from '../../utils/instant';
 import { serverErrorMessage } from '../../utils/serverError';
-import { ADD_CREDIT_TEXT } from '../../utils/support';
+import { useSupportEmail } from '../../hooks/useDeploymentMode';
+import { addCreditText } from '../../utils/support';
 import { Line, Section } from './UsageParts';
 import { dollars, daysLeft, recentMonths } from './creditsFormat';
 
@@ -155,10 +156,11 @@ function GraceNote({ zero }: { readonly zero: CreditZero }) {
 
 // What the used-up credit paused. It stays listed until credit returns and each one has started again.
 function PausedServices({ paused }: { readonly paused: readonly PausedForCredit[] }) {
+  const supportEmail = useSupportEmail();
   if (paused.length === 0) return null;
   return (
     <Section title="Paused for credit">
-      <p className="text-text-secondary">These services were paused because your credit ran out. They start again by themselves when credit is added. Their data is kept. {ADD_CREDIT_TEXT}</p>
+      <p className="text-text-secondary">These services were paused because your credit ran out. They start again by themselves when credit is added. Their data is kept. {addCreditText(supportEmail)}</p>
       <ul className="space-y-1 text-text-primary">
         {paused.map((service) => (
           <li key={`${service.kind}/${service.projectId}/${service.serviceId}`} className="flex justify-between gap-3 border-b border-border-primary py-1 last:border-0">

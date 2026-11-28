@@ -141,6 +141,14 @@ func TestTheAllowanceTheEnforcerPausesDownToIsThePlanBudgetsOwn(t *testing.T) {
 	}
 }
 
+func TestTheTransitionAgeComesFromConfig(t *testing.T) {
+	cfg := zeroConfig("cloud")
+	cfg.CreditMeter.TransitionMaxAgeMinutes = 45
+	if got := creditTransitionAge(cfg); got != 45*time.Minute {
+		t.Fatal(got)
+	}
+}
+
 func TestTheGraceComesFromConfig(t *testing.T) {
 	cfg := zeroConfig("cloud")
 	cfg.CreditMeter.GraceDays = 3

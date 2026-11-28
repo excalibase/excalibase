@@ -256,7 +256,7 @@ func TestThePauseIsRecordedBeforeItRunsSoACrashCannotLoseTheService(t *testing.T
 	}
 }
 
-func TestAPauseThatFailsKeepsItsRowAndTheRestStillPause(t *testing.T) {
+func TestAPauseThatFailsKeepsItsRowAndStopsThePassForThatOrg(t *testing.T) {
 	r := newRig(zeroOrg(at(-grace)))
 	r.store.holdings["org-1"] = holding(1500, 1536,
 		service(KindApp, "old", 500, 512, 2*time.Hour),
@@ -266,8 +266,50 @@ func TestAPauseThatFailsKeepsItsRowAndTheRestStillPause(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "pods remain") {
 		t.Fatalf("the failure is reported, not swallowed: %v", err)
 	}
-	if got := r.store.pausedIDs("org-1"); !slices.Equal(got, []string{"new", "old"}) {
-		t.Fatalf("a pause that failed part way may still finish, so its row stays: %v", got)
+	if got := r.store.pausedIDs("org-1"); !slices.Equal(got, []string{"new"}) {
+		t.Fatalf("the failed one keeps its row, since it may finish; the older service is not paused in its place: %v", got)
+	}
+	if strings.Contains(strings.Join(*r.events, ","), "pause old") {
+		t.Fatalf("our failure must not become a customer outage: %v", *r.events)
+	}
+}
+
+func TestWhileAFailedServiceWaitsOutItsBackoffTheOlderOnesStayRunning(t *testing.T) {
+	r := newRig(zeroOrg(at(-grace)))
+	r.store.holdings["org-1"] = holding(1500, 1536,
+		service(KindApp, "old", 500, 512, 2*time.Hour),
+		service(KindApp, "new", 1000, 1024, time.Hour))
+	r.work.pauseErr = map[string]error{"new": errors.New("pods remain")}
+	_ = r.enforcer.Pass(context.Background())
+	r.store.now = r.store.now.Add(10 * time.Second)
+	if err := r.enforcer.Pass(context.Background()); err != nil {
+		t.Fatalf("waiting is not a failure: %v", err)
+	}
+	if strings.Contains(strings.Join(*r.events, ","), "pause old") {
+		t.Fatalf("still waiting for the newest, so the org's pass stops: %v", *r.events)
+	}
+}
+
+func TestAServiceStuckAtTheLongestBackoffIsSkippedSoItCannotBlockTheOthersForever(t *testing.T) {
+	before := testutil.ToFloat64(metrics.CreditMeterEvents(metrics.CreditMeterPauseStuck))
+	r := newRig(zeroOrg(at(-grace)))
+	r.store.holdings["org-1"] = holding(1500, 1536,
+		service(KindApp, "old", 500, 512, 2*time.Hour),
+		service(KindApp, "new", 1000, 1024, time.Hour))
+	r.work.pauseErr = map[string]error{"new": errors.New("pods remain")}
+	for failures := 0; failures < 8; failures++ {
+		_ = r.enforcer.Pass(context.Background())
+		r.store.now = r.store.now.Add(creditPauseBackoffMax)
+		r.store.zero["org-1"] = r.store.now.Add(-grace)
+	}
+	_ = r.enforcer.Pass(context.Background())
+	r.store.now = r.store.now.Add(10 * time.Second)
+	_ = r.enforcer.Pass(context.Background())
+	if got := r.store.pausedIDs("org-1"); !slices.Contains(got, "old") {
+		t.Fatalf("once the newest sits at the one hour cap the pass moves on: %v", got)
+	}
+	if got := testutil.ToFloat64(metrics.CreditMeterEvents(metrics.CreditMeterPauseStuck)) - before; got < 1 {
+		t.Fatalf("a stuck service is counted: %v", got)
 	}
 }
 
