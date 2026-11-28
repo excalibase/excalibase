@@ -57,6 +57,7 @@ const LogExplorerPage = lazy(() => import('./pages/LogExplorerPage').then(m => (
 const RequestsPage = lazy(() => import('./pages/RequestsPage').then(m => ({ default: m.RequestsPage })));
 const SlowQueriesPage = lazy(() => import('./pages/SlowQueriesPage').then(m => ({ default: m.SlowQueriesPage })));
 const HostMonitoringPage = lazy(() => import('./pages/HostMonitoringPage').then(m => ({ default: m.HostMonitoringPage })));
+const AdminUserDetailPage = lazy(() => import('./pages/AdminUserDetailPage').then(m => ({ default: m.AdminUserDetailPage })));
 const PlatformAdminPage = lazy(() => import('./pages/PlatformAdminPage').then(m => ({ default: m.PlatformAdminPage })));
 const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ default: m.ContainersPage })));
 const ContainerTemplatesPage = lazy(() => import('./pages/ContainerTemplatesPage').then(m => ({ default: m.ContainerTemplatesPage })));
@@ -111,6 +112,7 @@ export default function App() {
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
             <Route path="/admin" element={<AdminRouteGuard><PlatformAdminPage /></AdminRouteGuard>} />
+            <Route path="/admin/users/:userId" element={<AdminRouteGuard><AdminUserDetailPage /></AdminRouteGuard>} />
             <Route path="/admin/host" element={<AdminRouteGuard><FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate></AdminRouteGuard>} />
             <Route path="/usage" element={<FeatureGate feature="studio_v2"><UsagePage /></FeatureGate>} />
             <Route path="/account" element={<FeatureGate feature="studio_v2"><AccountPage /></FeatureGate>} />

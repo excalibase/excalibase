@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { DataTable, type Column, type FilterDef } from '../../ui/DataTable';
 import { Button } from '../../Button';
@@ -36,7 +37,7 @@ export function userColumns(): Column<ConsoleUser>[] {
       id: 'email', header: 'Email', locked: true, sortValue: serverSorted, text: (user) => user.email,
       cell: (user) => (
         <div>
-          <div className="font-medium">{user.email}</div>
+          <Link to={`/admin/users/${encodeURIComponent(user.id)}`} className="font-medium underline-offset-2 hover:underline" title="Open this account">{user.email}</Link>
           <div className="flex gap-2 text-xs text-text-tertiary">
             {user.tempMail && <span className="text-amber-400">temp mail</span>}
             {!user.emailVerified && <span>unverified</span>}

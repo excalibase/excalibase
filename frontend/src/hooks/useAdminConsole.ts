@@ -1,5 +1,5 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getFailedProjects, getOverview, getSuspensions, listConsoleOrgs, listConsoleUsers, suspendUser, unsuspendUser, type ListQuery } from '../api/adminConsole';
+import { getFailedProjects, getOverview, getSuspensions, getUserDetail, listAudit, listConsoleOrgs, listConsoleUsers, suspendUser, unsuspendUser, type AuditFilter, type AuditPage, type ListQuery } from '../api/adminConsole';
 
 export const useOverview = () => useQuery({ queryKey: ['admin', 'console', 'overview'], queryFn: getOverview, staleTime: 15_000 });
 
@@ -45,3 +45,16 @@ export const useAccountAction = (action: 'suspend' | 'unsuspend') => {
     },
   });
 };
+
+// The audit log loads a page at a time; the cursor is the server's keyset token.
+export const useAuditLog = (filter: AuditFilter) =>
+  useInfiniteQuery({
+    queryKey: ['admin', 'audit', filter],
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) => listAudit(filter, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AuditPage) => last.nextCursor || undefined,
+    staleTime: 10_000,
+  });
+
+export const useUserDetail = (userId: string) =>
+  useQuery({ queryKey: ['admin', 'account', userId], queryFn: () => getUserDetail(userId), staleTime: 10_000 });

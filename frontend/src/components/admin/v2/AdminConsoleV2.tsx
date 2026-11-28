@@ -10,6 +10,7 @@ import { StorageAnalyticsTab } from '../analytics/StorageAnalyticsTab';
 import { TrafficAnalyticsTab } from '../analytics/TrafficAnalyticsTab';
 import { UsersAnalyticsTab } from '../analytics/UsersAnalyticsTab';
 import { AdminTabs, type AdminTab } from './AdminTabs';
+import { AuditLogTab } from './AuditLogTab';
 import { OrgsAdminTable } from './OrgsAdminTable';
 import { ProjectsAdminTable } from './ProjectsAdminTable';
 import { UsersAdminTable } from './UsersAdminTable';
@@ -47,7 +48,7 @@ export function adminTabs(canMutate: boolean, analytics = false, badges: Analyti
   return [
     ...(canMutate ? [{ id: 'attention', label: 'Needs attention' }] : []),
     { id: 'projects', label: 'Projects' },
-    ...(canMutate ? [{ id: 'users', label: 'Users' }, { id: 'orgs', label: 'Organizations' }] : []),
+    ...(canMutate ? [{ id: 'users', label: 'Users' }, { id: 'orgs', label: 'Organizations' }, { id: 'audit', label: 'Audit log' }] : []),
     ...analyticsTabs,
     { id: 'platform', label: 'Platform' },
   ];
@@ -88,6 +89,7 @@ export function AdminConsoleV2({ canMutate, platform }: AdminConsoleV2Props) {
         {active === 'projects' && <ProjectsAdminTable canMutate={canMutate} />}
         {active === 'users' && <UsersAdminTable />}
         {active === 'orgs' && <OrgsAdminTable canMutate={canMutate} />}
+        {active === 'audit' && <AuditLogTab />}
         {active === ANALYTICS_TABS.users && <UsersAnalyticsTab />}
         {active === ANALYTICS_TABS.abuse && <AbuseAnalyticsTab />}
         {active === ANALYTICS_TABS.traffic && <TrafficAnalyticsTab />}

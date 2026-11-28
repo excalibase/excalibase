@@ -92,7 +92,7 @@ describe('PlatformAdminPage', () => {
     renderPage('platform_admin', { features });
     expect(await screen.findByTestId('admin-console-v2')).toBeInTheDocument();
     expect(await screen.findByTestId('needs-attention')).toBeInTheDocument();
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Needs attention', 'Projects', 'Users', 'Organizations', 'Platform']);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Needs attention', 'Projects', 'Users', 'Organizations', 'Audit log', 'Platform']);
   });
 
   test('the platform tab keeps cluster capacity, plans, storage and sign-in providers', async () => {
@@ -205,7 +205,7 @@ describe('PlatformAdminPage analytics tabs (EXC-898)', () => {
     const signups = await screen.findByRole('tab', { name: /Sign-ups/ });
     await waitFor(() => expect(signups).toHaveTextContent('292'));
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent?.replace(/\d+|no data|not collected/g, '').trim())).toEqual(
-      ['Needs attention', 'Projects', 'Users', 'Organizations', 'Sign-ups', 'Abuse', 'Traffic', 'Storage', 'Platform'],
+      ['Needs attention', 'Projects', 'Users', 'Organizations', 'Audit log', 'Sign-ups', 'Abuse', 'Traffic', 'Storage', 'Platform'],
     );
   });
 
