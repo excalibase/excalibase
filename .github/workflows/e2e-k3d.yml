@@ -66,7 +66,7 @@ jobs:
       K3S_IMAGE: rancher/k3s:v1.31.6-k3s1
       DISK_TOOLS_IMAGE: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Anonymous pulls hit Docker Hub's rate limit; fork PRs have no secret and
       # pull anonymously.
       - name: Log in to Docker Hub
