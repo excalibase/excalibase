@@ -19,6 +19,13 @@ describe('plan budget text', () => {
     expect(budgetRefusal(error)).toMatchObject({ message: 'plan budget exceeded: needs 1 vCPU', dimension: 'CPU' });
   });
 
+  test('a refusal says whether the credit being used up caused it', () => {
+    const body = { code: 'plan_budget_exceeded', error: 'your credit is used up', dimension: 'CPU' };
+    expect(budgetRefusal({ response: { status: 409, data: { ...body, creditExhausted: true } } })?.creditExhausted).toBe(true);
+    expect(budgetRefusal({ response: { status: 409, data: body } })?.creditExhausted).toBe(false);
+    expect(budgetRefusal({ response: { status: 409, data: { ...body, creditExhausted: 'yes' } } })?.creditExhausted).toBe(false);
+  });
+
   test('any other failure is not a budget refusal', () => {
     expect(budgetRefusal({ response: { status: 409, data: { code: 'other', error: 'x' } } })).toBeUndefined();
     expect(budgetRefusal({ response: { status: 500, data: {} } })).toBeUndefined();

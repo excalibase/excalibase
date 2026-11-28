@@ -33,7 +33,12 @@ func (f *fakeAnalytics) TrafficAnalytics(_ context.Context, days int) (*admincon
 	return &adminconsole.TrafficAnalytics{WindowDays: days, PeakConnections: 35}, f.err
 }
 
-var analyticsPaths = []string{"/api/admin/analytics/users", "/api/admin/analytics/abuse", "/api/admin/analytics/traffic"}
+func (f *fakeAnalytics) CreditAnalytics(_ context.Context, days int) (*adminconsole.CreditAnalytics, error) {
+	f.days = days
+	return &adminconsole.CreditAnalytics{OrgsAtZero: 4}, f.err
+}
+
+var analyticsPaths = []string{"/api/admin/analytics/users", "/api/admin/analytics/abuse", "/api/admin/analytics/traffic", "/api/admin/analytics/credits"}
 
 func analyticsRouter(role, scopes string, flags features.Flags, reads adminconsole.AnalyticsReader) http.Handler {
 	h := NewAdminAnalyticsHandler(reads, flags)
@@ -126,5 +131,13 @@ func TestAdminAnalytics_AFailedReadIsABare500(t *testing.T) {
 	w := analyticsGet(router, "/api/admin/analytics/abuse")
 	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "secret_table") {
 		t.Fatalf("got %d %s, want a 500 that leaks nothing", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminAnalytics_CreditsServesTheOrgsAtZero(t *testing.T) {
+	router := analyticsRouter("platform_admin", auth.ScopeSession, features.NewStatic(features.AdminAnalytics), &fakeAnalytics{})
+	w := analyticsGet(router, "/api/admin/analytics/credits")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"orgsAtZero":4`) {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }

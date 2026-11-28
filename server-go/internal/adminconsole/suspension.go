@@ -134,6 +134,15 @@ type ServingFailure struct {
 	Reason    string `json:"reason"`
 }
 
+// CreditHold says whether an app is kept stopped because its org's credit is used
+// up. An unsuspend never starts such an app: it comes back when credit does.
+type CreditHold interface {
+	HeldForCredit(ctx context.Context, projectID, appID string) (bool, error)
+}
+
+// SetCreditHold wires the credit rule into the unsuspend; with none, every app a suspension stopped is resumed.
+func (s *SuspensionService) SetCreditHold(hold CreditHold) { s.creditHold = hold }
+
 // AuditWriter records the admin's action.
 type AuditWriter interface {
 	LogAudit(ctx context.Context, entry *domain.AuditEntry) error
@@ -154,6 +163,8 @@ type Result struct {
 	AppsStopped  []SuspendedApp `json:"appsStopped"`
 	AppsRestored []SuspendedApp `json:"appsRestored"`
 	AppsFailed   []AppFailure   `json:"appsFailed"`
+	// AppsHeldForCredit are apps the unsuspend left stopped because their org's credit is used up (EXC-866).
+	AppsHeldForCredit []SuspendedApp `json:"appsHeldForCredit,omitempty"`
 	// ServingFailed lists what could not be stopped or restored beyond the apps (EXC-845).
 	ServingFailed []ServingFailure `json:"servingFailed,omitempty"`
 }
@@ -166,6 +177,7 @@ type SuspensionService struct {
 	now   func() time.Time
 
 	steps       []ServingStep
+	creditHold  CreditHold
 	notifier    SuspensionNotifier
 	mailEnabled func(context.Context) bool
 }
@@ -287,6 +299,18 @@ func (s *SuspensionService) Unsuspend(ctx context.Context, actor Actor, userID, 
 		return step.Restore(restoreCtx, projectID)
 	})
 	for _, app := range stopped {
+		held, err := s.heldForCredit(ctx, app)
+		if err != nil {
+			result.AppsFailed = append(result.AppsFailed, failure(app, err))
+			continue
+		}
+		if held {
+			if err := s.store.ForgetSuspendedApp(ctx, userID, app.ProjectID, app.AppID); err != nil {
+				return nil, fmt.Errorf("forget held app: %w", err)
+			}
+			result.AppsHeldForCredit = append(result.AppsHeldForCredit, app)
+			continue
+		}
 		if _, err := s.apps.ResumeApp(ctx, app.ProjectID, app.AppID, actor.ID); err != nil {
 			result.AppsFailed = append(result.AppsFailed, failure(app, err))
 			continue
@@ -297,6 +321,19 @@ func (s *SuspensionService) Unsuspend(ctx context.Context, actor Actor, userID, 
 		result.AppsRestored = append(result.AppsRestored, app)
 	}
 	return result, nil
+}
+
+// heldForCredit asks whether credit keeps the app stopped. An answer that cannot be read counts as a
+// failure for that app, never as permission to start it.
+func (s *SuspensionService) heldForCredit(ctx context.Context, app SuspendedApp) (bool, error) {
+	if s.creditHold == nil {
+		return false, nil
+	}
+	held, err := s.creditHold.HeldForCredit(ctx, app.ProjectID, app.AppID)
+	if err != nil {
+		return false, fmt.Errorf("read whether credit holds the app: %w", err)
+	}
+	return held, nil
 }
 
 // cleanReason trims the written reason every admin action carries and refuses

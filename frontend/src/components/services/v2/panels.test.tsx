@@ -97,6 +97,38 @@ describe('database panel', () => {
     expect(screen.queryByText('What goes down')).not.toBeInTheDocument();
   });
 
+  test('a database paused because the credit ran out says so and that it resumes by itself', async () => {
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'credits' }) });
+    expect(await screen.findByText(/paused because your credit is used up/i)).toBeInTheDocument();
+    expect(screen.getByText(/starts again by itself when credit is added/i)).toBeInTheDocument();
+  });
+
+  test('a database paused by the user says nothing about credit', async () => {
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'manual' }) });
+    await screen.findByRole('button', { name: 'Resume database' });
+    expect(screen.queryByText(/credit is used up/i)).not.toBeInTheDocument();
+  });
+
+  test('resuming at $0 explains that it fits the free allowance once other services are paused, or credit is added', async () => {
+    const refusal = { response: { status: 409, data: { code: 'plan_budget_exceeded', creditExhausted: true, dimension: 'CPU', error: 'your credit is used up, so this cannot start or grow: it needs 0.50 vCPU more CPU but only 0.00 vCPU is left of your free allowance. Add credit, or pause or delete other services' } } };
+    vi.mocked(api.post).mockRejectedValueOnce(refusal as never);
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'idle_7d' }) });
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/your credit is used up/i);
+    expect(alert).toHaveTextContent(/fits your free allowance once other services are paused/i);
+    expect(within(alert).getByRole('link', { name: 'Usage & credits' })).toHaveAttribute('href', '/usage');
+  });
+
+  test('any other failed resume shows only the server sentence, with no credit hint', async () => {
+    vi.mocked(api.post).mockRejectedValueOnce({ response: { status: 409, data: { error: 'another operation is running' } } } as never);
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED' }) });
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('another operation is running');
+    expect(alert).not.toHaveTextContent(/free allowance/i);
+  });
+
   test('delete asks for the project name before it does anything', async () => {
     renderPanel({ kind: 'database' }, 'overview');
     await userEvent.click(await screen.findByTestId('delete-project-btn'));

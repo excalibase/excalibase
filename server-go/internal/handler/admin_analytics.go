@@ -32,6 +32,7 @@ func (h *AdminAnalyticsHandler) Routes(r chi.Router) {
 	r.Get("/users", analyticsRead(h.reads.UserAnalytics, adminconsole.AnalyticsWindowDays, "analytics users"))
 	r.Get("/abuse", analyticsRead(h.reads.AbuseAnalytics, adminconsole.AnalyticsWindowDays, "analytics abuse"))
 	r.Get("/traffic", analyticsRead(h.reads.TrafficAnalytics, adminconsole.TrafficWindowDays, "analytics traffic"))
+	r.Get("/credits", analyticsRead(h.reads.CreditAnalytics, adminconsole.AnalyticsWindowDays, "analytics credits"))
 }
 
 // analyticsRead serves one read over a fixed window. The window is not a

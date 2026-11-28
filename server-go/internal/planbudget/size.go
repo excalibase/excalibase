@@ -42,9 +42,16 @@ type Refusal struct {
 	Need      Size
 	Left      Size
 	Budget    Size
+	// CreditExhausted says the ceiling is the free allowance because the org's
+	// credit is used up, not the plan's own budget.
+	CreditExhausted bool
 }
 
 func (r *Refusal) Error() string {
+	if r.CreditExhausted {
+		return fmt.Sprintf("your credit is used up, so this cannot start or grow: it needs %s more %s but only %s is left of your free allowance. Add credit, or pause or delete other services",
+			r.amount(r.Need), r.Dimension, r.amount(r.Left))
+	}
 	return fmt.Sprintf("plan budget exceeded: this needs %s more %s but only %s is left (your plan allows %s)",
 		r.amount(r.Need), r.Dimension, r.amount(r.Left), r.amount(r.Budget))
 }

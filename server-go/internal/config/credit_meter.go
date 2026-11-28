@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,8 @@ type CreditMeterConfig struct {
 	VCPUMonthMicros    int64
 	RAMGiBMonthMicros  int64
 	DiskGiBMonthMicros int64
+	// GraceDays is how long compute above the free allowance keeps running once the credit is used up.
+	GraceDays int
 
 	err error
 }
@@ -43,10 +46,30 @@ func loadCreditMeter() CreditMeterConfig {
 		cfg.PriceVersion = prices.Version
 		cfg.VCPUMonthMicros, cfg.RAMGiBMonthMicros, cfg.DiskGiBMonthMicros = *prices.VCPUMonthMicros, *prices.RAMGiBMonthMicros, *prices.DiskGiBMonthMicros
 	}
+	cfg.GraceDays = graceDays(&errs)
 	if len(errs) > 0 {
 		cfg.err = fmt.Errorf("credit meter settings: %s", strings.Join(errs, "; "))
 	}
 	return cfg
+}
+
+const (
+	defaultGraceDays = 7
+	maxGraceDays     = 365
+)
+
+// graceDays reads CREDIT_GRACE_DAYS: whole days from 0 (pause at once) to a year.
+func graceDays(errs *[]string) int {
+	raw := strings.TrimSpace(envOr("CREDIT_GRACE_DAYS", ""))
+	if raw == "" {
+		return defaultGraceDays
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days < 0 || days > maxGraceDays {
+		*errs = append(*errs, fmt.Sprintf("CREDIT_GRACE_DAYS=%q is not a whole number of days from 0 to %d", raw, maxGraceDays))
+		return defaultGraceDays
+	}
+	return days
 }
 
 func (c AppConfig) validateCreditMeter() error { return c.CreditMeter.err }

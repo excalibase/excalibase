@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/adminconsole"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 const (
@@ -224,4 +225,23 @@ func (a *AdminConsole) TrafficAnalytics(ctx context.Context, days int) (*adminco
 		result.PeakConnections = max(result.PeakConnections, entry.Total)
 	}
 	return result, nil
+}
+
+// CreditAnalytics counts FREE orgs by whether their credit is left, and what credit paused.
+// It reads current state only, so the window is not used.
+func (a *AdminConsole) CreditAnalytics(ctx context.Context, _ int) (*adminconsole.CreditAnalytics, error) {
+	var result adminconsole.CreditAnalytics
+	err := a.db.QueryRowContext(ctx, `
+		SELECT count(*) FILTER (WHERE a.balance_micros > 0), count(*) FILTER (WHERE a.balance_micros <= 0)
+		FROM credit_accounts a JOIN orgs o ON o.id = a.org_id WHERE upper(o.tier) = $1`, string(domain.Free)).
+		Scan(&result.OrgsWithCredit, &result.OrgsAtZero)
+	if err != nil {
+		return nil, fmt.Errorf("credit accounts: %w", err)
+	}
+	err = a.db.QueryRowContext(ctx, `SELECT count(DISTINCT org_id), count(*) FROM credit_paused_services`).
+		Scan(&result.OrgsWithPausedServices, &result.ServicesPaused)
+	if err != nil {
+		return nil, fmt.Errorf("services paused for credit: %w", err)
+	}
+	return &result, nil
 }

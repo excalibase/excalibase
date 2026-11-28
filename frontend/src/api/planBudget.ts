@@ -57,12 +57,15 @@ export function memoryText(bytes: number): string {
 export interface BudgetRefusal {
   message: string;
   dimension: string;
+  // The ceiling is the free allowance because the credit is used up.
+  creditExhausted: boolean;
 }
 
 interface RefusalBody {
   code?: unknown;
   error?: unknown;
   dimension?: unknown;
+  creditExhausted?: unknown;
 }
 
 const textOf = (value: unknown): string => (typeof value === 'string' ? value : '');
@@ -70,5 +73,5 @@ const textOf = (value: unknown): string => (typeof value === 'string' ? value : 
 export function budgetRefusal(error: unknown): BudgetRefusal | undefined {
   const response = (error as { response?: { status?: number; data?: RefusalBody } } | null | undefined)?.response;
   if (response?.status !== 409 || response.data?.code !== 'plan_budget_exceeded') return undefined;
-  return { message: textOf(response.data.error), dimension: textOf(response.data.dimension) };
+  return { message: textOf(response.data.error), dimension: textOf(response.data.dimension), creditExhausted: response.data.creditExhausted === true };
 }

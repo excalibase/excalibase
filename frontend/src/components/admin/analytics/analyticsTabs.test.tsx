@@ -7,6 +7,7 @@ import { UsersAnalyticsTab } from './UsersAnalyticsTab';
 import { AbuseAnalyticsTab } from './AbuseAnalyticsTab';
 import { TrafficAnalyticsTab } from './TrafficAnalyticsTab';
 import { StorageAnalyticsTab } from './StorageAnalyticsTab';
+import { CreditAnalyticsTab } from './CreditAnalyticsTab';
 
 const USERS_URL = '/admin/analytics/users';
 const PEAK_LABEL = 'Peak DB connections';
@@ -119,5 +120,26 @@ describe('Storage tab', () => {
     expect(api.get).not.toHaveBeenCalled();
     expect(screen.getAllByText('—')).toHaveLength(4);
     expect(screen.getAllByRole('note')).toHaveLength(2);
+  });
+});
+
+describe('Credit tab', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const credit = { orgsWithCredit: 120, orgsAtZero: 17, orgsWithPausedServices: 5, servicesPaused: 9 };
+
+  test('shows how many orgs are at $0, how many still have credit and what credit paused', async () => {
+    renderTab(<CreditAnalyticsTab />, { '/admin/analytics/credits': credit });
+    expect(await screen.findByText('Orgs at $0')).toBeInTheDocument();
+    expect(screen.getByText('Orgs at $0').nextElementSibling).toHaveTextContent('17');
+    expect(screen.getByText('Orgs with credit').nextElementSibling).toHaveTextContent('120');
+    expect(screen.getByText('Orgs with paused services').nextElementSibling).toHaveTextContent('5');
+    expect(screen.getByText('Services paused').nextElementSibling).toHaveTextContent('9');
+  });
+
+  test('zero at $0 is shown as a zero, a failed read as an error, never a blank', async () => {
+    renderTab(<CreditAnalyticsTab />, { '/admin/analytics/credits': { ...credit, orgsAtZero: 0 } });
+    expect((await screen.findByText('Orgs at $0')).nextElementSibling).toHaveTextContent('0');
+    renderTab(<CreditAnalyticsTab />, { '/admin/analytics/credits': new Error('down') });
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
   });
 });

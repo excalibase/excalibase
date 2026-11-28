@@ -83,9 +83,21 @@ type TrafficAnalytics struct {
 	PeakConnections    int        `json:"peakConnections"`
 }
 
+// CreditAnalytics is the Credit tab (EXC-866): who has run out and what that paused.
+type CreditAnalytics struct {
+	// OrgsWithCredit are FREE orgs with credit left.
+	OrgsWithCredit int `json:"orgsWithCredit"`
+	// OrgsAtZero are FREE orgs whose credit is used up or expired.
+	OrgsAtZero int `json:"orgsAtZero"`
+	// OrgsWithPausedServices and ServicesPaused count what is paused for credit right now.
+	OrgsWithPausedServices int `json:"orgsWithPausedServices"`
+	ServicesPaused         int `json:"servicesPaused"`
+}
+
 // AnalyticsReader is every query the analytics tabs are built from.
 type AnalyticsReader interface {
 	UserAnalytics(ctx context.Context, days int) (*UserAnalytics, error)
 	AbuseAnalytics(ctx context.Context, days int) (*AbuseAnalytics, error)
 	TrafficAnalytics(ctx context.Context, days int) (*TrafficAnalytics, error)
+	CreditAnalytics(ctx context.Context, days int) (*CreditAnalytics, error)
 }

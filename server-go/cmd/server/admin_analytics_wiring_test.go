@@ -23,7 +23,7 @@ func TestAdminAnalytics_RoutesFollowTheirFlagOnTheRealRouter(t *testing.T) {
 			router, _, admins := buildMatrixWith(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(deps *handlerDeps) {
 				deps.adminAnalyticsHandler = handler.NewAdminAnalyticsHandler(matrixAnalytics{}, tc.flags)
 			})
-			for _, path := range []string{"/api/admin/analytics/users", "/api/admin/analytics/abuse", "/api/admin/analytics/traffic"} {
+			for _, path := range []string{"/api/admin/analytics/users", "/api/admin/analytics/abuse", "/api/admin/analytics/traffic", "/api/admin/analytics/credits"} {
 				if code := matrixRequest(router, http.MethodGet, path, admins[callerAdminSession]); code != tc.want {
 					t.Errorf("%s with the flag %s = %d, want %d", path, tc.name, code, tc.want)
 				}

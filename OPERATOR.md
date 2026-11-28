@@ -1589,7 +1589,20 @@ Settings: `CREDIT_PRICES` is JSON, default `{"version":"v1","vcpuMonthMicros":12
 
 Counters on `/metrics`: `excalibase_credit_meter_events_total{reason}` with `unmetered_plan`, `unrecorded_size`, `repriced_hour` and `shortfall_hour`.
 
-What happens at a zero balance (alerts, refusing growth, the grace period, pausing compute) is not built yet; the meter only records the shortfall. Studio's Usage page shows burn per day, the last seven days and the projected run-out ("Credit used up" at zero). Rollback is the flag: turning it off stops sampling and billing; a wrong debit is reversed with an admin adjustment.
+Studio's Usage page shows burn per day, the last seven days and the projected run-out ("Credit used up" at zero). Rollback is the flag: turning it off stops sampling and billing, and releases everything the $0 rules paused (below); a wrong debit is reversed with an admin adjustment.
+
+### At $0 or when the credit expires (EXC-866, same `FEATURE_CREDITBURN` flag)
+
+An org counts as at $0 when it is on the FREE plan, holds a credit account and its balance is 0 (spent, or the last lot expired). An org with no credit account is never at $0, and neither is a paid plan: upgrading releases everything the credit paused.
+
+- **At once:** the plan budget's ceiling drops to the plan's free allowance (`PLANBUDGET_FREE_ALLOWANCE_*`, default 1 vCPU / 1 GiB). A create or growth that does not fit is refused with a 409 whose body says `creditExhausted` and the message names the credit. The service count keeps the plan's own number. Disk is frozen: no new disk and no disk growth, even below the allowance (a disk cannot shrink). Shrinking, deleting, pausing and resizing down always pass.
+- **After the grace period** (`CREDIT_GRACE_DAYS`, default 7, counted from the minute the credit ran out): compute above the allowance pauses, newest service first, until CPU and memory both fit. Databases pause like a person's pause (backup first, `pause_reason = credits`), apps through the app pause. Disk is never touched or deleted. Every service paused is written to `credit_paused_services` before it is paused. The functions runtime is not paused separately (it has no pause of its own); it still counts toward the allowance.
+- **Release:** when the balance is above 0, the plan is upgraded, or `FEATURE_CREDITBURN` is turned off, every recorded service that is still paused for credit resumes and its row is deleted. A service the person resumed or paused themselves in the meantime is never started by credit, and a row for a deleted service is dropped. An org whose owner is suspended is skipped until the suspension is lifted.
+- **Unsuspend:** an app the credit holds paused while its org is at $0 is not started by the unsuspend; it comes back with credit.
+- **An idle-paused database at $0** that does not fit the allowance cannot resume; Studio says its credit is used up and offers the allowance route or adding credit.
+- **Studio:** a banner for used-up, expiring (7 days) and low credit (20% of the sign-up credit); the Usage page lists what credit paused. Admin analytics has a Credit tab with the orgs at $0.
+
+The enforcer runs on the leading replica every minute (`credit zero rules` in the log). Alert emails are a separate step.
 
 ## Limited trial until verified (EXC-899, in progress)
 

@@ -39,9 +39,9 @@ async function settle() {
   });
 }
 
-interface Setup { readonly orgs?: unknown[]; readonly features?: Record<string, boolean>; readonly path?: string; readonly adminHost?: string; readonly orgsFail?: boolean; readonly orgsHang?: boolean }
+interface Setup { readonly orgs?: unknown[]; readonly credits?: object; readonly features?: Record<string, boolean>; readonly path?: string; readonly adminHost?: string; readonly orgsFail?: boolean; readonly orgsHang?: boolean }
 
-function renderShell(role = 'user', { orgs = ORGS, features = {}, path = '/', adminHost, orgsFail, orgsHang }: Setup = {}) {
+function renderShell(role = 'user', { orgs = ORGS, credits, features = {}, path = '/', adminHost, orgsFail, orgsHang }: Setup = {}) {
   answers.length = 0;
   useAuthStore.setState({ user: { id: 'u1', username: 'dev', email: 'dev@example.test', role }, isAuthenticated: true });
   vi.mocked(api.get).mockImplementation((url: string) => {
@@ -50,6 +50,7 @@ function renderShell(role = 'user', { orgs = ORGS, features = {}, path = '/', ad
       if (orgsHang) return new Promise(() => {}) as never;
       answer = orgsFail ? Promise.reject(new Error('orgs down')) : Promise.resolve({ data: orgs });
     } else if (url === '/provision') answer = Promise.resolve({ data: PROJECTS });
+    else if (url === '/orgs/org-1/credits/') answer = credits ? Promise.resolve({ data: credits }) : Promise.reject(new Error('credits down'));
     else answer = Promise.resolve({ data: { deploymentMode: 'cloud', adminHost, features: { studio_v2: true, ...features } } });
     answers.push(answer);
     return answer as never;
@@ -293,5 +294,52 @@ describe('StudioShell', () => {
     await userEvent.click(await screen.findByRole('button', { name: /account menu/i }));
     expect(screen.getByRole('menuitem', { name: /sign out/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /access keys/i })).toBeInTheDocument();
+  });
+
+  describe('credit banner', () => {
+    const zero = (extra: object) => ({ atZero: false, lowCredit: false, graceEndsAt: null, graceDays: 7, paused: [], ...extra });
+    const credit = (balanceMicros: number, extra: object = {}) => ({ balanceMicros, metering: true, nextExpiry: '2027-03-01T00:00:00Z', ...extra });
+    const nav = () => screen.findByRole('navigation', { name: 'Main' });
+
+    test('used up, in the grace period, it names the pause date and links to Usage & credits', async () => {
+      renderShell('user', { features: { credits: true }, credits: credit(0, { zero: zero({ atZero: true, graceEndsAt: '2099-01-10T00:00:00Z' }) }) });
+      const banner = await screen.findByTestId('credit-banner');
+      expect(banner).toHaveTextContent(/credit is used up/i);
+      expect(banner).toHaveTextContent(new Date('2099-01-10T00:00:00Z').toLocaleDateString());
+      expect(within(banner).getByRole('link', { name: 'Usage & credits' })).toHaveAttribute('href', '/usage');
+    });
+
+    test('past the grace period it says compute is paused', async () => {
+      renderShell('user', { features: { credits: true }, credits: credit(0, { zero: zero({ atZero: true, graceEndsAt: '2020-01-10T00:00:00Z' }) }) });
+      expect(await screen.findByTestId('credit-banner')).toHaveTextContent(/is paused and your data is kept/i);
+    });
+
+    test('low credit shows the amount left', async () => {
+      renderShell('user', { features: { credits: true }, credits: credit(40_000_000, { zero: zero({ lowCredit: true }) }) });
+      expect(await screen.findByTestId('credit-banner')).toHaveTextContent('$40.00 left');
+    });
+
+    test('healthy credit shows no banner once everything has loaded', async () => {
+      renderShell('user', { features: { credits: true }, credits: credit(300_000_000, { zero: zero({}) }) });
+      await nav();
+      await settle();
+      expect(vi.mocked(api.get)).toHaveBeenCalledWith('/orgs/org-1/credits/');
+      expect(screen.queryByTestId('credit-banner')).toBeNull();
+    });
+
+    test('with credits off it asks for nothing and shows nothing', async () => {
+      renderShell('user', { features: {}, credits: credit(0, { zero: zero({ atZero: true, graceEndsAt: '2099-01-10T00:00:00Z' }) }) });
+      await nav();
+      await settle();
+      expect(vi.mocked(api.get).mock.calls.some(([url]) => String(url).includes('/credits'))).toBe(false);
+      expect(screen.queryByTestId('credit-banner')).toBeNull();
+    });
+
+    test('a failed credit read leaves the console alone', async () => {
+      renderShell('user', { features: { credits: true } });
+      await nav();
+      await settle();
+      expect(screen.queryByTestId('credit-banner')).toBeNull();
+    });
   });
 });

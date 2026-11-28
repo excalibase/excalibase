@@ -29,7 +29,18 @@ type Gate struct {
 	on       func(context.Context) bool
 	plans    config.PlanBudgetConfig
 	observer Observer
+	zero     ZeroCheck
 }
+
+// ZeroCheck says whether an org's credit is used up. It runs under the org lock,
+// inside the step's transaction. A gate with none always uses the plan's budget.
+type ZeroCheck func(ctx context.Context, q Querier, orgID string) (bool, error)
+
+// SetZeroCheck is set once at boot, before the gate is shared, and only while credit is metered.
+func (g *Gate) SetZeroCheck(check ZeroCheck) { g.zero = check }
+
+// ChecksCredit reports whether the gate asks about an org's credit before it admits growth.
+func (g *Gate) ChecksCredit() bool { return g != nil && g.zero != nil }
 
 // Observer is told, under the org lock and before a step changes anything, which
 // org is about to change. It runs inside the step's transaction, so it must
@@ -49,15 +60,21 @@ func (g *Gate) Active(ctx context.Context) bool {
 	return g != nil && g.on != nil && g.on(ctx)
 }
 
-// Ceiling is what a plan allows; ok is false for a plan with no budget.
-func (g *Gate) Ceiling(tier string) (Size, bool) {
-	var plan config.PlanNumbers
+func (g *Gate) plan(tier string) (config.PlanNumbers, bool) {
 	switch strings.ToUpper(tier) {
 	case string(domain.Free):
-		plan = g.plans.Free
+		return g.plans.Free, true
 	case string(domain.Standard):
-		plan = g.plans.Standard
+		return g.plans.Standard, true
 	default:
+		return config.PlanNumbers{}, false
+	}
+}
+
+// Ceiling is what a plan allows; ok is false for a plan with no budget.
+func (g *Gate) Ceiling(tier string) (Size, bool) {
+	plan, ok := g.plan(tier)
+	if !ok {
 		return Size{}, false
 	}
 	return Size{
@@ -105,7 +122,63 @@ func (g *Gate) Admit(ctx context.Context, tx Querier, orgID string, delta Delta)
 	if err != nil {
 		return err
 	}
+	atZero, err := g.creditUsedUp(ctx, tx, orgID)
+	if err != nil {
+		return err
+	}
+	if atZero {
+		return decideAtZero(used, change, g.FrozenCeiling(tier, used, ceiling))
+	}
 	return Decide(used, change, ceiling)
+}
+
+func (g *Gate) creditUsedUp(ctx context.Context, tx Querier, orgID string) (bool, error) {
+	if g.zero == nil {
+		return false, nil
+	}
+	atZero, err := g.zero(ctx, tx, orgID)
+	if err != nil {
+		return false, fmt.Errorf("read org credit: %w", err)
+	}
+	return atZero, nil
+}
+
+// Allowance is the part of a plan's budget that is never charged; ok is false for
+// a plan with no budget.
+func (g *Gate) Allowance(tier string) (Size, bool) {
+	plan, ok := g.plan(tier)
+	if !ok {
+		return Size{}, false
+	}
+	return Size{
+		CPUMilli:    int64(plan.AllowanceCPUMilli),
+		MemoryBytes: int64(plan.AllowanceMemoryMiB) << 20,
+		DiskBytes:   int64(plan.AllowanceDiskGiB) << 30,
+	}, true
+}
+
+// FrozenCeiling is what an org whose credit is used up may hold: the free
+// allowance of CPU and memory, the plan's own service count, and no more disk
+// than it holds now, since a disk cannot shrink and none may grow (EXC-866 C.5).
+func (g *Gate) FrozenCeiling(tier string, used, budget Size) Size {
+	allowance, ok := g.Allowance(tier)
+	if !ok {
+		return budget
+	}
+	return Size{
+		CPUMilli: allowance.CPUMilli, MemoryBytes: allowance.MemoryBytes,
+		DiskBytes: min(allowance.DiskBytes, used.DiskBytes), Services: budget.Services,
+	}
+}
+
+// decideAtZero is Decide for an org whose credit is used up: the refusal says so.
+func decideAtZero(used, change, ceiling Size) error {
+	err := Decide(used, change, ceiling)
+	var refusal *Refusal
+	if errors.As(err, &refusal) {
+		refusal.CreditExhausted = true
+	}
+	return err
 }
 
 func growsAnything(s Size) bool {
@@ -265,6 +338,13 @@ func (g *Gate) Report(ctx context.Context, q Querier, orgID string) (Report, err
 		report.Used = report.Used.Add(service.Size)
 	}
 	if ceiling, limited := g.Ceiling(tier); limited {
+		atZero, err := g.creditUsedUp(ctx, q, orgID)
+		if err != nil {
+			return Report{}, err
+		}
+		if atZero {
+			ceiling = g.FrozenCeiling(tier, report.Used, ceiling)
+		}
 		report.Budget, report.Left = ceiling, ceiling.Sub(report.Used)
 	}
 	return report, nil
@@ -281,3 +361,18 @@ func ReservedAppNow(doc []byte, deploying bool) (Size, error) {
 
 // runningStatus is the app status of a converged rollout (apphost.StatusRunning).
 const runningStatus = string(domain.StatusActive)
+
+// CreditUsedUp says whether a FREE org holds a credit account with nothing left
+// in it. An org with no account has no credit to run out, and a paid plan is not
+// metered against one, so neither is ever at zero.
+func CreditUsedUp(ctx context.Context, q Querier, orgID string) (bool, error) {
+	var usedUp bool
+	err := q.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM credit_accounts a JOIN orgs o ON o.id = a.org_id
+			WHERE a.org_id = $1 AND a.balance_micros <= 0 AND upper(o.tier) = $2)`, orgID, string(domain.Free)).Scan(&usedUp)
+	if err != nil {
+		return false, fmt.Errorf("read whether the credit is used up: %w", err)
+	}
+	return usedUp, nil
+}

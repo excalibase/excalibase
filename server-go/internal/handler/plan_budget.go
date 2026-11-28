@@ -18,7 +18,9 @@ type planBudgetBody struct {
 	Need      planbudget.Size `json:"need"`
 	Left      planbudget.Size `json:"left"`
 	Budget    planbudget.Size `json:"budget"`
-	Status    int             `json:"status"`
+	// CreditExhausted is set when the credit is used up and the free allowance is the ceiling.
+	CreditExhausted bool `json:"creditExhausted,omitempty"`
+	Status          int  `json:"status"`
 }
 
 // writePlanBudgetRefusal answers a step that does not fit the org's plan with a
@@ -34,7 +36,7 @@ func writePlanBudgetRefusal(w http.ResponseWriter, err error) bool {
 	w.WriteHeader(http.StatusConflict)
 	_ = json.NewEncoder(w).Encode(planBudgetBody{
 		Error: refusal.Error(), Code: planBudgetCode, Dimension: refusal.Dimension,
-		Need: refusal.Need, Left: refusal.Left, Budget: refusal.Budget, Status: http.StatusConflict,
+		Need: refusal.Need, Left: refusal.Left, Budget: refusal.Budget, CreditExhausted: refusal.CreditExhausted, Status: http.StatusConflict,
 	})
 	return true
 }

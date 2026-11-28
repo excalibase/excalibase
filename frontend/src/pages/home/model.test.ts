@@ -104,6 +104,7 @@ describe('Projects list helpers', () => {
     const none = { apps: 0, sites: 0 };
     expect(projectStatus(project('a'), none)).toMatchObject({ key: 'running', label: 'Running', tone: 'green' });
     expect(projectStatus(project('a', { status: 'PAUSED', pauseReason: 'idle_7d' }), none)).toMatchObject({ key: 'paused', label: 'Paused · idle', tone: 'amber' });
+    expect(projectStatus(project('a', { status: 'PAUSED', pauseReason: 'credits' }), none)).toMatchObject({ key: 'paused', label: 'Paused · credit used up', tone: 'amber' });
     expect(projectStatus(project('a', { status: 'PAUSED', pauseReason: 'manual' }), none).label).toBe('Paused · manual');
     expect(projectStatus(project('a', { status: 'PAUSED' }), none).label).toBe('Paused');
     expect(projectStatus(project('a', { noDatabase: true }), none)).toMatchObject({ key: 'empty', label: 'No services yet', tone: 'neutral' });

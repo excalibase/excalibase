@@ -37,6 +37,7 @@ func planBudgetOn(ctx context.Context, cfg config.AppConfig) bool {
 func wirePlanBudget(cfg config.AppConfig, sqlStore storage.PlatformStore) *planbudget.Gate {
 	gate := planBudgetGate(cfg)
 	setCreditAllowance(cfg, sqlStore)
+	setCreditZeroCheck(cfg, gate)
 	if observer := creditObserver(cfg, sqlStore); observer != nil {
 		gate.SetObserver(observer)
 	}

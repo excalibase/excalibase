@@ -59,7 +59,7 @@ function expiryOf(token: TokenInfo): number | null {
 const isFailed = (project: DatabaseInstance): boolean =>
   project.status === 'FAILED' || (project.currentStage === 'FAILED' && (!project.status || project.status === 'PROVISIONING'));
 
-const PAUSE_REASON: Record<string, string> = { idle_7d: 'idle', manual: 'manual', tier_limit: 'plan limit' };
+const PAUSE_REASON: Record<string, string> = { idle_7d: 'idle', manual: 'manual', tier_limit: 'plan limit', credits: 'credit used up' };
 
 function tokenItem(token: TokenInfo, kind: 'token-expired' | 'token-expiring', expiry: number): AttentionItem {
   const reach = token.projectId ? '' : ' It can reach all your projects.';

@@ -150,4 +150,46 @@ describe('CreditsSection', () => {
       expect(screen.queryByText('Burn per day')).toBeNull();
     });
   });
+
+  describe('when the credit runs out', () => {
+    const zero = (extra: object = {}) => ({ atZero: true, lowCredit: false, graceEndsAt: '2026-12-05T00:00:00Z', graceDays: 7, paused: [], ...extra });
+    const paused = [
+      { kind: 'app', projectId: 'p1', serviceId: 'a1', name: 'storefront', pausedAt: '2026-12-01T00:00:00Z' },
+      { kind: 'database', projectId: 'p2', serviceId: 'p2', name: 'orders-db', pausedAt: '2026-12-01T00:00:00Z' },
+    ];
+    const spent = (z: object) => creditOverview({ balanceMicros: 0, lots: [], nextExpiry: null, zero: z });
+
+    test('lists every service paused for credit by kind, and says they start again when credit is added', async () => {
+      mountSection(spent(zero({ graceEndsAt: '2026-11-25T00:00:00Z', paused })));
+      const region = within(await screen.findByRole('region', { name: 'Paused for credit' }));
+      const items = region.getAllByRole('listitem');
+      expect(items).toHaveLength(2);
+      expect(items[0]).toHaveTextContent('storefront');
+      expect(items[0]).toHaveTextContent('App');
+      expect(items[1]).toHaveTextContent('orders-db');
+      expect(items[1]).toHaveTextContent('Database');
+      expect(region.getByText(/start again by themselves/i)).toBeInTheDocument();
+      expect(region.getByText(/data is kept/i)).toBeInTheDocument();
+    });
+
+    test('in the grace period it says the day compute above the allowance pauses', async () => {
+      mountSection(spent(zero()));
+      const section = within(await screen.findByRole('region', { name: 'Credits' }));
+      expect(section.getByText(/Compute above your free allowance pauses on/)).toHaveTextContent(new Date('2026-12-05T00:00:00Z').toLocaleDateString());
+      expect(screen.queryByRole('region', { name: 'Paused for credit' })).toBeNull();
+    });
+
+    test('an org with credit shows neither the pause date nor the list', async () => {
+      mountSection(creditOverview({ zero: { atZero: false, lowCredit: false, graceEndsAt: null, graceDays: 7, paused: [] } }));
+      const section = within(await screen.findByRole('region', { name: 'Credits' }));
+      expect(section.queryByText(/pauses on/)).toBeNull();
+      expect(screen.queryByRole('region', { name: 'Paused for credit' })).toBeNull();
+    });
+
+    test('services still listed after credit came back are still shown until they have started', async () => {
+      mountSection(creditOverview({ zero: { atZero: false, lowCredit: false, graceEndsAt: null, graceDays: 7, paused, } }));
+      const region = within(await screen.findByRole('region', { name: 'Paused for credit' }));
+      expect(region.getAllByRole('listitem')).toHaveLength(2);
+    });
+  });
 });

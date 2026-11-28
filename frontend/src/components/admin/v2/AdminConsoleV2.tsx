@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useFeatureEnabled, useStudioV2 } from '../../../hooks/useDeploymentMode';
-import { useAbuseAnalytics, useUserAnalytics } from '../../../hooks/useAdminAnalytics';
+import { useAbuseAnalytics, useCreditAnalytics, useUserAnalytics } from '../../../hooks/useAdminAnalytics';
 import { NeedsAttention } from '../NeedsAttention';
 import { AbuseAnalyticsTab } from '../analytics/AbuseAnalyticsTab';
 import { AttentionChips } from '../analytics/AttentionChips';
 import { ANALYTICS_TABS, isAnalyticsTab } from '../analytics/analyticsTabs';
 import { StorageAnalyticsTab } from '../analytics/StorageAnalyticsTab';
+import { CreditAnalyticsTab } from '../analytics/CreditAnalyticsTab';
 import { TrafficAnalyticsTab } from '../analytics/TrafficAnalyticsTab';
 import { UsersAnalyticsTab } from '../analytics/UsersAnalyticsTab';
 import { AdminTabs, type AdminTab } from './AdminTabs';
@@ -25,6 +26,7 @@ interface AdminConsoleV2Props {
 export interface AnalyticsBadges {
   signups?: number;
   stillActive?: number;
+  orgsAtZero?: number;
 }
 
 function countBadge(count: number | undefined, alarming: boolean): AdminTab['badge'] {
@@ -37,13 +39,14 @@ function countBadge(count: number | undefined, alarming: boolean): AdminTab['bad
 // cards. The analytics tabs sit between the lists and the platform cards and
 // exist only for a platform admin while FEATURE_ADMINANALYTICS is on. The
 // audit log tab is part of Studio v2 and shows only with that flag.
-export function adminTabs(canMutate: boolean, analytics = false, badges: AnalyticsBadges = {}, auditLog = false): AdminTab[] {
+export function adminTabs(canMutate: boolean, analytics = false, badges: AnalyticsBadges = {}, auditLog = false, credits = false): AdminTab[] {
   const analyticsTabs: AdminTab[] = canMutate && analytics
     ? [
       { id: ANALYTICS_TABS.users, label: 'Sign-ups', startsGroup: true, badge: countBadge(badges.signups, false) },
       { id: ANALYTICS_TABS.abuse, label: 'Abuse', badge: countBadge(badges.stillActive, true) },
       { id: ANALYTICS_TABS.traffic, label: 'Traffic', badge: { text: 'no data', tone: 'warn' } },
       { id: ANALYTICS_TABS.storage, label: 'Storage', badge: { text: 'no data', tone: 'warn' } },
+      ...(credits ? [{ id: ANALYTICS_TABS.credits, label: 'Credit', badge: countBadge(badges.orgsAtZero, false) }] : []),
     ]
     : [];
   return [
@@ -71,7 +74,9 @@ export function AdminConsoleV2({ canMutate, platform }: AdminConsoleV2Props) {
   const signups = useUserAnalytics(analytics).data?.signups;
   const stillActive = useAbuseAnalytics(analytics).data?.refusedStillActive;
   const { enabled: studioV2 } = useStudioV2();
-  const tabs = adminTabs(canMutate, analytics, { signups, stillActive }, studioV2);
+  const { enabled: creditsOn } = useFeatureEnabled('credits');
+  const orgsAtZero = useCreditAnalytics(analytics && creditsOn).data?.orgsAtZero;
+  const tabs = adminTabs(canMutate, analytics, { signups, stillActive, orgsAtZero }, studioV2, creditsOn);
   const active = initialTab(tabs, params.get('tab'), params.get('project'));
   const select = (id: string) => {
     const next = new URLSearchParams(params);
@@ -97,6 +102,7 @@ export function AdminConsoleV2({ canMutate, platform }: AdminConsoleV2Props) {
         {active === ANALYTICS_TABS.abuse && <AbuseAnalyticsTab />}
         {active === ANALYTICS_TABS.traffic && <TrafficAnalyticsTab />}
         {active === ANALYTICS_TABS.storage && <StorageAnalyticsTab />}
+        {active === ANALYTICS_TABS.credits && <CreditAnalyticsTab />}
         {active === 'platform' && platform}
       </div>
     </div>

@@ -3,6 +3,7 @@ package adminconsole
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 
@@ -356,5 +357,67 @@ func TestUnsuspendKeepsTheRecordOfAnAppThatDidNotResume(t *testing.T) {
 	}
 	if len(result.AppsFailed) != 1 || len(store.recorded["victim"]) != 1 || store.recorded["victim"][0].AppID != "a1" {
 		t.Fatalf("failed = %+v, kept = %+v", result.AppsFailed, store.recorded["victim"])
+	}
+}
+
+type fakeCreditHold struct {
+	held map[string]bool
+	err  error
+}
+
+func (h fakeCreditHold) HeldForCredit(_ context.Context, projectID, appID string) (bool, error) {
+	return h.held[projectID+"/"+appID], h.err
+}
+
+func TestUnsuspendLeavesAnAppStoppedThatCreditHoldsAndForgetsItsSuspensionRecord(t *testing.T) {
+	svc, store, control, _ := newSuspensionFixture()
+	svc.SetCreditHold(fakeCreditHold{held: map[string]bool{"p1/a1": true}})
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Unsuspend(context.Background(), admin, "victim", "appeal verified by email")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(control.resumed, "p1/a1") || !slices.Contains(control.resumed, "p2/a3") {
+		t.Fatalf("only the app credit does not hold comes back: %v", control.resumed)
+	}
+	if len(store.recorded["victim"]) != 0 {
+		t.Fatalf("the abuse record is spent either way: %+v", store.recorded["victim"])
+	}
+	if len(result.AppsHeldForCredit) != 1 || result.AppsHeldForCredit[0].AppID != "a1" || len(result.AppsRestored) != 1 {
+		t.Fatalf("the admin is told which app credit holds: %+v", result)
+	}
+}
+
+func TestUnsuspendWhenTheCreditHoldCannotBeReadStartsNothingAndKeepsTheRecords(t *testing.T) {
+	svc, store, control, _ := newSuspensionFixture()
+	svc.SetCreditHold(fakeCreditHold{err: errors.New("db down")})
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Unsuspend(context.Background(), admin, "victim", "appeal verified by email")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(control.resumed) != 0 || len(result.AppsFailed) != 2 || len(store.recorded["victim"]) != 2 {
+		t.Fatalf("unknown means not started, and unsuspending again retries: resumed %v failed %v kept %v", control.resumed, result.AppsFailed, store.recorded["victim"])
+	}
+	if !store.users["victim"].Active {
+		t.Fatal("the account itself is active")
+	}
+}
+
+func TestUnsuspendWithNothingHeldResumesEveryApp(t *testing.T) {
+	svc, _, control, _ := newSuspensionFixture()
+	svc.SetCreditHold(fakeCreditHold{held: map[string]bool{}})
+	if _, err := svc.Suspend(context.Background(), admin, "victim", Reason{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Unsuspend(context.Background(), admin, "victim", "appeal verified by email"); err != nil {
+		t.Fatal(err)
+	}
+	if len(control.resumed) != 2 {
+		t.Fatalf("%v", control.resumed)
 	}
 }

@@ -7,6 +7,7 @@ import { useProjectRole } from '../../../hooks/useProjectRole';
 import { useDeprovisionDatabase, useListBackups, usePauseProject, useResumeProject } from '../../../hooks/useProvisioning';
 import { projectOperationMessage } from '../../../hooks/projectFollow';
 import { useTiers } from '../../../api/tiers';
+import { budgetRefusal } from '../../../api/planBudget';
 import type { BackupInfo, DatabaseInstance } from '../../../types';
 import { DangerZone } from '../../../pages/SettingsPage';
 import { isDeletionProtected } from '../../../utils/deletionProtection';
@@ -101,6 +102,8 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
   const paused = project.status === 'PAUSED';
   const busy = pause.isPending || resume.isPending;
   const failure = pause.error ?? resume.error;
+  const creditRefused = budgetRefusal(resume.error)?.creditExhausted === true;
+  const pausedForCredit = paused && project.pauseReason === 'credits';
   const settled = paused || project.status === 'ACTIVE';
   const [asking, setAsking] = useState(false);
   const run = () => (paused ? resume.mutate(project.projectId) : setAsking(true));
@@ -121,7 +124,20 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
           <List title="What stays" items={STAYS} />
         </div>
       )}
-      {failure != null && <p role="alert" className="break-words text-xs text-red-400">{projectOperationMessage(failure, 'The database could not be changed')}</p>}
+      {pausedForCredit && (
+        <p className="text-sm text-amber-400">Paused because your credit is used up. It starts again by itself when credit is added or you upgrade.</p>
+      )}
+      {failure != null && (
+        <p role="alert" className="break-words text-xs text-red-400">
+          {projectOperationMessage(failure, 'The database could not be changed')}
+          {creditRefused && (
+            <>
+              {' '}This database fits your free allowance once other services are paused, or add credit.{' '}
+              <Link to="/usage" className="underline">Usage &amp; credits</Link>
+            </>
+          )}
+        </p>
+      )}
       {busy && <output className="block text-xs text-text-secondary">{paused ? 'Resuming: starting the database.' : 'Pausing: taking a backup, then stopping the database.'} This can take a few minutes.</output>}
       <button
         type="button"

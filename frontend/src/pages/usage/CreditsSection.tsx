@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { statementCsvHref, useAcceptCreditTerms, useOrgCredits, type CreditBurn, type CreditEntry, type CreditOverview } from '../../api/credits';
-import { formatInstant } from '../../utils/instant';
+import { statementCsvHref, useAcceptCreditTerms, useOrgCredits, type CreditBurn, type CreditEntry, type CreditOverview, type CreditZero, type PausedForCredit } from '../../api/credits';
+import { formatInstant, parseInstant } from '../../utils/instant';
 import { serverErrorMessage } from '../../utils/serverError';
 import { Line, Section } from './UsageParts';
 import { dollars, daysLeft, recentMonths } from './creditsFormat';
@@ -131,11 +131,42 @@ function Burn({ overview }: { readonly overview: CreditOverview }) {
   const expiresFirst = burn.runOutAt !== null && nextExpiry !== null && Date.parse(nextExpiry) < Date.parse(burn.runOutAt);
   return (
     <>
-      <Line label="Burn per day" value={dollars(burn.perDayMicros)} />
-      <Line label="Projected run-out" value={runOutText(overview)} />
-      {expiresFirst && <p className="text-text-secondary">Your credit expires before it runs out at this rate.</p>}
-      <BurnDays days={burn.days} />
+        <Line label="Burn per day" value={dollars(burn.perDayMicros)} />
+        <Line label="Projected run-out" value={runOutText(overview)} />
+        {expiresFirst && <p className="text-text-secondary">Your credit expires before it runs out at this rate.</p>}
+        <BurnDays days={burn.days} />
     </>
+  );
+}
+
+const KIND_NAME: Record<PausedForCredit['kind'], string> = { database: 'Database', app: 'App', functions: 'Functions' };
+
+// While the credit is used up and the grace period runs: what is blocked now and the day compute pauses.
+function GraceNote({ zero }: { readonly zero: CreditZero }) {
+  const ends = zero.graceEndsAt ? parseInstant(zero.graceEndsAt) : Number.NaN;
+  if (!zero.atZero || Number.isNaN(ends) || ends <= Date.now()) return null;
+  return (
+    <p className="text-amber-400">
+      Your credit is used up. New services and growth are blocked. Compute above your free allowance pauses on {new Date(ends).toLocaleDateString()}; your data is never deleted.
+    </p>
+  );
+}
+
+// What the used-up credit paused. It stays listed until credit returns and each one has started again.
+function PausedServices({ paused }: { readonly paused: readonly PausedForCredit[] }) {
+  if (paused.length === 0) return null;
+  return (
+    <Section title="Paused for credit">
+      <p className="text-text-secondary">These services were paused because your credit ran out. They start again by themselves when credit is added or you upgrade. Their data is kept.</p>
+      <ul className="space-y-1 text-text-primary">
+        {paused.map((service) => (
+          <li key={`${service.kind}/${service.projectId}/${service.serviceId}`} className="flex justify-between gap-3 border-b border-border-primary py-1 last:border-0">
+            <span>{service.name || service.serviceId}</span>
+            <span className="text-text-secondary">{KIND_NAME[service.kind]} · paused {formatInstant(service.pausedAt, 'date')}</span>
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
 }
 
@@ -162,18 +193,22 @@ export function CreditsSection({ orgId }: { readonly orgId: string }) {
   if (error || !data) return <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">Could not load your credit. Reload the page to try again.</p>;
   const left = daysLeft(data.nextExpiry, new Date());
   return (
-    <Section title="Credits">
-      <Line label="Balance" value={dollars(data.balanceMicros)} />
-      {data.nextExpiry && <Line label="Next credit expires" value={`${formatInstant(data.nextExpiry)} (${left} day${left === 1 ? '' : 's'} left)`} />}
-      {data.lots.length > 1 && data.lots.map((lot) => (
-        <Line key={lot.id} label={lot.expiresAt ? `Expires ${formatInstant(lot.expiresAt, 'date')}` : 'Does not expire'} value={dollars(lot.remainingMicros)} />
-      ))}
-      <Burn overview={data} />
-      <TrialOffer orgId={orgId} overview={data} />
-      <h3 className="pt-2 font-medium text-text-primary">History</h3>
-      <History entries={data.entries} />
-      <Statement orgId={orgId} />
-      <p className="text-text-secondary">Times are shown in your local time. Billing periods and statements are in {data.billedIn}.</p>
-    </Section>
+    <>
+      <Section title="Credits">
+        <Line label="Balance" value={dollars(data.balanceMicros)} />
+        {data.zero && <GraceNote zero={data.zero} />}
+        {data.nextExpiry && <Line label="Next credit expires" value={`${formatInstant(data.nextExpiry)} (${left} day${left === 1 ? '' : 's'} left)`} />}
+        {data.lots.length > 1 && data.lots.map((lot) => (
+          <Line key={lot.id} label={lot.expiresAt ? `Expires ${formatInstant(lot.expiresAt, 'date')}` : 'Does not expire'} value={dollars(lot.remainingMicros)} />
+        ))}
+        <Burn overview={data} />
+        <TrialOffer orgId={orgId} overview={data} />
+        <h3 className="pt-2 font-medium text-text-primary">History</h3>
+        <History entries={data.entries} />
+        <Statement orgId={orgId} />
+        <p className="text-text-secondary">Times are shown in your local time. Billing periods and statements are in {data.billedIn}.</p>
+      </Section>
+      {data.zero && <PausedServices paused={data.zero.paused} />}
+    </>
   );
 }

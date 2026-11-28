@@ -361,6 +361,7 @@ func runServer(cfg config.AppConfig) {
 	stopCredits := startCreditsSweeper(cfg, sqlStore, deps.credits)
 	defer stopCredits()
 	defer startCreditMeter(cfg, sqlStore, deps.credits)()
+	defer startCreditZero(cfg, sqlStore, deps, pauseSvc)()
 	stopAppRollouts := startAppRolloutSweeper(cfg, sqlStore, deps.appDeploySvc)
 	defer stopAppRollouts()
 	stopImageWatcher := startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)
