@@ -200,7 +200,8 @@ func TestCheckExecCreate(t *testing.T) {
 	}
 }
 
-// No caller names a user: an exec runs as the container's own user, never as root.
+// No caller names a user, so an exec cannot pick one. It runs as the image's user, which for a
+// database image is root by default; a create can still set User and archive writes are open.
 func TestCheckExecCreateRefusesAnotherUser(t *testing.T) {
 	for _, user := range []string{"root", "0", "0:0", "postgres"} {
 		if err := CheckExecCreate([]byte(`{"Cmd":["sh"],"User":"` + user + `"}`)); err == nil {

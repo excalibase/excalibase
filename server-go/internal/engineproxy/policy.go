@@ -238,7 +238,8 @@ func (p Policy) checkHostConfigField(field string, value any) error {
 	return check(p, value)
 }
 
-// CheckExecCreate refuses an exec that asks for extended privileges or another user.
+// CheckExecCreate refuses an exec that asks for extended privileges or names a user. That only
+// narrows what an exec picks: a create can still set User, and archive writes are not checked.
 func CheckExecCreate(body []byte) error {
 	exec, err := decodeSpelled("exec create", body, execNames...)
 	if err != nil {
@@ -248,7 +249,7 @@ func CheckExecCreate(body []byte) error {
 		return refuse("exec may not be Privileged")
 	}
 	if !isZero(exec["User"]) {
-		return refuse("exec runs as the container's own user, never another")
+		return refuse("exec may not name a user; it runs as the container's configured user")
 	}
 	return nil
 }

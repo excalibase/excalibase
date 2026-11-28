@@ -22,6 +22,7 @@ import (
 type fakeEngine struct {
 	mu         sync.Mutex
 	forwarded  []string
+	queries    map[string]string            // "METHOD path" -> raw query of the last such request
 	containers map[string]map[string]string // name or id -> labels
 	volumes    map[string]map[string]string // volume name -> labels
 	execs      map[string]string            // exec id -> container
@@ -30,6 +31,10 @@ type fakeEngine struct {
 func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.forwarded = append(f.forwarded, r.Method+" "+r.URL.Path)
+	if f.queries == nil {
+		f.queries = map[string]string{}
+	}
+	f.queries[r.Method+" "+r.URL.Path] = r.URL.RawQuery
 	f.mu.Unlock()
 	path := stripVersion(r.URL.Path)
 	switch {
@@ -96,6 +101,14 @@ func newProxy(t *testing.T) (*fakeEngine, *httptest.Server) {
 
 func newProxyWith(t *testing.T, policy Policy) (*fakeEngine, *httptest.Server) {
 	t.Helper()
+	engine, handler := newHandlerWith(t, policy)
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+	return engine, proxy
+}
+
+func newHandlerWith(t *testing.T, policy Policy) (*fakeEngine, *Handler) {
+	t.Helper()
 	engine := &fakeEngine{
 		containers: map[string]map[string]string{
 			"excalibase-p1-postgres":  {"excalibase.managed": "true"},
@@ -115,9 +128,7 @@ func newProxyWith(t *testing.T, policy Policy) (*fakeEngine, *httptest.Server) {
 			var d net.Dialer
 			return d.DialContext(ctx, "tcp", target.Host)
 		})
-	proxy := httptest.NewServer(handler)
-	t.Cleanup(proxy.Close)
-	return engine, proxy
+	return engine, handler
 }
 
 func call(t *testing.T, base, method, path, body string) *http.Response {
@@ -154,7 +165,11 @@ func TestHandlerForwardsTheCallsTheProvisionerMakes(t *testing.T) {
 		{http.MethodGet, "/v1.47/exec/exec-managed/json"},
 	}
 	for _, tc := range allowed {
-		resp := call(t, proxy.URL, tc.method, tc.path, "{}")
+		body := "{}"
+		if strings.Contains(tc.path, "/images/create") {
+			body = "" // the engine client sends a pull with no body
+		}
+		resp := call(t, proxy.URL, tc.method, tc.path, body)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("%s %s = %d, want forwarded", tc.method, tc.path, resp.StatusCode)
 		}
@@ -181,10 +196,6 @@ func TestHandlerRefusesEverythingElse(t *testing.T) {
 		{http.MethodPost, "/v1.47/volumes/create"},
 		{http.MethodPost, "/v1.47/networks/create"},
 		{http.MethodPost, "/v1.47/build"},
-		{http.MethodPost, "/v1.47/images/create?fromSrc=http://169.254.169.254/x.tar&repo=evil"},
-		{http.MethodPost, "/v1.47/images/create?fromSrc=-&repo=evil"},
-		{http.MethodPost, "/v1.47/images/create"},
-		{http.MethodPost, "/v1.47/images/create?fromImage=postgres&fromSrc=-"},
 		{http.MethodDelete, "/v1.47/images/postgres:17"},
 		{http.MethodPost, "/v1.47/swarm/init"},
 		{http.MethodPost, "/v1.47/containers/../../swarm/init"},
@@ -194,6 +205,10 @@ func TestHandlerRefusesEverythingElse(t *testing.T) {
 		resp := call(t, proxy.URL, tc.method, tc.path, "{}")
 		if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s %s = %d, want refused", tc.method, tc.path, resp.StatusCode)
+		}
+		forwardedPath, _, _ := strings.Cut(tc.path, "?")
+		if engine.reached(tc.method + " " + forwardedPath) {
+			t.Errorf("%s %s reached the engine", tc.method, tc.path)
 		}
 	}
 	for _, mutating := range []string{"POST /v1.47/containers/excalibase-provisioning/stop", "DELETE /v1.47/containers/excalibase-provisioning", "POST /v1.47/exec/exec-platform/start"} {
@@ -303,5 +318,108 @@ func TestHandlerSplicesOnlyExecStart(t *testing.T) {
 	got := upgrade(t, proxy.URL, "/v1.41/containers/excalibase-p1-postgres/start")
 	if strings.HasSuffix(got, "exec output") || !engine.reached("POST /v1.41/containers/excalibase-p1-postgres/start") {
 		t.Fatalf("a container start with an Upgrade header was spliced: %q", got)
+	}
+}
+
+const imagesCreate = "POST /v1.47/images/create"
+
+func postImagePull(t *testing.T, base, query string, body io.Reader, contentType string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, base+"/v1.47/images/create?"+query, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+// The engine reads form-encoded body values over the query, so a pull may carry no body at all.
+func TestImagePullRefusesAFormBodyThatOverridesTheQuery(t *testing.T) {
+	engine, proxy := newProxy(t)
+	form := "fromImage=&fromSrc=http://169.254.169.254/x.tar&repo=postgres&tag=17"
+	resp := postImagePull(t, proxy.URL, "fromImage=postgres&tag=17", strings.NewReader(form), "application/x-www-form-urlencoded")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("pull with a form body = %d, want refused", resp.StatusCode)
+	}
+	if engine.reached(imagesCreate) {
+		t.Fatal("the pull reached the engine")
+	}
+}
+
+func TestImagePullRefusesAChunkedBody(t *testing.T) {
+	engine, proxy := newProxy(t)
+	body := io.NopCloser(strings.NewReader("fromSrc=http://169.254.169.254/x.tar"))
+	resp := postImagePull(t, proxy.URL, "fromImage=postgres&tag=17", body, "application/x-www-form-urlencoded")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("pull with a chunked body = %d, want refused", resp.StatusCode)
+	}
+	if engine.reached(imagesCreate) {
+		t.Fatal("the pull reached the engine")
+	}
+}
+
+func TestImagePullForwardsOnlyTheNamedQueryKeys(t *testing.T) {
+	engine, proxy := newProxy(t)
+	resp := postImagePull(t, proxy.URL, "fromImage=postgres&tag=17&platform=linux/amd64&fromSrc=http://169.254.169.254/x.tar&repo=other&changes=ENV+X%3D1&message=m", nil, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pull = %d, want forwarded", resp.StatusCode)
+	}
+	want := "fromImage=postgres&platform=linux%2Famd64&tag=17"
+	engine.mu.Lock()
+	got := engine.queries[imagesCreate]
+	engine.mu.Unlock()
+	if got != want {
+		t.Fatalf("engine got query %q, want %q", got, want)
+	}
+}
+
+// A body check allocates a few dozen times the body, so only a few run at once.
+func TestBodyChecksBeyondTheLimitAreRefusedWithUnavailable(t *testing.T) {
+	engine, handler := newHandlerWith(t, testPolicy())
+	for range cap(handler.bodyChecks) {
+		handler.bodyChecks <- struct{}{}
+	}
+	body := string(createBody(t, nil))
+	req := httptest.NewRequest(http.MethodPost, "/v1.47/containers/create?name=excalibase-p1-postgres", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("create with every body check taken = %d, want 503", recorder.Code)
+	}
+	if engine.reached("POST /v1.47/containers/create") {
+		t.Fatal("the create reached the engine")
+	}
+	<-handler.bodyChecks
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1.47/containers/create?name=excalibase-p1-postgres", strings.NewReader(body)))
+	if recorder.Code == http.StatusServiceUnavailable {
+		t.Fatal("a free body check slot still answered 503")
+	}
+}
+
+func TestImagePullRefusesWhatIsNotOneNamedImage(t *testing.T) {
+	for _, query := range []string{
+		"fromSrc=http://169.254.169.254/x.tar&repo=evil",
+		"fromSrc=-&repo=evil",
+		"",
+		"tag=17",
+		"fromImage=",
+		"fromImage=postgres&fromImage=excalibase/provisioning",
+	} {
+		engine, proxy := newProxy(t)
+		resp := postImagePull(t, proxy.URL, query, nil, "")
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("pull ?%s = %d, want refused", query, resp.StatusCode)
+		}
+		if engine.reached(imagesCreate) {
+			t.Errorf("pull ?%s reached the engine", query)
+		}
 	}
 }
