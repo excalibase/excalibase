@@ -126,6 +126,30 @@ describe('functions panel: functions tab', () => {
   });
 });
 
+describe('functions panel: access', () => {
+  test('a viewer gets only the Functions tab, even from a link to Secrets or Logs', async () => {
+    world.role = 'viewer';
+    renderPanel('secrets');
+    expect(await screen.findByRole('listitem', { name: 'Fn hello' })).toBeInTheDocument();
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Functions']);
+    expect(screen.queryByTestId('function-secrets')).not.toBeInTheDocument();
+    expect(vi.mocked(api.get).mock.calls.some(([url]) => String(url).endsWith('/secrets') || String(url).endsWith('/logs'))).toBe(false);
+  });
+
+  test('a developer gets all three tabs', async () => {
+    renderPanel('functions');
+    expect(await screen.findByRole('tab', { name: 'Secrets' })).toBeInTheDocument();
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Functions', 'Logs', 'Secrets']);
+  });
+
+  test('with no functions it says so and links to the page that deploys one', async () => {
+    world.functions = [];
+    renderPanel('functions');
+    expect(await screen.findByText('No functions in this project.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Deploy function' })).toHaveAttribute('href', '/project/p1/edge-functions');
+  });
+});
+
 describe('functions panel: logs tab', () => {
   test('reads the chosen function logs, newest lines as the runtime sends them', async () => {
     world.logs = [{ level: 'error', msg: 'boom happened', ts: 1760000000000 }, { level: 'info', msg: 'started', ts: 1760000001000 }];

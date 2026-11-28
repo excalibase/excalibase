@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react';
 import { useEdgeFunctionLogs } from '../../../hooks/useEdgeFunctions';
 import type { EdgeFunction } from '../../../types/edgefn';
 import { formatInstant } from '../../../utils/instant';
+import { serverErrorMessage } from '../../../utils/serverError';
 import { Notice } from './sections';
 
 const LEVEL_COLOR: Readonly<Record<string, string>> = { error: 'text-red-400', warn: 'text-yellow-400', info: 'text-blue-400' };
@@ -11,7 +12,7 @@ const LEVEL_COLOR: Readonly<Record<string, string>> = { error: 'text-red-400', w
 export function FunctionLogsTab({ projectId, functions }: { readonly projectId: string; readonly functions: readonly EdgeFunction[] }) {
   const [chosen, setChosen] = useState('');
   const fnId = functions.some((fn) => fn.id === chosen) ? chosen : (functions[0]?.id ?? '');
-  const { data: logs = [], isFetching } = useEdgeFunctionLogs(projectId, fnId || null);
+  const { data: logs = [], isFetching, error } = useEdgeFunctionLogs(projectId, fnId || null);
   if (functions.length === 0) return <Notice>No functions in this project.</Notice>;
   return (
     <div className="space-y-3" data-testid="function-logs">
@@ -29,7 +30,8 @@ export function FunctionLogsTab({ projectId, functions }: { readonly projectId: 
       </div>
       <p className="text-xs text-text-tertiary">Last 100 lines from console.log, warn and error. Refreshes every 2 seconds.</p>
       <div className="max-h-[60vh] space-y-1 overflow-y-auto rounded-lg border border-border-primary bg-bg-tertiary p-3 font-mono text-xs">
-        {logs.length === 0 && <p className="text-text-tertiary">No logs yet. Invoke the function to generate output.</p>}
+        {error != null && <p role="alert" className="text-red-400">{serverErrorMessage(error, 'The logs could not be read')}</p>}
+        {error == null && logs.length === 0 && <p className="text-text-tertiary">No logs yet. Invoke the function to generate output.</p>}
         {logs.map((entry, i) => (
           /* eslint-disable-next-line react/no-array-index-key -- log entries have no stable id; ts alone can collide under rapid invocation */
           <div key={`${entry.ts}-${i}`} className="flex gap-2">

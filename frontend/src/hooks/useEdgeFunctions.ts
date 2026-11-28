@@ -149,7 +149,8 @@ export function useDeleteEdgeSecret(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (key: string) => {
-      await api.delete(`${baseUrl(projectId)}/secrets/${key}`);
+      const res = await api.delete(`${baseUrl(projectId)}/secrets/${key}`);
+      return res.data;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['edge-function-secrets', projectId] });

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Box, Database, FolderOpen, Globe, type LucideIcon } from 'lucide-react';
+import { Box, Code2, Database, FolderOpen, Globe, type LucideIcon } from 'lucide-react';
 import { secondaryButton } from '../../containers/ContainerBits';
 import type { ProjectServices } from './useProjectServices';
 
@@ -22,6 +22,7 @@ export function addServiceOptions(projectId: string, services: ProjectServices):
   if (services.appHosting) options.push({ label: 'App', detail: 'Run a container image on a public URL', to: `${base}/containers/new`, icon: Box });
   if (services.sitesOn) options.push({ label: 'Site', detail: 'Host a built frontend', to: `${base}/sites/new`, icon: Globe });
   if (services.storageOffered) options.push({ label: 'Storage', detail: 'Buckets for files', to: `${base}/storage`, icon: FolderOpen });
+  if (services.functionsOffered) options.push({ label: 'Function', detail: 'Deploy an edge function', to: `${base}/edge-functions`, icon: Code2 });
   return options;
 }
 

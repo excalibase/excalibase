@@ -1,7 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { useDeleteEdgeSecret, useEdgeSecrets, useSetEdgeSecret } from '../../../hooks/useEdgeFunctions';
-import { useProjectRole } from '../../../hooks/useProjectRole';
 import { parseEnv } from '../../../utils/edgeFunctions';
 import { serverErrorMessage } from '../../../utils/serverError';
 import { FunctionEgressCard } from '../../FunctionEgressCard';
@@ -18,19 +17,33 @@ function AddSecret({ projectId }: { readonly projectId: string }) {
   const [paste, setPaste] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
+  // A fast double click lands twice before isPending re-renders the button.
+  const inFlight = useRef(false);
 
   const submit = () => {
-    if (!key.trim() || !value.trim() || save.isPending) return;
-    save.mutate({ key, value }, { onSuccess: () => { setKey(''); setValue(''); } });
+    if (inFlight.current || !key.trim() || !value.trim()) return;
+    inFlight.current = true;
+    setWarning(null);
+    save.mutate({ key, value }, {
+      onSuccess: (data) => {
+        setKey('');
+        setValue('');
+        setWarning(data?.warning ?? null);
+      },
+      onSettled: () => { inFlight.current = false; },
+    });
   };
 
   // One at a time, in paste order: each save rewrites the function secrets.
   const importEnv = async () => {
+    if (inFlight.current) return;
     const { entries, errors } = parseEnv(paste);
     if (entries.length === 0) {
       setStatus(errors.length > 0 ? errors.join('; ') : 'nothing to import');
       return;
     }
+    inFlight.current = true;
     setImporting(true);
     setStatus(null);
     const failed = await entries.reduce<Promise<string[]>>(
@@ -38,6 +51,7 @@ function AddSecret({ projectId }: { readonly projectId: string }) {
         save.mutateAsync(entry).then(() => soFar, (err: unknown) => [...soFar, `${entry.key}: ${serverErrorMessage(err, 'not saved')}`])),
       Promise.resolve([]),
     );
+    inFlight.current = false;
     setImporting(false);
     const parts = [`saved ${entries.length - failed.length}/${entries.length}`];
     if (errors.length > 0) parts.push(`${errors.length} skipped`);
@@ -63,6 +77,7 @@ function AddSecret({ projectId }: { readonly projectId: string }) {
       <button type="button" onClick={submit} disabled={save.isPending || !key.trim() || !value.trim()} className={primaryButton}>
         {save.isPending ? 'Saving…' : 'Save secret'}
       </button>
+      {warning && <p role="status" className="text-xs text-yellow-400">{warning}</p>}
       {save.error != null && <p role="alert" className="text-xs text-red-400">{serverErrorMessage(save.error, 'The secret was not saved')}</p>}
       <div className="space-y-2 border-t border-border-primary pt-3">
         <label htmlFor="fn-secret-paste" className="block text-xs text-text-tertiary">Paste .env (bulk import)</label>
@@ -76,16 +91,21 @@ function AddSecret({ projectId }: { readonly projectId: string }) {
   );
 }
 
-function SecretKeys({ projectId, canDevelop }: { readonly projectId: string; readonly canDevelop: boolean }) {
-  const { data: secrets = [] } = useEdgeSecrets(projectId);
+function SecretKeys({ projectId }: { readonly projectId: string }) {
+  const { data: secrets = [], error: readError } = useEdgeSecrets(projectId);
   const remove = useDeleteEdgeSecret(projectId);
   const [target, setTarget] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const confirm = () => {
     if (!target) return;
     setError(null);
+    setWarning(null);
     remove.mutate(target, {
-      onSuccess: () => setTarget(null),
+      onSuccess: (data) => {
+        setTarget(null);
+        setWarning(data?.warning ?? null);
+      },
       onError: (err) => {
         setError(serverErrorMessage(err, `${target} was not deleted`));
         setTarget(null);
@@ -95,17 +115,17 @@ function SecretKeys({ projectId, canDevelop }: { readonly projectId: string; rea
   return (
     <div className="space-y-2">
       <p className="text-xs text-text-tertiary">Existing keys (values are never shown)</p>
+      {readError != null && <p role="alert" className="text-xs text-red-400">{serverErrorMessage(readError, 'The secrets could not be read')}</p>}
       {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
-      {secrets.length === 0 && <p className="text-xs text-text-tertiary">No secrets set</p>}
+      {warning && <p role="status" className="text-xs text-yellow-400">{warning}</p>}
+      {readError == null && secrets.length === 0 && <p className="text-xs text-text-tertiary">No secrets set</p>}
       <ul className="divide-y divide-border-primary">
         {secrets.map((secret) => (
           <li key={secret.key} className="flex items-center justify-between py-2">
             <code className="text-xs text-text-primary">{secret.key}</code>
-            {canDevelop && (
-              <button type="button" aria-label={`Delete ${secret.key}`} onClick={() => setTarget(secret.key)} className="text-red-400 hover:text-red-300">
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-              </button>
-            )}
+            <button type="button" aria-label={`Delete ${secret.key}`} onClick={() => setTarget(secret.key)} className="text-red-400 hover:text-red-300">
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
+            </button>
           </li>
         ))}
       </ul>
@@ -123,19 +143,17 @@ function SecretKeys({ projectId, canDevelop }: { readonly projectId: string; rea
   );
 }
 
+// Only offered to developers: the server refuses a viewer every call here.
 export function FunctionSecretsTab({ projectId }: { readonly projectId: string }) {
-  const { canDevelop } = useProjectRole(projectId);
   return (
     <div className="space-y-6" data-testid="function-secrets">
-      {canDevelop && (
-        <Section id="fn-secrets-add" title="Add a secret">
-          <AddSecret projectId={projectId} />
-        </Section>
-      )}
-      <Section id="fn-secrets-keys" title="Secrets">
-        <SecretKeys projectId={projectId} canDevelop={canDevelop} />
+      <Section id="fn-secrets-add" title="Add a secret">
+        <AddSecret projectId={projectId} />
       </Section>
-      {canDevelop && <FunctionEgressCard projectId={projectId} />}
+      <Section id="fn-secrets-keys" title="Secrets">
+        <SecretKeys projectId={projectId} />
+      </Section>
+      <FunctionEgressCard projectId={projectId} />
     </div>
   );
 }

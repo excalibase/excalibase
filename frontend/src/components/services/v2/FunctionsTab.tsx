@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Loader2, Play, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Loader2, Play, Plus, Trash2 } from 'lucide-react';
 import { useApiUrl } from '../../../hooks/useDeploymentMode';
 import { useDeleteEdgeFunction, useInvokeEdgeFunction } from '../../../hooks/useEdgeFunctions';
 import { useProjectRole } from '../../../hooks/useProjectRole';
@@ -88,6 +89,11 @@ export function FunctionsTab({ projectId, functions }: { readonly projectId: str
   if (isLoading) return null;
   return (
     <div className="space-y-3" data-testid="functions-list">
+      {canDevelop && (
+        <Link to={`/project/${projectId}/edge-functions`} className={secondaryButton}>
+          <Plus className="h-4 w-4" aria-hidden="true" /> Deploy function
+        </Link>
+      )}
       {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
       {functions.length === 0 && <Notice>No functions in this project.</Notice>}
       <ul className="space-y-3">

@@ -117,7 +117,7 @@ export function ServiceList({ projectId, services, selected, to }: ServiceListPr
           to={to}
         />
       ))}
-      {services.functions.length > 0 && (
+      {services.functionsOffered && (
         <FunctionsCard projectId={projectId} count={services.functions.length} selected={isSelected({ kind: 'functions' })} to={to} />
       )}
     </ul>

@@ -88,20 +88,38 @@ test.describe('Studio v2 functions', () => {
     await expect.poll(() => deleted.length).toBe(1);
   });
 
-  test('a viewer reads the list but gets no invoke or delete', async ({ page }) => {
+  test('a viewer reads the list but gets no invoke, delete, logs or secrets', async ({ page }) => {
     await mockWorld(page, 'viewer');
     await page.goto('/project/p1?service=functions');
     const hello = page.getByRole('listitem', { name: 'Hello function' });
     await expect(hello).toContainText('https://api.example.com/functions/v1/p1/hello');
     await expect(hello.getByRole('button', { name: 'Invoke', exact: true })).toHaveCount(0);
     await expect(hello.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('tab')).toHaveText(['Functions']);
   });
 
-  test('a project with no functions shows no Functions card', async ({ page }) => {
+  test('a project with no functions keeps the card, with a way to deploy and to manage secrets', async ({ page }) => {
     await mockWorld(page);
     await page.route('**/api/projects/p1/functions', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
     await page.goto('/project/p1');
-    await expect(page.getByTestId('services-empty').or(cards(page))).toBeVisible();
+    const card = cards(page).getByRole('link', { name: /Functions/ });
+    await expect(card).toContainText('No functions yet');
+    await page.getByRole('button', { name: '+ Add service' }).click();
+    await expect(page.getByRole('menuitem', { name: /Function/ })).toHaveAttribute('href', '/project/p1/edge-functions');
+    await page.keyboard.press('Escape');
+    await card.click();
+    await expect(page.getByRole('link', { name: 'Deploy function' })).toHaveAttribute('href', '/project/p1/edge-functions');
+    await page.getByRole('tab', { name: 'Secrets' }).click();
+    await expect(page.getByText('STRIPE_KEY')).toBeVisible();
+  });
+
+  test('an install without functions shows no card and no add entry', async ({ page }) => {
+    await mockWorld(page);
+    await page.route('**/api/projects/p1/functions', (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }));
+    await page.goto('/project/p1');
+    await expect(cards(page).getByRole('link', { name: /Database/ })).toBeVisible();
     await expect(page.getByRole('link', { name: /Functions/ })).toHaveCount(0);
+    await page.getByRole('button', { name: '+ Add service' }).click();
+    await expect(page.getByRole('menuitem', { name: /Function/ })).toHaveCount(0);
   });
 });

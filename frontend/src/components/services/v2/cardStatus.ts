@@ -62,4 +62,7 @@ export function functionsCardStatus(runtime: RuntimeStatus | undefined): CardSta
   return { label: `Runtime ${runtime.status}`, tone: 'error' };
 }
 
-export const functionsCardDetail = (count: number): string => (count === 1 ? 'Edge function' : `${count} edge functions`);
+export function functionsCardDetail(count: number): string {
+  if (count === 0) return 'No functions yet';
+  return count === 1 ? 'Edge function' : `${count} edge functions`;
+}

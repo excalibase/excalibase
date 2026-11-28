@@ -89,6 +89,7 @@ describe('functions card', () => {
     expect(functionsCardStatus(undefined)).toBeUndefined();
   });
   test('the detail counts functions', () => {
+    expect(functionsCardDetail(0)).toBe('No functions yet');
     expect(functionsCardDetail(1)).toBe('Edge function');
     expect(functionsCardDetail(3)).toBe('3 edge functions');
   });

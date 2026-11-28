@@ -22,6 +22,8 @@ export interface ProjectServices {
   readonly sitesOn: boolean;
   // False when the install does not mount storage: its list answers 404.
   readonly storageOffered: boolean;
+  // False when the install does not mount edge functions: its list answers 404.
+  readonly functionsOffered: boolean;
   readonly loading: boolean;
   readonly error: unknown;
 }
@@ -40,7 +42,7 @@ export function useProjectServices(projectId: string): ProjectServices {
   const functions = useEdgeFunctions(projectId);
   const project = instance.data;
   const storageOffered = !isNotOffered(buckets.error);
-  const functionsOffered = !isNotOffered(functions.error);
+  const functionsOffered = !functions.isLoading && !isNotOffered(functions.error);
 
   return {
     project,
@@ -52,8 +54,9 @@ export function useProjectServices(projectId: string): ProjectServices {
     appHosting,
     sitesOn,
     storageOffered,
+    functionsOffered,
     loading: hostingLoading || sitesConfigLoading || instance.isLoading || apps.isLoading || sites.isLoading || buckets.isLoading || functions.isLoading,
-    error: instance.error ?? apps.error ?? sites.error ?? (storageOffered ? buckets.error : undefined) ?? (functionsOffered ? functions.error : undefined),
+    error: instance.error ?? apps.error ?? sites.error ?? (storageOffered ? buckets.error : undefined) ?? (isNotOffered(functions.error) ? undefined : functions.error),
   };
 }
 
@@ -69,7 +72,7 @@ export function hasService(services: ProjectServices, ref: ServiceRef): boolean 
     case 'storage':
       return services.buckets.some((bucket) => bucket.name === ref.id);
     case 'functions':
-      return services.functions.length > 0;
+      return services.functionsOffered;
   }
 }
 

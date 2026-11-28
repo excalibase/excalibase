@@ -81,7 +81,7 @@ test.describe('Studio v2 services', () => {
   test('lists the database, app, site and bucket with live status', async ({ page }) => {
     await mockWorld(page, FULL);
     await page.goto('/project/p1');
-    await expect(cards(page).getByRole('link')).toHaveCount(4);
+    await expect(cards(page).getByRole('link')).toHaveCount(5);
     const database = cards(page).getByRole('link', { name: /Database/ });
     await expect(database).toContainText('Postgres 17 · 1 vCPU');
     await expect(database).toContainText('Running');
@@ -176,7 +176,7 @@ test.describe('Studio v2 services', () => {
   test('a project with only an app never shows database pages', async ({ page }) => {
     await mockWorld(page, { projects: [project('p1', { noDatabase: true })], apps: [APP], appDeploys: [deploy('d1', 1, 'succeeded')] });
     await page.goto('/project/p1');
-    await expect(cards(page).getByRole('link')).toHaveCount(1);
+    await expect(cards(page).getByRole('link')).toHaveCount(2);
     await expect(page.getByRole('link', { name: /Database/ })).toHaveCount(0);
     await cards(page).getByRole('link', { name: /api/ }).click();
     await expect(page.getByRole('tab', { name: 'Connect' })).toHaveCount(0);

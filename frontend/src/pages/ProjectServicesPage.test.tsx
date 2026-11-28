@@ -36,6 +36,7 @@ function stub(world: World) {
     const data = (body: unknown) => Promise.resolve({ data: body });
     if (url === '/config') return data({ deploymentMode: 'cloud', appHosting: true, sites: true, features: { studio_v2: true }, ...world.config });
     if (url === '/provision/p1') return world.projectError ? Promise.reject(new Error('boom')) : data(world.project ?? project());
+    if (url === '/orgs') return data([{ id: 'org-1', name: 'Acme', role: 'owner' }]);
     if (url === '/tiers') return data([{ tier: 'FREE', cpu: '1', memory: '2Gi' }]);
     if (url.endsWith('/apps/')) return data(world.apps ?? []);
     if (url.endsWith('/apps/api')) return data(app);
@@ -73,7 +74,7 @@ beforeEach(() => vi.clearAllMocks());
 
 describe('ProjectServicesPage', () => {
   test('lists a card per service with its own status', async () => {
-    stub({ apps: [app], deploys: [deploy('succeeded')], buckets: [{ id: 'b', name: 'avatars', public: true }] });
+    stub({ apps: [app], deploys: [deploy('succeeded')], buckets: [{ id: 'b', name: 'avatars', public: true }], functionsMissing: true });
     renderAt('/project/p1');
     const list = await screen.findByRole('list', { name: 'Services' });
     expect(await within(list).findByText('Postgres 17 · 1 vCPU')).toBeInTheDocument();
@@ -138,14 +139,14 @@ describe('ProjectServicesPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not load the project/i);
     expect(screen.queryByTestId('services-empty')).not.toBeInTheDocument();
   });
-  test('functions are one card with the count and the runtime state, and no add entry', async () => {
+  test('functions are one card with the count and the runtime state, and an add entry', async () => {
     stub({ apps: [app], deploys: [deploy('succeeded')], functions: [{ id: 'f', files: [] }, { id: 'g', files: [] }] });
     renderAt('/project/p1');
     const card = await screen.findByRole('link', { name: /Functions/ });
     expect(await within(card).findByText('2 edge functions')).toBeInTheDocument();
     expect(await within(card).findByText('Running')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '+ Add service' }));
-    expect(within(screen.getByRole('menu')).queryByRole('menuitem', { name: /Function/ })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Function/ })).toHaveAttribute('href', '/project/p1/edge-functions');
   });
 
   test('selecting the functions card opens its panel with three tabs', async () => {
@@ -153,16 +154,17 @@ describe('ProjectServicesPage', () => {
     renderAt('/project/p1');
     await userEvent.click(await screen.findByRole('link', { name: /Functions/ }));
     expect(await screen.findByRole('region', { name: 'Functions panel' })).toBeInTheDocument();
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Functions', 'Logs', 'Secrets']);
+    expect((await screen.findAllByRole('tab')).map((t) => t.textContent)).toEqual(['Functions', 'Logs', 'Secrets']);
     expect(screen.getByTestId('where')).toHaveTextContent('service=functions');
   });
 
-  test('no functions, or an install without them, means no card and no panel', async () => {
+  test('a project with no functions still shows the card, so secrets stay reachable', async () => {
     stub({ apps: [app], deploys: [deploy('succeeded')], functions: [] });
     renderAt('/project/p1?service=functions');
-    expect(await screen.findByRole('link', { name: /api/ })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /Functions/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/not in this project/)).toBeInTheDocument();
+    const card = await screen.findByRole('link', { name: /Functions/ });
+    expect(card).toHaveTextContent('No functions yet');
+    expect(await screen.findByRole('region', { name: 'Functions panel' })).toBeInTheDocument();
+    expect(screen.queryByText(/not in this project/)).not.toBeInTheDocument();
   });
 
   test('an install that does not mount functions is not an error', async () => {
@@ -171,6 +173,8 @@ describe('ProjectServicesPage', () => {
     expect(await screen.findByRole('link', { name: /api/ })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Functions/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '+ Add service' }));
+    expect(within(screen.getByRole('menu')).queryByRole('menuitem', { name: /Function/ })).not.toBeInTheDocument();
   });
 
   test('a functions list that failed is reported, not read as none', async () => {
