@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -683,4 +684,107 @@ func testAllowance(tier string) (creditmeter.Allowance, bool) {
 		return creditmeter.Allowance{}, true
 	}
 	return creditmeter.Allowance{}, false
+}
+
+// A free org sampled by the real sampler and billed by the real meter through the real store: nothing
+// between the sample and the entry may drop what the sample says, least of all the allowance.
+func TestAFreeOrgIsBilledOnlyAboveItsAllowanceEndToEndThroughTheRealStore(t *testing.T) {
+	store, meter, org, hourStart := meterRig(t, "e2e", 4, nil)
+	store.SetCreditAllowance(testAllowance)
+	newDatabase(t, store, "proj-e2e-db", org)
+	// 1250m of 1000m allowed, 1.5 GiB of 1 GiB, 12 GiB of 10 GiB: only the part above each is billed.
+	if _, err := store.db.Exec(`UPDATE database_instances SET reserved_cpu_milli = 1250, reserved_memory_bytes = $1, reserved_disk_bytes = $2, storage_size = '12Gi' WHERE project_id = 'proj-e2e-db'`, 3<<29, 12<<30); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.SampleOrg(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	// Make the one real sample the twelve slots of an hour that has settled.
+	if _, err := store.db.Exec(`
+		INSERT INTO usage_samples (org_id, slot_start, cpu_milli, memory_bytes, disk_bytes, allowance_cpu_milli, allowance_memory_bytes, allowance_disk_bytes)
+		SELECT org_id, $2::timestamptz + n * interval '5 minutes', cpu_milli, memory_bytes, disk_bytes, allowance_cpu_milli, allowance_memory_bytes, allowance_disk_bytes
+		FROM usage_samples, generate_series(0, 11) AS n WHERE org_id = $1`, org, hourStart.UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM usage_samples WHERE org_id = $1 AND slot_start > $2`, org, hourStart.UTC().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := meter.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var amount int64
+	var details []byte
+	if err := store.db.QueryRow(`SELECT amount_micros, details::text FROM credit_entries WHERE org_id = $1 AND kind = 'usage'`, org).Scan(&amount, &details); err != nil {
+		t.Fatalf("one hour, one entry: %v", err)
+	}
+	// 0.25 vCPU x $12 + 0.5 GiB x $6 + 2 GiB x $0.12 = $6.24 a month = 8547.95 micros an hour.
+	if amount != -8548 {
+		t.Fatalf("only what is above the allowance is billed: want -8548, got %d (%s)", amount, details)
+	}
+	for _, want := range []string{`"priceVersion": "v1"`, `"slots": 12`, `"cpuMilliSlots": 3000`} {
+		if !strings.Contains(string(details), want) {
+			t.Errorf("the entry must carry %s, got %s", want, details)
+		}
+	}
+}
+
+func TestAnAllowanceInsideOnlyTheMemoryDimensionIsStillReadBack(t *testing.T) {
+	store := testStore(t)
+	org := creditPerson(t, store, "ad")
+	slot := time.Date(2026, 1, 5, 10, 0, 0, 0, time.UTC)
+	if _, err := store.db.Exec(`INSERT INTO usage_samples (org_id, slot_start, cpu_milli, memory_bytes, disk_bytes, allowance_cpu_milli, allowance_memory_bytes, allowance_disk_bytes) VALUES ($1, $2, 1, 2, 3, 4, 5, 6)`, org, slot); err != nil {
+		t.Fatal(err)
+	}
+	slots, err := store.UsageSlots(context.Background(), org, slot, slot.Add(time.Hour))
+	if err != nil || len(slots) != 1 {
+		t.Fatalf("%v %v", slots, err)
+	}
+	want := creditmeter.Slot{CPUMilli: 1, MemoryBytes: 2, DiskBytes: 3, Allowance: creditmeter.Allowance{CPUMilli: 4, MemoryBytes: 5, DiskBytes: 6}}
+	if slots[0] != want {
+		t.Fatalf("every column of a sample must come back: want %+v, got %+v", want, slots[0])
+	}
+}
+
+func TestPostStepSamplesNeverUseUpThePool(t *testing.T) {
+	store := testStore(t)
+	org := creditPerson(t, store, "pl")
+	fundOrg(t, store, org, "seed-pl", credits.FromDollars(5), nil)
+	store.db.SetMaxOpenConns(5)
+	ctx := context.Background()
+
+	step, err := store.db.BeginTx(ctx, nil) // a step that holds the org lock for a while
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer step.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+	if _, err := step.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, planbudget.OrgLockSpace, org); err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		store.sampleAfterStep(org)
+	}
+	time.Sleep(600 * time.Millisecond) // let the waiting samples settle in
+	var waiting int
+	if err := store.db.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'advisory'`).Scan(&waiting); err != nil {
+		t.Fatal(err)
+	}
+	if waiting != 0 {
+		t.Fatalf("a post-step sample must never sit on a connection waiting for the org lock: %d are", waiting)
+	}
+	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := store.db.PingContext(probe); err != nil {
+		t.Fatalf("samples waiting for a step's lock must not use up the pool: %v", err)
+	}
+	if err := step.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for len(samplesOf(t, store, org)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the sample never landed after the step committed")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

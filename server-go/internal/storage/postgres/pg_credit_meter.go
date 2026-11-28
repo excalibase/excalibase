@@ -74,7 +74,7 @@ func (s *Store) MeteringEnabledAt(ctx context.Context) (time.Time, error) {
 // UsageSlots are the samples taken in [from, to).
 func (s *Store) UsageSlots(ctx context.Context, orgID string, from, to time.Time) ([]creditmeter.Slot, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT cpu_milli, memory_bytes, disk_bytes FROM usage_samples
+		`SELECT cpu_milli, memory_bytes, disk_bytes, allowance_cpu_milli, allowance_memory_bytes, allowance_disk_bytes FROM usage_samples
 		 WHERE org_id = $1 AND slot_start >= $2 AND slot_start < $3 ORDER BY slot_start`, orgID, from.UTC(), to.UTC())
 	if err != nil {
 		return nil, err
@@ -83,7 +83,8 @@ func (s *Store) UsageSlots(ctx context.Context, orgID string, from, to time.Time
 	var slots []creditmeter.Slot
 	for rows.Next() {
 		var slot creditmeter.Slot
-		if err := rows.Scan(&slot.CPUMilli, &slot.MemoryBytes, &slot.DiskBytes); err != nil {
+		if err := rows.Scan(&slot.CPUMilli, &slot.MemoryBytes, &slot.DiskBytes,
+			&slot.Allowance.CPUMilli, &slot.Allowance.MemoryBytes, &slot.Allowance.DiskBytes); err != nil {
 			return nil, err
 		}
 		slots = append(slots, slot)
@@ -148,27 +149,81 @@ func (s *Store) ObserveOrgUsage(ctx context.Context, tx planbudget.Querier, orgI
 	}
 }
 
-// postStepSamples bounds the samples waiting on the org lock after a step.
-var postStepSamples = make(chan struct{}, 32)
+const (
+	// postStepTries and postStepRetryEvery bound how long a post-step sample waits for the step to commit.
+	postStepTries      = 20
+	postStepRetryEvery = 250 * time.Millisecond
+)
+
+// postStepCap is how many post-step samples may wait at once: a tenth of the pool, at least one,
+// so waiting samples can never use up the connections the platform needs.
+func postStepCap(maxOpen int) int {
+	if maxOpen <= 0 {
+		return 2
+	}
+	return max(1, maxOpen/10)
+}
+
+func (s *Store) postStepSlots() chan struct{} {
+	s.postStepOnce.Do(func() { s.postStep = make(chan struct{}, postStepCap(s.db.Stats().MaxOpenConnections)) })
+	return s.postStep
+}
 
 // sampleAfterStep samples the org again once the step that is holding its lock has
-// committed, so a service a step started counts for the slot too. SampleOrg takes
-// the same org lock, so it waits for that commit; if the step rolled back it just
-// samples what is unchanged. When many are waiting the next regular sample does it.
+// committed, so a service a step started counts for the slot too. It never waits
+// on the lock while holding a connection: it tries the lock, gives the connection
+// back, and tries again a moment later. If the step rolled back it just samples
+// what is unchanged. When too many are waiting the next regular sample does it.
 func (s *Store) sampleAfterStep(orgID string) {
+	slots := s.postStepSlots()
 	select {
-	case postStepSamples <- struct{}{}:
+	case slots <- struct{}{}:
 	default:
 		return
 	}
 	go func() {
-		defer func() { <-postStepSamples }()
+		defer func() { <-slots }()
 		ctx, cancel := context.WithTimeout(context.Background(), postStepSampleTimeout)
 		defer cancel()
-		if err := s.SampleOrg(ctx, orgID); err != nil {
+		if err := s.sampleWhenFree(ctx, orgID); err != nil {
 			log.Printf("WARN: credit meter: sample after a step for %s: %v", orgID, err)
 		}
 	}()
+}
+
+func (s *Store) sampleWhenFree(ctx context.Context, orgID string) error {
+	for range postStepTries {
+		sampled, err := s.trySampleOrg(ctx, orgID)
+		if err != nil || sampled {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(postStepRetryEvery):
+		}
+	}
+	return nil
+}
+
+// trySampleOrg samples the org if its lock is free right now; false means a step still holds it.
+func (s *Store) trySampleOrg(ctx context.Context, orgID string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin usage sample: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+	var free bool
+	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock($1, hashtext($2))`, planbudget.OrgLockSpace, orgID).Scan(&free); err != nil {
+		return false, fmt.Errorf("try the org lock for a usage sample: %w", err)
+	}
+	if !free {
+		return false, nil
+	}
+	if err := s.sampleOrgUsage(ctx, tx, orgID); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 // SetCreditAllowance sets how a plan's free allowance is looked up when an org is

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/planbudget"
+	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -35,6 +36,9 @@ type Store struct {
 	budget *planbudget.Gate
 	// allowanceFor looks up a plan's free allowance for credit metering (EXC-866); nil means none.
 	allowanceFor func(tier string) (creditmeter.Allowance, bool)
+	// postStep bounds the samples that wait for a step to commit; made on first use from the pool size.
+	postStepOnce sync.Once
+	postStep     chan struct{}
 }
 
 // lifecycleLockShare is the share of the main pool's size given to the lock
