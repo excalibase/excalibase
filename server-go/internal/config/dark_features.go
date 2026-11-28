@@ -62,6 +62,7 @@ var featureEnv = map[features.Feature]string{
 	features.AdminAnalytics:     "FEATURE_ADMINANALYTICS",
 	features.Credits:            "FEATURE_CREDITS",
 	features.PlanBudget:         "FEATURE_PLANBUDGET",
+	features.CreditBurn:         "FEATURE_CREDITBURN",
 }
 
 // defaultOn are the features that are on until their variable says "false":

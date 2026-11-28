@@ -114,6 +114,10 @@ env:
   # CREDITS_TERMS_VERSION and CREDITS_TERMS_URL set its numbers; the defaults are 300, 90, 40, 1000, v1.
   FEATURE_CREDITS: "false"
   FEATURE_PLANBUDGET: "false"
+  # Usage metering (EXC-866): samples what each org reserves and draws settled hours from its credit.
+  # Needs FEATURE_CREDITS and FEATURE_PLANBUDGET, or the server refuses to start. Prices and free
+  # allowances: CREDIT_PRICES (JSON) and CREDIT_ALLOWANCE_{FREE,STANDARD}_{CPU_MILLI,MEMORY_MIB,DISK_GIB}.
+  FEATURE_CREDITBURN: "false"
 
 platformDB:
   enabled: true

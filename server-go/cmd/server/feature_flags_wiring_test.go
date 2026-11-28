@@ -227,6 +227,7 @@ var darkWork = map[features.Feature]string{
 	features.AdminAnalytics: "TestAdminAnalytics_RoutesFollowTheirFlagOnTheRealRouter",
 	// Off, no budget is read and no growth step is checked (internal/storage/postgres, internal/planbudget).
 	features.PlanBudget: "TestAdmissionIsOffWhileTheFlagIsOff",
+	features.CreditBurn: "TestMeteringRunsOnlyOnACloudInstallWithTheFlagOn",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }

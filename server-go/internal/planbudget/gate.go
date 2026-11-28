@@ -26,9 +26,18 @@ type Querier interface {
 
 // Gate admits growth against an org's plan. The zero value admits everything.
 type Gate struct {
-	on    func(context.Context) bool
-	plans config.PlanBudgetConfig
+	on       func(context.Context) bool
+	plans    config.PlanBudgetConfig
+	observer Observer
 }
+
+// Observer is told, under the org lock and before a step changes anything, which
+// org is about to change. It runs inside the step's transaction, so it must
+// leave that transaction usable and can never refuse the step.
+type Observer func(ctx context.Context, tx Querier, orgID string)
+
+// SetObserver is set once at boot, before the gate is shared.
+func (g *Gate) SetObserver(observer Observer) { g.observer = observer }
 
 // NewGate reads the plan numbers once; on says whether the feature is on now.
 func NewGate(on func(context.Context) bool, plans config.PlanBudgetConfig) *Gate {
@@ -73,6 +82,9 @@ func (g *Gate) Admit(ctx context.Context, tx Querier, orgID string, delta Delta)
 	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, OrgLockSpace, orgID); err != nil {
 		return fmt.Errorf("lock org budget: %w", err)
+	}
+	if g.observer != nil {
+		g.observer(ctx, tx, orgID)
 	}
 	change, err := delta(ctx)
 	if err != nil {

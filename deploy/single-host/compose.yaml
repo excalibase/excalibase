@@ -347,6 +347,8 @@ services:
       # Credit ledger, the sign-up credit and admin grants (EXC-866); off until chosen.
       FEATURE_CREDITS: ${FEATURE_CREDITS:-false}
       FEATURE_PLANBUDGET: ${FEATURE_PLANBUDGET:-false}
+      # Usage metering draws on credit; cloud only, so a single host ignores it (EXC-866).
+      FEATURE_CREDITBURN: ${FEATURE_CREDITBURN:-false}
       CREDITS_TRIAL_DOLLARS: ${CREDITS_TRIAL_DOLLARS:-300}
       CREDITS_TRIAL_DAYS: ${CREDITS_TRIAL_DAYS:-90}
       CREDITS_TRIAL_CAP: ${CREDITS_TRIAL_CAP:-40}

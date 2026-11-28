@@ -182,6 +182,11 @@ const (
 	// org's services is admitted against it under the org lock, and refused with
 	// a 409 naming what is left (EXC-901). Off: no budget is read or enforced.
 	PlanBudget Feature = "planbudget"
+	// CreditBurn is usage metering: every five minutes what an org reserves is
+	// sampled, and every settled hour is drawn from its credit (EXC-866). Needs
+	// Credits and PlanBudget, and refuses to start without them. Off: nothing is
+	// sampled or billed, and a credit lot expires by the clock.
+	CreditBurn Feature = "creditburn"
 	// StudioV2 is the cloud-console layout of Studio: new top bar, navigation
 	// and shared tables. Frontend only; the server just reports it (EXC-762).
 	StudioV2 Feature = "studio_v2"
@@ -189,7 +194,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails, SelfHeal, NetMeter, LimitedTrial, BehaviourReview, AdminAnalytics, Credits, PlanBudget}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard, AppImagePin, CrashLoopGuard, SuspensionEmails, SelfHeal, NetMeter, LimitedTrial, BehaviourReview, AdminAnalytics, Credits, PlanBudget, CreditBurn}
 }
 
 type Flags interface {

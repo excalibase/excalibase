@@ -29,6 +29,7 @@ func creditRules(cfg config.AppConfig) credits.Rules {
 	return credits.Rules{
 		TrialAmount: credits.FromDollars(int64(c.TrialDollars)), TrialDays: c.TrialDays, TrialCap: c.TrialCap,
 		AdminCap: credits.FromDollars(int64(c.AdminGrantCapDollars)), TermsVersion: c.TermsVersion,
+		Metered: creditBurnOn(cfg),
 	}
 }
 
@@ -79,6 +80,9 @@ func mountCredits(d *handlerDeps) func(http.Handler) http.Handler {
 // container gate (EXC-899) is off: credit must not fund containers for accounts
 // nobody has verified. With credits off it asks nothing.
 func creditsBootCheck(cfg config.AppConfig) error {
+	if err := creditBurnBootCheck(cfg); err != nil {
+		return err
+	}
 	flags := cfg.Features()
 	ctx := context.Background()
 	if !features.Enabled(ctx, flags, features.Credits) {
