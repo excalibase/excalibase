@@ -23,6 +23,17 @@ import (
 // maxCreateBody bounds the JSON the proxy reads to check a create.
 const maxCreateBody = 1 << 20
 
+// maxConcurrentBodyChecks bounds the bodies read and decoded at once: a 1 MiB create allocates about 90 MiB,
+// so a flood of large creates would otherwise outgrow the proxy's memory.
+const maxConcurrentBodyChecks = 2
+
+// defaultBodyCheckWait is how long a body waits for a free slot: longer than a check takes,
+// shorter than a client gives up.
+const defaultBodyCheckWait = 2 * time.Second
+
+// errBusy answers a body that would exceed maxConcurrentBodyChecks; the caller retries.
+var errBusy = fmt.Errorf("%w: too many requests are being checked", ErrRefused)
+
 var (
 	versionPrefix = regexp.MustCompile(`^/v[0-9]+\.[0-9]+(/.*)$`)
 	// A container or exec reference: an id or a name, never "." or "..".
@@ -69,6 +80,10 @@ type Handler struct {
 	forward   *httputil.ReverseProxy
 	dial      func(ctx context.Context) (net.Conn, error)
 	restarts  *restartGuard
+	// bodyChecks holds a slot for each body being read and checked.
+	bodyChecks chan struct{}
+	// bodyCheckWait is how long a request waits for a slot before it is answered 503.
+	bodyCheckWait time.Duration
 }
 
 // NewHandler proxies allowed calls to target through transport.
@@ -84,7 +99,8 @@ func NewHandler(policy Policy, target *url.URL, transport http.RoundTripper) *Ha
 		// Image pulls and exec output stream; flush as bytes arrive.
 		FlushInterval: -1,
 	}
-	return &Handler{policy: policy, target: target, transport: transport, forward: forward}
+	return &Handler{policy: policy, target: target, transport: transport, forward: forward,
+		bodyChecks: make(chan struct{}, maxConcurrentBodyChecks), bodyCheckWait: defaultBodyCheckWait}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +124,9 @@ func (h *Handler) authorize(r *http.Request) error {
 		return refuse("path %q is not canonical", r.URL.EscapedPath())
 	}
 	api := stripVersion(raw)
+	if api == "/images/create" && r.Method == http.MethodPost {
+		return authorizeImagePull(r)
+	}
 	if isPlainRead(r.Method, api) {
 		return nil
 	}
@@ -133,11 +152,34 @@ func isPlainRead(method, api string) bool {
 		return method == http.MethodGet || method == http.MethodHead
 	case api == "/version" || api == "/images/json":
 		return method == http.MethodGet
-	case api == "/images/create":
-		return method == http.MethodPost
 	default:
 		return method == http.MethodGet && isImageInspect(api)
 	}
+}
+
+// pullQueryKeys are the only query keys a pull forwards. The engine reads form-encoded body
+// values over the query, and fromSrc imports an image from a URL, so a pull carries no body
+// and nothing but these keys.
+var pullQueryKeys = []string{"fromImage", "tag", "platform"}
+
+// authorizeImagePull admits a pull of one named image and narrows the request to exactly that.
+func authorizeImagePull(r *http.Request) error {
+	if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+		return refuse("an image pull carries no body")
+	}
+	query := r.URL.Query()
+	if len(query["fromImage"]) != 1 || query.Get("fromImage") == "" {
+		return refuse("an image pull names exactly one fromImage")
+	}
+	kept := url.Values{}
+	for _, key := range pullQueryKeys {
+		if values, ok := query[key]; ok {
+			kept[key] = values
+		}
+	}
+	r.URL.RawQuery = kept.Encode()
+	r.Body = http.NoBody
+	return nil
 }
 
 // authorizeCreate checks a container create: its body, the volumes it mounts, any container whose
@@ -271,6 +313,16 @@ func (h *Handler) inspect(ctx context.Context, apiPath string, into any) error {
 }
 
 func (h *Handler) checkBody(r *http.Request, check func([]byte) error) error {
+	timer := time.NewTimer(h.bodyCheckWait)
+	defer timer.Stop()
+	select {
+	case h.bodyChecks <- struct{}{}:
+		defer func() { <-h.bodyChecks }()
+	case <-timer.C:
+		return errBusy
+	case <-r.Context().Done():
+		return r.Context().Err()
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxCreateBody+1))
 	if err != nil {
 		return fmt.Errorf("read request body: %w", err)
@@ -290,7 +342,7 @@ func (h *Handler) checkBody(r *http.Request, check func([]byte) error) error {
 func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusForbidden
 	switch {
-	case errors.Is(err, errFirewallDown), errors.Is(err, errBridgeUnfenced):
+	case errors.Is(err, errFirewallDown), errors.Is(err, errBridgeUnfenced), errors.Is(err, errBusy):
 		status = http.StatusServiceUnavailable
 	case errors.Is(err, errNoSuchThing):
 		status = http.StatusNotFound

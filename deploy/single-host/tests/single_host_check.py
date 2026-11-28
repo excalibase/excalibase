@@ -66,6 +66,9 @@ for name in ("provisioning", "engine-proxy", "auth", "graphql"):
     svc = services[name]
     if "ALL" not in (svc.get("cap_drop") or []):
         failures.append(f"{name} keeps its capabilities")
+# The proxy holds the engine socket, so a runaway or a flood against it must not take the host down with it.
+if not proxy.get("mem_limit") or not proxy.get("pids_limit"):
+    failures.append("engine-proxy has no memory or pids limit")
 if "label=type:container_t" not in (proxy.get("security_opt") or []):
     failures.append("engine-proxy keeps the default SELinux type unless init.sh says otherwise")
 # Unpinned, an install follows whatever was published last: the platform's

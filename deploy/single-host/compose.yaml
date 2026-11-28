@@ -242,6 +242,8 @@ services:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
       - bridges:/var/lib/excalibase-bridges
     read_only: true
+    mem_limit: 256m
+    pids_limit: 256
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2375/_ping"]
       interval: 5s
