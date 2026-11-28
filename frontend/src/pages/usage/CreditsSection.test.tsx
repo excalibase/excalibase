@@ -131,6 +131,9 @@ describe('CreditsSection', () => {
       expect(history.getByText(/Not covered: \$1\.00/)).toBeInTheDocument();
       expect(history.getByText(/Not covered: \$0\.25/)).toBeInTheDocument();
       expect(history.getAllByRole('row')).toHaveLength(4);
+      // The day is the UTC day the hours were billed in, whatever zone the viewer is in.
+      expect(history.getByText('2026-11-30')).toBeInTheDocument();
+      expect(history.getByText('2026-11-29')).toBeInTheDocument();
     });
 
     test('says nothing about a run-out when nothing has been used', async () => {

@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/excalibase/provisioning-poc/internal/creditmeter"
 	"github.com/excalibase/provisioning-poc/internal/credits"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 	"github.com/excalibase/provisioning-poc/internal/planbudget"
 )
 
@@ -786,5 +789,52 @@ func TestPostStepSamplesNeverUseUpThePool(t *testing.T) {
 			t.Fatal("the sample never landed after the step committed")
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func creditMeterEventCount(t *testing.T, reason string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "excalibase_credit_meter_events_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetValue() == reason {
+					return metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func TestAPostStepSampleThatGivesUpIsCounted(t *testing.T) {
+	store := testStore(t)
+	org := creditPerson(t, store, "gu")
+	fundOrg(t, store, org, "seed-gu", credits.FromDollars(5), nil)
+	ctx := context.Background()
+	step, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer step.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+	if _, err := step.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, planbudget.OrgLockSpace, org); err != nil {
+		t.Fatal(err)
+	}
+	tries, every := postStepTries, postStepRetryEvery
+	postStepTries, postStepRetryEvery = 3, 10*time.Millisecond
+	defer func() { postStepTries, postStepRetryEvery = tries, every }()
+
+	before := creditMeterEventCount(t, metrics.CreditMeterDroppedPostStepSample)
+	if err := store.sampleWhenFree(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	if got := creditMeterEventCount(t, metrics.CreditMeterDroppedPostStepSample) - before; got != 1 {
+		t.Fatalf("a sample that gave up is counted once, got %v", got)
 	}
 }

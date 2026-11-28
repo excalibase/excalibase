@@ -15,6 +15,8 @@ const (
 	CreditMeterRepricedHour = "repriced_hour"
 	// CreditMeterShortfallHour: the credit could not pay all of an hour.
 	CreditMeterShortfallHour = "shortfall_hour"
+	// CreditMeterDroppedPostStepSample: a sample after a step gave up waiting for the step to commit; the next regular sample covers it.
+	CreditMeterDroppedPostStepSample = "dropped_post_step_sample"
 )
 
 var creditMeterEvents = promauto.NewCounterVec(

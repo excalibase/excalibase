@@ -73,7 +73,7 @@ function historyRows(entries: readonly CreditEntry[]): HistoryRow[] {
       row.what = `${KIND_LABEL.usage} · Not covered: ${dollars(row.uncovered)}`;
       continue;
     }
-    const folded = { key: `unpaid-${day}`, when: formatInstant(`${day}T00:00:00Z`, 'date'), what: `${KIND_LABEL.usage} · Not covered: ${dollars(uncoveredMicros(entry))}`, amountMicros: 0, uncovered: uncoveredMicros(entry) };
+    const folded = { key: `unpaid-${day}`, when: day, what: `${KIND_LABEL.usage} · Not covered: ${dollars(uncoveredMicros(entry))}`, amountMicros: 0, uncovered: uncoveredMicros(entry) };
     unpaidByDay.set(day, folded);
     rows.push(folded);
   }

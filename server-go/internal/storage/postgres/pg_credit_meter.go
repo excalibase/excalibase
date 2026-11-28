@@ -149,8 +149,8 @@ func (s *Store) ObserveOrgUsage(ctx context.Context, tx planbudget.Querier, orgI
 	}
 }
 
-const (
-	// postStepTries and postStepRetryEvery bound how long a post-step sample waits for the step to commit.
+// postStepTries and postStepRetryEvery bound how long a post-step sample waits for the step to commit.
+var (
 	postStepTries      = 20
 	postStepRetryEvery = 250 * time.Millisecond
 )
@@ -203,6 +203,8 @@ func (s *Store) sampleWhenFree(ctx context.Context, orgID string) error {
 		case <-time.After(postStepRetryEvery):
 		}
 	}
+	log.Printf("WARN: credit meter: gave up sampling %s after a step: its lock was still held after %d tries; the next regular sample covers it", orgID, postStepTries)
+	metrics.CountCreditMeterEvent(metrics.CreditMeterDroppedPostStepSample)
 	return nil
 }
 
