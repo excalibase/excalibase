@@ -63,7 +63,8 @@ function historyRows(entries: readonly CreditEntry[]): HistoryRow[] {
   for (const entry of entries) {
     const note = uncoveredMicros(entry) > 0 ? ` · Not covered: ${dollars(uncoveredMicros(entry))}` : '';
     if (!isUnpaid(entry)) {
-      rows.push({ key: String(entry.id), when: formatInstant(entry.periodStart ?? entry.createdAt), what: `${KIND_LABEL[entry.kind]}${entry.reason ? ` · ${entry.reason}` : ''}${note}`, amountMicros: entry.amountMicros });
+      const reason = entry.reason ? ` · ${entry.reason}` : '';
+      rows.push({ key: String(entry.id), when: formatInstant(entry.periodStart ?? entry.createdAt), what: `${KIND_LABEL[entry.kind]}${reason}${note}`, amountMicros: entry.amountMicros });
       continue;
     }
     const day = (entry.periodStart ?? entry.createdAt).slice(0, 10);
