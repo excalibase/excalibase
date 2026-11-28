@@ -26,7 +26,7 @@ function CopyButton({ value, label }: { readonly value: string; readonly label: 
   );
 }
 
-function Endpoint({ label, value }: { readonly label: string; readonly value: string }) {
+export function Endpoint({ label, value }: { readonly label: string; readonly value: string }) {
   return (
     <div>
       <div className="text-xs text-text-tertiary mb-1">{label}</div>

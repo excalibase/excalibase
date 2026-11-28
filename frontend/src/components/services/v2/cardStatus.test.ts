@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import type { App, Deploy } from '../../../api/apps';
 import type { Site, SiteDeploy } from '../../../api/sites';
-import { appCardStatus, siteCardStatus, databaseCardDetail, appCardDetail, siteCardDetail, bucketCardDetail } from './cardStatus';
+import { appCardStatus, siteCardStatus, databaseCardDetail, appCardDetail, siteCardDetail, bucketCardDetail, functionsCardStatus, functionsCardDetail } from './cardStatus';
 
 const app = (extra: Partial<App> = {}) => ({ id: 'a', name: 'api', image: 'ghcr.io/me/api:1.4', status: 'ACTIVE', replicas: 1, env: [], ...extra }) as App;
 const deploy = (status: Deploy['status'], extra: Partial<Deploy> = {}) => ({ id: 'd', status, revision: 1, ...extra }) as Deploy;
@@ -74,5 +74,23 @@ describe('card details', () => {
   test('bucket: privacy', () => {
     expect(bucketCardDetail({ public: false })).toBe('Storage bucket · private');
     expect(bucketCardDetail({ public: true })).toBe('Storage bucket · public');
+  });
+});
+
+describe('functions card', () => {
+  test('a healthy runtime is running', () => {
+    expect(functionsCardStatus({ status: 'healthy', healthy: true })).toEqual({ label: 'Running', tone: 'success' });
+  });
+  test('a restarting runtime is in progress', () => {
+    expect(functionsCardStatus({ status: 'restarting', healthy: false })).toEqual({ label: 'Restarting', tone: 'progress' });
+  });
+  test('an unhealthy runtime is an error and an unknown one shows nothing', () => {
+    expect(functionsCardStatus({ status: 'down', healthy: false })).toEqual({ label: 'Runtime down', tone: 'error' });
+    expect(functionsCardStatus(undefined)).toBeUndefined();
+  });
+  test('the detail counts functions', () => {
+    expect(functionsCardDetail(0)).toBe('No functions yet');
+    expect(functionsCardDetail(1)).toBe('Edge function');
+    expect(functionsCardDetail(3)).toBe('3 edge functions');
   });
 });

@@ -1,6 +1,7 @@
 import type { App, Deploy } from '../../../api/apps';
 import type { Site, SiteDeploy } from '../../../api/sites';
 import type { DatabaseInstance } from '../../../types';
+import type { RuntimeStatus } from '../../../types/edgefn';
 import { appDisplayStatus, type Tone } from '../../containers/appCopy';
 
 export interface CardStatus {
@@ -52,3 +53,16 @@ export const siteCardDetail = (site: Pick<Site, 'hostname'>): string => `Site ·
 
 export const bucketCardDetail = (bucket: { public: boolean }): string =>
   `Storage bucket · ${bucket.public ? 'public' : 'private'}`;
+
+// The functions run on one shared runtime, so the card reports that runtime.
+export function functionsCardStatus(runtime: RuntimeStatus | undefined): CardStatus | undefined {
+  if (!runtime) return undefined;
+  if (runtime.healthy) return { label: 'Running', tone: 'success' };
+  if (runtime.status === 'restarting') return { label: 'Restarting', tone: 'progress' };
+  return { label: `Runtime ${runtime.status}`, tone: 'error' };
+}
+
+export function functionsCardDetail(count: number): string {
+  if (count === 0) return 'No functions yet';
+  return count === 1 ? 'Edge function' : `${count} edge functions`;
+}
