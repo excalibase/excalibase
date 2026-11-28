@@ -108,6 +108,9 @@ func (h *Handler) authorize(r *http.Request) error {
 		return refuse("path %q is not canonical", r.URL.EscapedPath())
 	}
 	api := stripVersion(raw)
+	if api == "/images/create" && r.Method == http.MethodPost {
+		return authorizeImagePull(r)
+	}
 	if isPlainRead(r.Method, api) {
 		return nil
 	}
@@ -133,11 +136,22 @@ func isPlainRead(method, api string) bool {
 		return method == http.MethodGet || method == http.MethodHead
 	case api == "/version" || api == "/images/json":
 		return method == http.MethodGet
-	case api == "/images/create":
-		return method == http.MethodPost
 	default:
 		return method == http.MethodGet && isImageInspect(api)
 	}
+}
+
+// authorizeImagePull admits a pull of a named image. fromSrc imports an image from a URL or
+// the request body, which makes the engine fetch from anywhere and no pull does.
+func authorizeImagePull(r *http.Request) error {
+	query := r.URL.Query()
+	if _, imported := query["fromSrc"]; imported {
+		return refuse("an image import (fromSrc) is not a call provisioning makes")
+	}
+	if len(query["fromImage"]) != 1 || query.Get("fromImage") == "" {
+		return refuse("an image pull names exactly one fromImage")
+	}
+	return nil
 }
 
 // authorizeCreate checks a container create: its body, the volumes it mounts, any container whose
