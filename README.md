@@ -422,7 +422,7 @@ Error messages are sanitized — PostgreSQL internal details are stripped from 5
 
 **Docker provisioner** — production peer of K8s mode. Operationally simpler (no operator, no CRDs, no etcd) but with real trade-offs:
 
-- The provisioner needs **root-equivalent access** to the Docker daemon (`docker` group ≈ root). Podman has the same constraint unless explicitly running rootless. K8s mode by contrast uses a least-privilege ServiceAccount + Role.
+- Whatever holds the Docker daemon socket is root-equivalent (`docker` group ≈ root). The single-host install gives the socket to `engine-proxy` alone, which forwards only the calls provisioning makes; provisioning itself holds no socket. Pointing `DOCKER_HOST` straight at a daemon skips that proxy. Rootless Podman runs the daemon as an unprivileged user. K8s mode uses a least-privilege ServiceAccount + Role.
 - All projects share the daemon's process namespace — there is no equivalent of K8s namespaces / NetworkPolicies enforced by the platform.
 - Single-host *Kubernetes* installs (k0s, k3s, RKE2, MicroK8s — including rootless) are also production-grade; Docker mode is one option, not the only single-host option.
 
