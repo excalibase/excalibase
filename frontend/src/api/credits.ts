@@ -23,6 +23,8 @@ export interface CreditEntry {
   periodStart?: string;
   periodEnd?: string;
   createdAt: string;
+  // A usage line also says what the credit could not pay (uncovered_micros).
+  details?: Record<string, unknown>;
 }
 
 export type TrialState = 'none' | 'needs_terms' | 'pending' | 'waitlisted' | 'granted' | 'refused';

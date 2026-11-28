@@ -15,6 +15,12 @@ const KIND_LABEL: Record<CreditEntry['kind'], string> = {
 };
 const STATEMENT_MONTHS = 6;
 
+// What the credit could not pay of a usage line, in micros; 0 when it paid in full.
+function uncoveredMicros(entry: CreditEntry): number {
+  const value = entry.details?.uncovered_micros;
+  return typeof value === 'number' ? value : 0;
+}
+
 function TrialOffer({ orgId, overview }: { readonly orgId: string; readonly overview: CreditOverview }) {
   const [agreed, setAgreed] = useState(false);
   const accept = useAcceptCreditTerms(orgId);
@@ -54,7 +60,7 @@ function History({ entries }: { readonly entries: readonly CreditEntry[] }) {
         {entries.map((entry) => (
           <tr key={entry.id} className="border-t border-border-primary">
             <td className={CELL}>{formatInstant(entry.periodStart ?? entry.createdAt)}</td>
-            <td className={CELL}>{KIND_LABEL[entry.kind]}{entry.reason ? ` · ${entry.reason}` : ''}</td>
+            <td className={CELL}>{KIND_LABEL[entry.kind]}{entry.reason ? ` · ${entry.reason}` : ''}{uncoveredMicros(entry) > 0 && ` · Not covered: ${dollars(uncoveredMicros(entry))}`}</td>
             <td className={`${CELL} text-right`}>{dollars(entry.amountMicros)}</td>
           </tr>
         ))}
@@ -80,16 +86,23 @@ function BurnDays({ days }: { readonly days: CreditBurn['days'] }) {
   );
 }
 
+// The run-out line: a used-up credit has no run-out, a burn too slow to date says so, and only no burn says "No usage yet".
+function runOutText(overview: CreditOverview): string {
+  const { burn, balanceMicros } = overview;
+  if (balanceMicros <= 0) return 'Credit used up';
+  if (burn.runOutAt) return `${formatInstant(burn.runOutAt, 'date')} (${plural(daysLeft(burn.runOutAt, new Date()) ?? 0)})`;
+  return burn.perDayMicros > 0 ? 'More than 10 years away' : 'No usage yet';
+}
+
 // What the org spends a day and when that runs out; nothing while usage is not billed.
 function Burn({ overview }: { readonly overview: CreditOverview }) {
   if (!overview.metering) return <p className="text-text-secondary">Usage is not billed yet, so your balance only changes when credit is added or expires.</p>;
   const { burn, nextExpiry } = overview;
-  const runOutLeft = daysLeft(burn.runOutAt, new Date());
   const expiresFirst = burn.runOutAt !== null && nextExpiry !== null && Date.parse(nextExpiry) < Date.parse(burn.runOutAt);
   return (
     <>
       <Line label="Burn per day" value={dollars(burn.perDayMicros)} />
-      <Line label="Projected run-out" value={burn.runOutAt ? `${formatInstant(burn.runOutAt, 'date')} (${plural(runOutLeft ?? 0)})` : 'No usage yet'} />
+      <Line label="Projected run-out" value={runOutText(overview)} />
       {expiresFirst && <p className="text-text-secondary">Your credit expires before it runs out at this rate.</p>}
       <BurnDays days={burn.days} />
     </>

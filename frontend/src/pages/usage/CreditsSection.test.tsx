@@ -99,6 +99,26 @@ describe('CreditsSection', () => {
       expect(await screen.findByText(/expires before it runs out/)).toBeInTheDocument();
     });
 
+    test('says the credit is used up at a zero balance, whatever the burn', async () => {
+      mountSection(burning({ balanceMicros: 0, lots: [], burn: { perDayMicros: 4_000_000, runOutAt: null, days: [] } }));
+      const section = within(await screen.findByRole('region', { name: 'Credits' }));
+      expect(section.getByText('Projected run-out').nextSibling).toHaveTextContent('Credit used up');
+      expect(section.queryByText('No usage yet')).toBeNull();
+    });
+
+    test('shows no date, and never "No usage yet", when the run-out is too far away to name', async () => {
+      mountSection(burning({ burn: { perDayMicros: 1, runOutAt: null, days: [] } }));
+      const section = within(await screen.findByRole('region', { name: 'Credits' }));
+      expect(section.getByText('Projected run-out').nextSibling).toHaveTextContent('More than 10 years away');
+      expect(section.queryByText('No usage yet')).toBeNull();
+    });
+
+    test('a usage line the credit could not pay in full shows what was not covered', async () => {
+      const usage = { id: 9, kind: 'usage', amountMicros: -1_000_000, actor: 'system', reason: '', periodStart: '2026-11-30T10:00:00Z', createdAt: '2026-11-30T11:10:00Z', details: { uncovered_micros: 3_500_000 } };
+      mountSection(burning({ entries: [usage] }));
+      expect(await screen.findByText(/Not covered: \$3\.50/)).toBeInTheDocument();
+    });
+
     test('says nothing about a run-out when nothing has been used', async () => {
       mountSection(creditOverview());
       const section = within(await screen.findByRole('region', { name: 'Credits' }));
