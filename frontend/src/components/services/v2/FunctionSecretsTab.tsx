@@ -77,7 +77,7 @@ function AddSecret({ projectId }: { readonly projectId: string }) {
       <button type="button" onClick={submit} disabled={save.isPending || !key.trim() || !value.trim()} className={primaryButton}>
         {save.isPending ? 'Saving…' : 'Save secret'}
       </button>
-      {warning && <p role="status" className="text-xs text-yellow-400">{warning}</p>}
+      {warning && <output className="block text-xs text-yellow-400">{warning}</output>}
       {save.error != null && <p role="alert" className="text-xs text-red-400">{serverErrorMessage(save.error, 'The secret was not saved')}</p>}
       <div className="space-y-2 border-t border-border-primary pt-3">
         <label htmlFor="fn-secret-paste" className="block text-xs text-text-tertiary">Paste .env (bulk import)</label>
@@ -117,7 +117,7 @@ function SecretKeys({ projectId }: { readonly projectId: string }) {
       <p className="text-xs text-text-tertiary">Existing keys (values are never shown)</p>
       {readError != null && <p role="alert" className="text-xs text-red-400">{serverErrorMessage(readError, 'The secrets could not be read')}</p>}
       {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
-      {warning && <p role="status" className="text-xs text-yellow-400">{warning}</p>}
+      {warning && <output className="block text-xs text-yellow-400">{warning}</output>}
       {readError == null && secrets.length === 0 && <p className="text-xs text-text-tertiary">No secrets set</p>}
       <ul className="divide-y divide-border-primary">
         {secrets.map((secret) => (

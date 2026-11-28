@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -21,11 +21,13 @@ interface World {
   runtime?: unknown;
   apiUrl?: string;
   role?: string;
+  orgsGate?: Promise<void>;
 }
 let world: World = {};
 
 function route(url: string) {
   const ok = (data: unknown) => Promise.resolve({ data });
+  if (url === '/orgs' && world.orgsGate) return world.orgsGate.then(() => ({ data: [{ id: 'org-1', name: 'Acme', role: world.role ?? 'owner' }] }));
   if (url === '/orgs') return ok([{ id: 'org-1', name: 'Acme', role: world.role ?? 'owner' }]);
   if (url === '/config') return ok({ deploymentMode: 'cloud', features: { studio_v2: true }, ...(world.apiUrl ? { apiUrl: world.apiUrl } : {}) });
   if (url === '/provision/p1') return ok({ projectId: 'p1', orgId: 'org-1' });
@@ -134,6 +136,28 @@ describe('functions panel: access', () => {
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Functions']);
     expect(screen.queryByTestId('function-secrets')).not.toBeInTheDocument();
     expect(vi.mocked(api.get).mock.calls.some(([url]) => String(url).endsWith('/secrets') || String(url).endsWith('/logs'))).toBe(false);
+  });
+
+  test('a developer opening a secrets link never sees the Functions tab while the role loads', async () => {
+    let release: () => void = () => undefined;
+    world.orgsGate = new Promise<void>((resolve) => { release = resolve; });
+    renderPanel('secrets');
+    await screen.findByRole('region', { name: 'Functions panel' });
+    // The functions list has answered; only the role is still pending.
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/projects/p1/functions'));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+    expect(screen.queryByRole('listitem', { name: 'Fn hello' })).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByTestId('function-secrets')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Secrets' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  test('a viewer is not offered the Deploy function link, a developer is', async () => {
+    world.role = 'viewer';
+    renderPanel('functions');
+    expect(await screen.findByRole('listitem', { name: 'Fn hello' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Deploy function' })).not.toBeInTheDocument();
   });
 
   test('a developer gets all three tabs', async () => {

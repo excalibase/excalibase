@@ -95,6 +95,20 @@ describe('FunctionSecretsTab', () => {
     expect(vi.mocked(api.post).mock.calls).toEqual([[SECRETS_URL, { key: 'ONE', value: '1' }], [SECRETS_URL, { key: 'TWO', value: 'two words' }]]);
   });
 
+  test('a double import sends each entry once', async () => {
+    renderTab();
+    await userEvent.click(await screen.findByLabelText('Paste .env (bulk import)'));
+    await userEvent.paste('ONE=1\nTWO=2');
+    const importButton = screen.getByRole('button', { name: 'Import from .env' });
+    // Both clicks land before React re-renders the button as disabled.
+    await act(async () => {
+      importButton.click();
+      importButton.click();
+    });
+    expect(await screen.findByText('saved 2/2')).toBeInTheDocument();
+    expect(api.post).toHaveBeenCalledTimes(2);
+  });
+
   test('an entry the server refuses is named in the result', async () => {
     vi.mocked(api.post)
       .mockResolvedValueOnce({ data: { status: 'set' } } as never)
