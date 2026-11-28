@@ -85,14 +85,14 @@ describe('PlatformAdminPage', () => {
   });
 
   test.each([
-    ['off', { studio_v2: false }],
-    ['on', { studio_v2: true }],
-    ['absent', {}],
-  ])('the console is the tabbed layout whether studio_v2 is %s', async (_name, features) => {
+    ['off', { studio_v2: false }, []],
+    ['on', { studio_v2: true }, ['Audit log']],
+    ['absent', {}, []],
+  ])('the console is the tabbed layout whether studio_v2 is %s', async (_name, features, extra) => {
     renderPage('platform_admin', { features });
     expect(await screen.findByTestId('admin-console-v2')).toBeInTheDocument();
     expect(await screen.findByTestId('needs-attention')).toBeInTheDocument();
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Needs attention', 'Projects', 'Users', 'Organizations', 'Platform']);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Needs attention', 'Projects', 'Users', 'Organizations', ...extra, 'Platform']);
   });
 
   test('the platform tab keeps cluster capacity, plans, storage and sign-in providers', async () => {

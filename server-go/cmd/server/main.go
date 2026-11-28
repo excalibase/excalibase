@@ -1184,6 +1184,8 @@ type handlerDeps struct {
 	adminAnalyticsHandler *handler.AdminAnalyticsHandler
 	// adminAttentionHandler pages the lists of the console's needs-attention card (EXC-898).
 	adminAttentionHandler *handler.AdminAttentionHandler
+	// adminAudit serves the console's audit log and account page (EXC-856); nil leaves the routes unmounted.
+	adminAudit *handler.AdminAuditHandler
 	// adminAssertions checks Cloudflare Access assertions on the admin host; nil builds the real one from config.
 	adminAssertions adminaccess.Checker
 	// adminGateOverride replaces the gate built from config; tests that probe other layers use it.
@@ -2063,6 +2065,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		adminConsoleHandler:   adminConsole,
 		adminAttentionHandler: handler.NewAdminAttentionHandler(adminconsole.NewAttention(pgstore.NewAdminConsole(sqlStore.DB()))),
 		adminAnalyticsHandler: handler.NewAdminAnalyticsHandler(pgstore.NewAdminConsole(sqlStore.DB()), cfg.Features()),
+		adminAudit:            wireAdminAudit(sqlStore),
 		authHandler:           authHandler,
 		oauthHandler:          oauthHandler,
 		trustVerifyHandler:    trustVerify,
@@ -2575,6 +2578,9 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 		// token may create the principals it manages, which the blanket
 		// unrestricted-write gate below would refuse before the handler runs.
 		r.Route("/service-accounts", func(r chi.Router) { d.svcAcctHandler.Routes(r) })
+		// Before the unrestricted-write gate below: that gate answers a narrowed token with a 403, and
+		// these routes must not answer anyone but a platform admin's session differently from a missing one.
+		mountAdminAudit(r, d)
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireUnrestrictedCredentialForWrites)
 			r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })

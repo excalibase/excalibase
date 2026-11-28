@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useFeatureEnabled } from '../../../hooks/useDeploymentMode';
+import { useFeatureEnabled, useStudioV2 } from '../../../hooks/useDeploymentMode';
 import { useAbuseAnalytics, useUserAnalytics } from '../../../hooks/useAdminAnalytics';
 import { NeedsAttention } from '../NeedsAttention';
 import { AbuseAnalyticsTab } from '../analytics/AbuseAnalyticsTab';
@@ -10,6 +10,7 @@ import { StorageAnalyticsTab } from '../analytics/StorageAnalyticsTab';
 import { TrafficAnalyticsTab } from '../analytics/TrafficAnalyticsTab';
 import { UsersAnalyticsTab } from '../analytics/UsersAnalyticsTab';
 import { AdminTabs, type AdminTab } from './AdminTabs';
+import { AuditLogTab } from './AuditLogTab';
 import { OrgsAdminTable } from './OrgsAdminTable';
 import { ProjectsAdminTable } from './ProjectsAdminTable';
 import { UsersAdminTable } from './UsersAdminTable';
@@ -34,8 +35,9 @@ function countBadge(count: number | undefined, alarming: boolean): AdminTab['bad
 // The tabs an admin sees. Only a platform admin reads the console's own
 // lists (people's addresses), so an operator sees projects and the platform
 // cards. The analytics tabs sit between the lists and the platform cards and
-// exist only for a platform admin while FEATURE_ADMINANALYTICS is on.
-export function adminTabs(canMutate: boolean, analytics = false, badges: AnalyticsBadges = {}): AdminTab[] {
+// exist only for a platform admin while FEATURE_ADMINANALYTICS is on. The
+// audit log tab is part of Studio v2 and shows only with that flag.
+export function adminTabs(canMutate: boolean, analytics = false, badges: AnalyticsBadges = {}, auditLog = false): AdminTab[] {
   const analyticsTabs: AdminTab[] = canMutate && analytics
     ? [
       { id: ANALYTICS_TABS.users, label: 'Sign-ups', startsGroup: true, badge: countBadge(badges.signups, false) },
@@ -48,6 +50,7 @@ export function adminTabs(canMutate: boolean, analytics = false, badges: Analyti
     ...(canMutate ? [{ id: 'attention', label: 'Needs attention' }] : []),
     { id: 'projects', label: 'Projects' },
     ...(canMutate ? [{ id: 'users', label: 'Users' }, { id: 'orgs', label: 'Organizations' }] : []),
+    ...(canMutate && auditLog ? [{ id: 'audit', label: 'Audit log' }] : []),
     ...analyticsTabs,
     { id: 'platform', label: 'Platform' },
   ];
@@ -67,7 +70,8 @@ export function AdminConsoleV2({ canMutate, platform }: AdminConsoleV2Props) {
   const analytics = canMutate && flagOn;
   const signups = useUserAnalytics(analytics).data?.signups;
   const stillActive = useAbuseAnalytics(analytics).data?.refusedStillActive;
-  const tabs = adminTabs(canMutate, analytics, { signups, stillActive });
+  const { enabled: studioV2 } = useStudioV2();
+  const tabs = adminTabs(canMutate, analytics, { signups, stillActive }, studioV2);
   const active = initialTab(tabs, params.get('tab'), params.get('project'));
   const select = (id: string) => {
     const next = new URLSearchParams(params);
@@ -88,6 +92,7 @@ export function AdminConsoleV2({ canMutate, platform }: AdminConsoleV2Props) {
         {active === 'projects' && <ProjectsAdminTable canMutate={canMutate} />}
         {active === 'users' && <UsersAdminTable />}
         {active === 'orgs' && <OrgsAdminTable canMutate={canMutate} />}
+        {active === 'audit' && <AuditLogTab />}
         {active === ANALYTICS_TABS.users && <UsersAnalyticsTab />}
         {active === ANALYTICS_TABS.abuse && <AbuseAnalyticsTab />}
         {active === ANALYTICS_TABS.traffic && <TrafficAnalyticsTab />}

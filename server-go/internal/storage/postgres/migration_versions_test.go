@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -67,4 +68,56 @@ func addMigrationFile(t *testing.T, directions map[int]map[string]string, versio
 		t.Errorf("version %d has two %s migrations: %s and %s", version, direction, previous, name)
 	}
 	directions[version][direction] = name
+}
+
+// An index on audit_log built with a plain CREATE INDEX holds a SHARE lock that
+// blocks inserts for the whole build, and migrations run before the listener
+// starts. Each is its own file so CONCURRENTLY runs outside a transaction, and
+// has no IF NOT EXISTS: a failed concurrent build leaves an INVALID index that
+// IF NOT EXISTS would then accept as present.
+func TestAuditIndexMigrationsBuildOneIndexConcurrently(t *testing.T) {
+	names := map[int]string{122: "idx_audit_log_user_id_id", 123: "idx_audit_log_resource_id_id", 124: "idx_audit_log_project_id_id", 125: "idx_audit_log_action_prefix"}
+	for version, index := range names {
+		up, down := migrationPair(t, version)
+		if !strings.Contains(up, "CREATE INDEX CONCURRENTLY "+index) || strings.Contains(strings.ToUpper(up), "IF NOT EXISTS") || strings.Count(up, ";") != 1 {
+			t.Errorf("version %d up must be one CREATE INDEX CONCURRENTLY %s with no IF NOT EXISTS, got %q", version, index, up)
+		}
+		if !strings.Contains(down, "DROP INDEX CONCURRENTLY IF EXISTS "+index) || strings.Count(down, ";") != 1 {
+			t.Errorf("version %d down must be one DROP INDEX CONCURRENTLY IF EXISTS %s, got %q", version, index, down)
+		}
+	}
+}
+
+// migrationPair reads the up and down files of one version.
+func migrationPair(t *testing.T, version int) (up, down string) {
+	t.Helper()
+	files, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		match := migrationFile.FindStringSubmatch(file.Name())
+		if match == nil || mustAtoi(t, match[1]) != version {
+			continue
+		}
+		body, err := migrationsFS.ReadFile("migrations/" + file.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if match[2] == "up" {
+			up = string(body)
+		} else {
+			down = string(body)
+		}
+	}
+	return up, down
+}
+
+func mustAtoi(t *testing.T, text string) int {
+	t.Helper()
+	n, err := strconv.Atoi(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }

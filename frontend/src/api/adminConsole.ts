@@ -180,3 +180,66 @@ export const suspendUser = async (userId: string, reason: string, reasonCode?: s
 
 export const unsuspendUser = async (userId: string, reason: string) =>
   (await api.post<SuspendResult>(`/admin/console/users/${userId}/unsuspend`, { reason })).data;
+
+// One entry of the platform audit log (EXC-856).
+export interface AuditRow {
+  id: string;
+  at?: string;
+  actorId?: string;
+  actorEmail?: string;
+  action: string;
+  resource?: string;
+  resourceId?: string;
+  targetEmail?: string;
+  details?: string;
+  ip?: string;
+}
+
+// The log has no total: it is read by keyset, and the next page starts at nextCursor.
+export interface AuditPage {
+  items: AuditRow[];
+  nextCursor?: string;
+}
+
+export interface AuditFilter {
+  actor?: string;
+  action?: string;
+  target?: string;
+}
+
+export const AUDIT_PAGE_SIZE = 25;
+
+export const listAudit = async (filter: AuditFilter, cursor?: string) =>
+  (await api.get<AuditPage>('/admin/audit/', {
+    params: {
+      limit: AUDIT_PAGE_SIZE,
+      actor: filter.actor || undefined,
+      action: filter.action || undefined,
+      target: filter.target || undefined,
+      ...(cursor ? { cursor } : {}),
+    },
+  })).data;
+
+export interface UserTrust { state: string; method: string; reason: string; decidedAt?: string }
+export interface TrustChange { from?: string; to: string; method: string; reason: string; actor: string; at?: string }
+export interface SuspensionEvent { action: string; actorId?: string; actorEmail?: string; reason?: string; at?: string }
+export interface SignInMethod { kind: 'password' | 'provider'; provider?: string; email?: string; linkedAt?: string }
+
+// One account's page. It carries no credential, hash or token.
+export interface UserDetail {
+  profile: {
+    id: string; email: string; username: string; role: string; status: AccountStatus;
+    tempMail?: boolean; emailVerified: boolean; emailVerifiedAt?: string; signedUpAt?: string;
+    lastLoginAt?: string; lastLoginIp?: string; trust?: UserTrust;
+  };
+  suspension: { suspended: boolean; reason?: string; reasonCode?: string; suspendedAt?: string };
+  suspensions: SuspensionEvent[];
+  trustHistory: TrustChange[];
+  orgs: { id: string; name: string; slug: string; tier: string; role: string; owner: boolean }[];
+  projects: { projectId: string; name: string; orgId: string; orgName: string; status: string }[];
+  signIn: SignInMethod[];
+  audit: AuditRow[];
+}
+
+export const getUserDetail = async (userId: string) =>
+  (await api.get<UserDetail>(`/admin/accounts/${encodeURIComponent(userId)}`)).data;

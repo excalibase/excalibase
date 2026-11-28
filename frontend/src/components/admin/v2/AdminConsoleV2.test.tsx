@@ -12,10 +12,17 @@ vi.mock('../NeedsAttention', () => ({ NeedsAttention: () => <div>attention</div>
 vi.mock('./ProjectsAdminTable', () => ({ ProjectsAdminTable: () => <div>projects list</div> }));
 vi.mock('./UsersAdminTable', () => ({ UsersAdminTable: () => <div>users list</div> }));
 vi.mock('./OrgsAdminTable', () => ({ OrgsAdminTable: () => <div>orgs list</div> }));
+vi.mock('./AuditLogTab', () => ({ AuditLogTab: () => <div>audit log list</div> }));
 
 describe('which tabs an admin sees', () => {
   test('a platform admin sees every section', () => {
     expect(adminTabs(true).map((t) => t.id)).toEqual(['attention', 'projects', 'users', 'orgs', 'platform']);
+  });
+
+  test('the audit log tab is for a platform admin on studio v2 only', () => {
+    expect(adminTabs(true, false, {}, true).map((t) => t.id)).toEqual(['attention', 'projects', 'users', 'orgs', 'audit', 'platform']);
+    expect(adminTabs(true).map((t) => t.id)).not.toContain('audit');
+    expect(adminTabs(false, false, {}, true).map((t) => t.id)).toEqual(['projects', 'platform']);
   });
 
   test('an operator sees projects and the platform cards, never the people lists', () => {
@@ -72,6 +79,25 @@ function renderConsole(canMutate: boolean, path = '/admin', features: Record<str
 describe('AdminConsoleV2', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  test('with studio v2 off the audit log tab is not offered and its address is ignored', async () => {
+    renderConsole(true, '/admin?tab=audit', { studio_v2: false });
+    await waitFor(() => expect(vi.mocked(api.get)).toHaveBeenCalledWith('/config'));
+    expect(screen.getByText('attention')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Audit log' })).toBeNull();
+    expect(screen.queryByText('audit log list')).toBeNull();
+  });
+
+  test('the audit log is a tab for a platform admin and absent for an operator', async () => {
+    const { unmount } = renderConsole(true, '/admin?tab=audit', { studio_v2: true });
+    expect(await screen.findByText('audit log list')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Audit log' })).toHaveAttribute('aria-selected', 'true');
+    unmount();
+    renderConsole(false, '/admin?tab=audit', { studio_v2: true });
+    await screen.findByText('projects list');
+    expect(screen.queryByRole('tab', { name: 'Audit log' })).toBeNull();
+    expect(screen.queryByText('audit log list')).toBeNull();
+  });
+
   test('shows one list at a time and switches with a click', async () => {
     renderConsole(true);
     expect(screen.getByText('attention')).toBeInTheDocument();
@@ -99,10 +125,10 @@ describe('AdminConsoleV2', () => {
   });
 
   test('with the flag on, arrow keys walk through the analytics tabs and the chips row follows them', async () => {
-    renderConsole(true, '/admin?tab=orgs', { adminanalytics: true });
+    renderConsole(true, '/admin?tab=audit', { adminanalytics: true, studio_v2: true });
     await screen.findByRole('tab', { name: /Sign-ups/ });
     expect(screen.queryByRole('group', { name: 'Needs attention' })).toBeNull();
-    screen.getByRole('tab', { name: 'Organizations' }).focus();
+    screen.getByRole('tab', { name: 'Audit log' }).focus();
     await userEvent.keyboard('{ArrowRight}');
     expect(screen.getByRole('tab', { name: /Sign-ups/ })).toHaveFocus();
     expect(screen.getByLabelText('Needs attention')).toBeInTheDocument();

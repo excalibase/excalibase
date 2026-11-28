@@ -11,6 +11,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/go-chi/chi/v5"
+	"github.com/lib/pq"
 )
 
 // ConsoleReads is what the console's pages read.
@@ -223,6 +224,12 @@ func consoleActor(r *http.Request) adminconsole.Actor {
 	return actor
 }
 
+// isStatementTimeout is whether Postgres cancelled the query for running past statement_timeout (57014).
+func isStatementTimeout(err error) bool {
+	var pgErr *pq.Error
+	return errors.As(err, &pgErr) && pgErr.Code == "57014"
+}
+
 // consoleFailure answers a refusal in the admin's words and anything else as a
 // bare 500: the detail of a database error stays in the log.
 func consoleFailure(w http.ResponseWriter, what string, err error) {
@@ -233,6 +240,9 @@ func consoleFailure(w http.ResponseWriter, what string, err error) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, adminconsole.ErrProtectedAccount):
 		httpError(w, err.Error(), http.StatusConflict)
+	case isStatementTimeout(err):
+		log.Printf("WARN: admin console %s: the query ran out of time: %v", what, err)
+		httpError(w, "that took too long: narrow the filter and try again", http.StatusServiceUnavailable)
 	default:
 		log.Printf("ERROR: admin console %s: %v", what, err)
 		httpError(w, "admin console request failed", http.StatusInternalServerError)

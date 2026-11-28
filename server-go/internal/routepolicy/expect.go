@@ -148,6 +148,9 @@ func expectSession(row Row, method string, p Principal) Expectation {
 	if row.Param == ParamProject && p.ForeignProject {
 		return Deny404
 	}
+	if row.HiddenFromOthers {
+		return expectHidden(p)
+	}
 	if tokenRefused(row, method, p) {
 		return Deny403
 	}
@@ -164,6 +167,15 @@ func expectSession(row Row, method string, p Principal) Expectation {
 		return Deny403
 	}
 	return expectTenant(row, p)
+}
+
+// expectHidden is the outcome on a route only a platform admin's session may
+// see: that caller reaches the handler, everyone else meets a missing route.
+func expectHidden(p Principal) Expectation {
+	if p.PlatformAdmin && !p.ReadOnly && !p.Restricted {
+		return Allow
+	}
+	return Deny404
 }
 
 // tokenRefused is whether the credential's own limits keep it off the route.
