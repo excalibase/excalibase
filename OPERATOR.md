@@ -351,6 +351,34 @@ kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-pa
 # Open http://localhost:33000  →  Excalibase folder
 ```
 
+### 5.1. Loki object storage (EXC-905)
+
+By default Loki keeps its chunks and index on a local disk (Kubernetes: a 10 Gi volume;
+single host: the `excalibase-platform-logs` volume), so logs are lost with the disk and
+capped by it. With object storage on, chunks and index go to S3-compatible storage
+(Cloudflare R2 in production) and the disk holds the WAL and caches only.
+
+Both modes work the same way: a new `schema_config` period with `object_store: s3` starts
+on a day you choose (`from`, a date after you turn it on), and the filesystem period stays,
+so older lines stay readable until retention ages them out. Lines written before `from`
+live on the disk and are lost with it; lines from `from` on are in the bucket.
+
+Needed first, an owner step: a bucket used by nothing else, an API token limited to it, and
+a lifecycle rule (expire after the longest retention plus 7 days; abort incomplete multipart
+uploads after 1 day). Never reuse a tenant key (`r2-creds`, backups, files, the bundled
+store): both modes refuse it.
+
+- Kubernetes (chart `platform-aio`, repo excalibase-service): `logs.objectStorage.enabled`,
+  `.endpoint`, `.bucket`, `.region`, `.from`, `.credentialsSecret` (a Secret of its own with
+  `ACCESS_KEY_ID` and `ACCESS_SECRET_KEY`). Step by step, with verification and rollback:
+  `charts/platform-aio/runbooks/loki-object-storage.md` there.
+- Single host: `./init.sh ... --host-logs-s3` instead of `--host-logs`, then fill the blank
+  `LOG_S3_*` lines in `.env`; `docker compose up -d`. See "Logs in object storage" in
+  `docs/deployment/docker-local.md`.
+
+Verify: new lines are found by a project's Logs page, and after about 15 minutes
+`s3 ls` of the bucket shows chunks under `fake/` and the index under `index/`.
+
 ## 6. Backup + restore
 
 ### What a restore into a new project carries

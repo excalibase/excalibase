@@ -19,7 +19,7 @@ x-watcher-image: &watcher_image docker.io/excalibase/excalibase-watcher-go@sha25
 # connections to the host; the tenants' also drop metadata and private ranges.
 # Project networks with a route out or a host address are on bridges exnet<hash>, under
 # one wildcard rule in place before any of them exists (EXC-687).
-x-bridge-networks: &bridge_networks excalibase-platform,excalibase-engine,excalibase-tenants,excalibase-edge,excalibase-dataplane,excalibase-metrics,excalibase-cdc,excalibase-logs,excalibase-drains,excalibase-drains-out,excalibase-egress
+x-bridge-networks: &bridge_networks excalibase-platform,excalibase-engine,excalibase-tenants,excalibase-edge,excalibase-dataplane,excalibase-metrics,excalibase-cdc,excalibase-logs,excalibase-logs-out,excalibase-drains,excalibase-drains-out,excalibase-egress
 # The platform's long-running containers host monitoring reads (EXC-670): the
 # proxy admits their stats and state, by these exact names, and nothing else of theirs.
 x-platform-containers: &platform_containers excalibase-postgres,excalibase-nats,excalibase-objectstore,excalibase-engine-proxy,excalibase-provisioning,excalibase-studio,excalibase-auth,excalibase-graphql,excalibase-edge,excalibase-host-firewall
@@ -28,6 +28,23 @@ x-hardened: &hardened
     - no-new-privileges:true
   cap_drop:
     - ALL
+
+# Both Loki services (EXC-672, EXC-905) share this.
+x-loki-base: &loki_base
+  image: docker.io/grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193
+  command: ["-config.file=/etc/loki/loki.yaml", "-config.expand-env=true", "-target=all"]
+  user: "10001:10001"
+  read_only: true
+  tmpfs:
+    - /tmp
+  mem_limit: ${LOKI_MEMORY:-512m}
+  pids_limit: 256
+  cpus: ${LOKI_CPUS:-0.5}
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  restart: unless-stopped
 
 services:
   # Refuses to start the stack on a known, weak or reused secret.
@@ -45,6 +62,18 @@ services:
       AUTH_HOOKS_DENY_CIDRS: ${AUTH_HOOKS_DENY_CIDRS:-}
       FEATURE_LOGDRAINS: ${FEATURE_LOGDRAINS:-false}
       LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
+      # Stored logs in object storage (EXC-905): the profile and its values, which must be the logs' own.
+      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
+      LOG_S3_ENDPOINT: ${LOG_S3_ENDPOINT:-}
+      LOG_S3_BUCKET: ${LOG_S3_BUCKET:-}
+      LOG_S3_REGION: ${LOG_S3_REGION:-}
+      LOG_S3_FROM: ${LOG_S3_FROM:-}
+      LOG_S3_ACCESS_KEY_ID: ${LOG_S3_ACCESS_KEY_ID:-}
+      LOG_S3_SECRET_ACCESS_KEY: ${LOG_S3_SECRET_ACCESS_KEY:-}
+      BACKUP_DEFAULT_ACCESS_KEY_ID: ${BACKUP_DEFAULT_ACCESS_KEY_ID:-excalibase-backups}
+      BACKUP_DEFAULT_SECRET_ACCESS_KEY: ${BACKUP_DEFAULT_SECRET_ACCESS_KEY:-}
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-excalibase-files}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
       # The host firewall (EXC-683): on Docker, on unless HOST_FIREWALL=off, on a release that has it.
       HOST_FIREWALL: ${HOST_FIREWALL:-}
       APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
@@ -564,10 +593,9 @@ services:
   # each project container's output through the engine proxy and pushes it
   # here. On its own network, which only provisioning joins.
   loki:
-    image: docker.io/grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193
+    <<: *loki_base
     container_name: excalibase-loki
     profiles: ["hostlogs"]
-    command: ["-config.file=/etc/loki/loki.yaml", "-config.expand-env=true", "-target=all"]
     environment:
       LOG_RETENTION: ${LOG_RETENTION:-168h}
       LOG_RETENTION_FREE: ${LOG_RETENTION_FREE:-24h}
@@ -576,17 +604,36 @@ services:
     volumes:
       - ./loki/loki.yaml:/etc/loki/loki.yaml:ro,z
       - logs_data:/loki
-    user: "10001:10001"
-    read_only: true
-    tmpfs:
-      - /tmp
-    mem_limit: ${LOKI_MEMORY:-512m}
-    pids_limit: 256
-    cpus: ${LOKI_CPUS:-0.5}
-    <<: *hardened
     networks:
       - logs
-    restart: unless-stopped
+
+  # The same Loki with chunks and index in S3-compatible storage (EXC-905; init.sh
+  # --host-logs-s3, which selects this profile in place of hostlogs). The volume keeps
+  # the WAL, the caches and the chunks written before LOG_S3_FROM. Its own network
+  # reaches the bucket and nothing else joins it.
+  loki-s3:
+    <<: *loki_base
+    container_name: excalibase-loki
+    profiles: ["hostlogs-s3"]
+    command: ["-config.file=/etc/loki/loki.yaml", "-config.expand-env=true", "-target=all"]
+    environment:
+      LOG_RETENTION: ${LOG_RETENTION:-168h}
+      LOG_RETENTION_FREE: ${LOG_RETENTION_FREE:-24h}
+      LOG_RETENTION_STANDARD: ${LOG_RETENTION_STANDARD:-168h}
+      LOG_RETENTION_ENTERPRISE: ${LOG_RETENTION_ENTERPRISE:-168h}
+      LOG_S3_ENDPOINT: ${LOG_S3_ENDPOINT:-}
+      LOG_S3_BUCKET: ${LOG_S3_BUCKET:-}
+      LOG_S3_REGION: ${LOG_S3_REGION:-}
+      LOG_S3_FROM: ${LOG_S3_FROM:-}
+      LOG_S3_ACCESS_KEY_ID: ${LOG_S3_ACCESS_KEY_ID:-}
+      LOG_S3_SECRET_ACCESS_KEY: ${LOG_S3_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./loki/loki-s3.yaml:/etc/loki/loki.yaml:ro,z
+      - logs_data:/loki
+    networks:
+      logs:
+        aliases: [loki]
+      logs-out: {}
 
   # Log drains (EXC-658; init.sh --log-drains): POSTs the batches provisioning leases on its
   # internal port to each drain's HTTPS endpoint. No engine socket and no platform network.
@@ -940,6 +987,10 @@ networks:
   logs:
     name: excalibase-logs
     internal: true
+  # The S3 variant's way out to its bucket (EXC-905); only loki-s3 joins it.
+  logs-out:
+    name: excalibase-logs-out
+    enable_ipv6: false
   # provisioning and the log forwarder alone (EXC-658). Internal: no route in or out.
   drains:
     name: excalibase-drains

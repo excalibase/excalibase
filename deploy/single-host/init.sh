@@ -5,7 +5,7 @@
 #
 #   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
 #             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none] [--documentdb] [--host-metrics]
-#             [--host-logs] [--log-drains]
+#             [--host-logs | --host-logs-s3] [--log-drains]
 #             [--auth-hooks] [--no-host-firewall] [--app-userns auto|per-app|shared]
 #   ./init.sh --grow-subids <platform user> [--max-apps 100]      (as root, once; see below)
 #
@@ -26,6 +26,11 @@
 # --host-logs: stored project log search: the bundled Loki (compose profile hostlogs)
 # keeps each project container's output for LOG_RETENTION (168h), searchable in Studio
 # after the container is gone; at most HOST_LOGS_DAILY_MB (64) per project per day.
+# --host-logs-s3: the same, with chunks and index in S3-compatible storage (compose profile
+# hostlogs-s3) so logs survive losing this disk and are not capped by it. Instead of --host-logs.
+# It writes blank LOG_S3_ENDPOINT, _BUCKET, _REGION, _FROM (the day the s3 period starts: a day
+# ahead), _ACCESS_KEY_ID and _SECRET_ACCESS_KEY for you to fill, with a bucket and key of their
+# own; the stack refuses to start until they are (OPERATOR.md, Loki object storage).
 # --auth-hooks: end-user auth hooks, signed calls to each project's own endpoint. The addresses
 # the install's names resolve to are refused to them; behind a CDN or proxy, edit AUTH_HOOKS_DENY_CIDRS.
 # --log-drains: project Admins forward their database logs to Datadog or an HTTPS endpoint
@@ -103,6 +108,8 @@ apps=
 documentdb=
 host_metrics=
 host_logs=
+host_logs_fs=
+host_logs_s3=
 log_drains=
 host_firewall=1
 app_domain=
@@ -126,7 +133,8 @@ while [ $# -gt 0 ]; do
     --documentdb) documentdb="DOCUMENTDB_ENABLED=true"; shift ;;
     --host-metrics) host_metrics="FEATURE_HOSTMETRICS=true
 HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev"; shift ;;
-    --host-logs) host_logs="FEATURE_HOSTLOGS=true"; shift ;;
+    --host-logs) host_logs="FEATURE_HOSTLOGS=true"; host_logs_fs=1; shift ;;
+    --host-logs-s3) host_logs="FEATURE_HOSTLOGS=true"; host_logs_s3=1; shift ;;
     --auth-hooks) auth_hooks=1; shift ;;
     --log-drains) log_drains=1; shift ;;
     --no-host-firewall) host_firewall=; shift ;;
@@ -138,6 +146,11 @@ HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev"; shift ;;
     *) usage ;;
   esac
 done
+
+if [ -n "$host_logs_fs" ] && [ -n "$host_logs_s3" ]; then
+  echo "init.sh: --host-logs and --host-logs-s3 are two stores for the same logs; pick one" >&2
+  exit 2
+fi
 
 # One range of 65536 ids per app, after the shared one. Only ever appends a line after
 # every other entry of the file, so no id is handed out twice and nothing is rewritten.
@@ -386,10 +399,21 @@ if [ "$engine" = docker ] && [ -n "$host_firewall" ]; then
 elif [ "$engine" = docker ]; then
   firewall_env="HOST_FIREWALL=off"
 fi
-[ -n "$host_logs" ] && profiles=${profiles:+$profiles,}hostlogs
+if [ -n "$host_logs" ]; then
+  logs_profile=hostlogs
+  [ -z "$host_logs_s3" ] || logs_profile=hostlogs-s3
+  profiles=${profiles:+$profiles,}$logs_profile
+fi
 [ -n "$log_drains" ] && profiles=${profiles:+$profiles,}logdrains
 profiles=${profiles:+COMPOSE_PROFILES=$profiles}
-for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$profiles" "$firewall_env" "$hooks" "$drains"; do
+logs_s3_blanks=
+[ -n "$host_logs_s3" ] && logs_s3_blanks="LOG_S3_ENDPOINT=
+LOG_S3_BUCKET=
+LOG_S3_REGION=
+LOG_S3_FROM=
+LOG_S3_ACCESS_KEY_ID=
+LOG_S3_SECRET_ACCESS_KEY="
+for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$logs_s3_blanks" "$profiles" "$firewall_env" "$hooks" "$drains"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"

@@ -63,6 +63,19 @@ sh "$DIR/../init.sh" --env-file "$WORK/logs.env" --domain example.com --admin-em
 grep -q '^FEATURE_HOSTLOGS=true$' "$WORK/logs.env" && grep -q '^COMPOSE_PROFILES=hostlogs$' "$WORK/logs.env" \
   || fail "--host-logs not written"
 ! grep -q '^FEATURE_LOGDRAINS\|^LOG_FORWARDER' "$WORK/.env" "$WORK/logs.env" || fail "log drains on without --log-drains"
+# EXC-905: --host-logs-s3 stores logs in S3-compatible storage; the values to fill come blank.
+sh "$DIR/../init.sh" --env-file "$WORK/logs-s3.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-logs-s3 >/dev/null
+grep -qx 'FEATURE_HOSTLOGS=true' "$WORK/logs-s3.env" && grep -qx 'COMPOSE_PROFILES=hostlogs-s3' "$WORK/logs-s3.env" \
+  || fail "--host-logs-s3 profile: $(grep -E 'HOSTLOGS|PROFILES' "$WORK/logs-s3.env")"
+for key in LOG_S3_ENDPOINT LOG_S3_BUCKET LOG_S3_REGION LOG_S3_FROM LOG_S3_ACCESS_KEY_ID LOG_S3_SECRET_ACCESS_KEY; do
+  grep -qx "$key=" "$WORK/logs-s3.env" || fail "--host-logs-s3 wrote no blank $key"
+done
+! grep -q '^LOG_S3_' "$WORK/logs.env" "$WORK/.env" || fail "object storage values without --host-logs-s3"
+if sh "$DIR/../init.sh" --env-file "$WORK/both.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-logs --host-logs-s3 >/dev/null 2>&1; then
+  fail "--host-logs with --host-logs-s3 accepted: two stores"
+fi
 printf '#!/bin/sh\ncase $1 in api.*) echo "203.0.113.7 STREAM $1"; echo "2001:db8::7 STREAM $1" ;; esac\n' > "$WORK/resolve"; chmod +x "$WORK/resolve"
 RESOLVE_HOSTS="$WORK/resolve" HOST_IF_INET6="$WORK/no-ipv6" sh "$DIR/../init.sh" --env-file "$WORK/drains.env" --domain example.com --admin-email me@example.com \
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --log-drains >/dev/null

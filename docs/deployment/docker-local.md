@@ -608,6 +608,45 @@ in the engine's own log meanwhile. Lines are cut at 16 KiB. Text compresses abou
 kept 7 days take about 0.5-1 GiB. Loki is limited to 512 MiB of memory and half
 a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 
+### Logs in object storage
+
+By default Loki keeps its chunks on the host disk (the `excalibase-platform-logs`
+volume): logs are lost with it and capped by it (EXC-905). To keep them in S3-compatible
+storage (Cloudflare R2, S3, B2), use `--host-logs-s3` in place of `--host-logs`
+(`--host-logs` with it is refused):
+
+```bash
+./init.sh --domain example.com --admin-email you@example.com --host-logs-s3
+# fill the blank LOG_S3_* lines it wrote in .env, then
+docker compose up -d
+```
+
+`--host-logs-s3` writes `FEATURE_HOSTLOGS=true`, `COMPOSE_PROFILES=hostlogs-s3` (the
+`loki-s3` service, `loki/loki-s3.yaml`) and the blank values below. The preflight service
+refuses to start the stack while one is empty, `LOG_S3_FROM` is not a real date, or the key
+is the install's own (a tenant's backup or file key, the bundled store's, the database's).
+Create a bucket used by nothing else, with a key limited to it, and a lifecycle rule that
+expires objects after the longest retention plus 7 days and aborts incomplete multipart
+uploads after 1 day.
+
+`LOG_S3_FROM` is the first day the bucket is used, UTC: a day after you start the stack.
+The filesystem period stays first, so lines before it are read from the volume until
+retention ages them out; do not set it in the past (older lines of that day and later on
+the volume would be hidden), and never move it earlier. Lines before it are lost with the
+disk; lines after it are in the bucket. The `loki-s3` service also joins `excalibase-logs-out`
+(guarded by the host firewall like the other platform bridges) to reach the bucket; nothing
+else joins it. To switch an existing `--host-logs` install, replace `hostlogs` with
+`hostlogs-s3` in `COMPOSE_PROFILES`, add the six values and `docker compose up -d`.
+Verify: a new line is found by the project's Logs page, and after about 15 minutes the
+bucket holds `fake/` (chunks) and `index/`.
+
+| `.env` | Meaning |
+|---|---|
+| `LOG_S3_ENDPOINT` | `https://<account>.r2.cloudflarestorage.com`, or `http://host:port` for a local store |
+| `LOG_S3_BUCKET`, `LOG_S3_REGION` | the bucket, and its region (`auto` for R2) |
+| `LOG_S3_FROM` | the first day the bucket is used, `YYYY-MM-DD` |
+| `LOG_S3_ACCESS_KEY_ID`, `LOG_S3_SECRET_ACCESS_KEY` | a key of its own for that bucket |
+
 | `.env` | Default | Meaning |
 |---|---|---|
 | `FEATURE_HOSTLOGS` | unset (`true` with `--host-logs`) | store and search project logs in the bundled Loki |
