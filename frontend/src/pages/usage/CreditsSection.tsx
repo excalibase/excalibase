@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { statementCsvHref, useAcceptCreditTerms, useOrgCredits, type CreditEntry, type CreditOverview } from '../../api/credits';
+import { statementCsvHref, useAcceptCreditTerms, useOrgCredits, type CreditBurn, type CreditEntry, type CreditOverview } from '../../api/credits';
 import { formatInstant } from '../../utils/instant';
 import { serverErrorMessage } from '../../utils/serverError';
 import { Line, Section } from './UsageParts';
@@ -63,6 +63,39 @@ function History({ entries }: { readonly entries: readonly CreditEntry[] }) {
   );
 }
 
+const plural = (count: number) => `${count} day${count === 1 ? '' : 's'}`;
+
+function BurnDays({ days }: { readonly days: CreditBurn['days'] }) {
+  const largest = Math.max(1, ...days.map((day) => day.micros));
+  return (
+    <ul aria-label={`Burn over the last ${days.length} days`} className="grid grid-cols-7 gap-1 text-xs text-text-secondary">
+      {days.map((day) => (
+        <li key={day.day} className="flex flex-col items-center gap-1">
+          <span className="flex h-12 w-full items-end"><span className="w-full rounded-sm bg-purple-500/70" style={{ height: `${Math.max(2, Math.round((day.micros / largest) * 100))}%` }} /></span>
+          <span>{day.day}</span>
+          <span className="text-text-primary">{dollars(day.micros)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// What the org spends a day and when that runs out; nothing while usage is not billed.
+function Burn({ overview }: { readonly overview: CreditOverview }) {
+  if (!overview.metering) return <p className="text-text-secondary">Usage is not billed yet, so your balance only changes when credit is added or expires.</p>;
+  const { burn, nextExpiry } = overview;
+  const runOutLeft = daysLeft(burn.runOutAt, new Date());
+  const expiresFirst = burn.runOutAt !== null && nextExpiry !== null && Date.parse(nextExpiry) < Date.parse(burn.runOutAt);
+  return (
+    <>
+      <Line label="Burn per day" value={dollars(burn.perDayMicros)} />
+      <Line label="Projected run-out" value={burn.runOutAt ? `${formatInstant(burn.runOutAt, 'date')} (${plural(runOutLeft ?? 0)})` : 'No usage yet'} />
+      {expiresFirst && <p className="text-text-secondary">Your credit expires before it runs out at this rate.</p>}
+      <BurnDays days={burn.days} />
+    </>
+  );
+}
+
 function Statement({ orgId }: { readonly orgId: string }) {
   const months = recentMonths(new Date(), STATEMENT_MONTHS);
   const [month, setMonth] = useState(months[0]);
@@ -92,6 +125,7 @@ export function CreditsSection({ orgId }: { readonly orgId: string }) {
       {data.lots.length > 1 && data.lots.map((lot) => (
         <Line key={lot.id} label={lot.expiresAt ? `Expires ${formatInstant(lot.expiresAt, 'date')}` : 'Does not expire'} value={dollars(lot.remainingMicros)} />
       ))}
+      <Burn overview={data} />
       <TrialOffer orgId={orgId} overview={data} />
       <h3 className="pt-2 font-medium text-text-primary">History</h3>
       <History entries={data.entries} />

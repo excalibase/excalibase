@@ -3,6 +3,7 @@ import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CreditsSection } from './CreditsSection';
 import { api } from '../../api/client';
+import { formatInstant } from '../../utils/instant';
 import { creditOverview, mountWith, project } from '../../test/homeFixtures';
 
 vi.mock('../../api/client', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }));
@@ -65,5 +66,51 @@ describe('CreditsSection', () => {
   test('a failed read says so', async () => {
     mountSection(undefined);
     expect(await screen.findByText(/Could not load your credit/)).toBeInTheDocument();
+  });
+
+  describe('burn', () => {
+    const week = ['2026-11-25', '2026-11-26', '2026-11-27', '2026-11-28', '2026-11-29', '2026-11-30', '2026-12-01'];
+    const burning = (extra: object = {}) => creditOverview({
+      balanceMicros: 40_000_000,
+      burn: { perDayMicros: 4_000_000, runOutAt: '2026-12-11T00:00:00Z', days: week.map((day, i) => ({ day, micros: i === 6 ? 5_000_000 : 0 })) },
+      ...extra,
+    });
+
+    test('shows what the org burns a day and the day the credit runs out', async () => {
+      mountSection(burning());
+      const section = within(await screen.findByRole('region', { name: 'Credits' }));
+      expect(section.getByText('Burn per day').nextSibling).toHaveTextContent('$4.00');
+      const runOut = section.getByText('Projected run-out').nextSibling;
+      expect(runOut).toHaveTextContent(formatInstant('2026-12-11T00:00:00Z', 'date'));
+      expect(runOut).toHaveTextContent('10 days');
+    });
+
+    test('lists the last seven days, each with its own amount', async () => {
+      mountSection(burning());
+      const days = within(await screen.findByRole('list', { name: 'Burn over the last 7 days' })).getAllByRole('listitem');
+      expect(days).toHaveLength(7);
+      expect(days[6]).toHaveTextContent('2026-12-01');
+      expect(days[6]).toHaveTextContent('$5.00');
+      expect(days[0]).toHaveTextContent('$0.00');
+    });
+
+    test('says when the credit expires before it would run out', async () => {
+      mountSection(burning({ nextExpiry: '2026-12-05T00:00:00Z' }));
+      expect(await screen.findByText(/expires before it runs out/)).toBeInTheDocument();
+    });
+
+    test('says nothing about a run-out when nothing has been used', async () => {
+      mountSection(creditOverview());
+      const section = within(await screen.findByRole('region', { name: 'Credits' }));
+      expect(section.getByText('Burn per day').nextSibling).toHaveTextContent('$0.00');
+      expect(section.getByText('Projected run-out').nextSibling).toHaveTextContent('No usage yet');
+    });
+
+    test('says usage is not billed yet while metering is off, and shows no burn', async () => {
+      mountSection(creditOverview({ metering: false }));
+      await screen.findByRole('region', { name: 'Credits' });
+      expect(screen.getByText(/Usage is not billed yet/)).toBeInTheDocument();
+      expect(screen.queryByText('Burn per day')).toBeNull();
+    });
   });
 });

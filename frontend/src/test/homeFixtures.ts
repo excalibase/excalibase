@@ -83,6 +83,7 @@ export function creditOverview(extra: object = {}) {
   return {
     orgId: 'org-1', balanceMicros: 300_000_000, lots: [{ id: 1, kind: 'grant_trial', originalMicros: 300_000_000, remainingMicros: 300_000_000, expiresAt: '2027-02-25T00:00:00Z', createdAt: '2026-11-27T00:00:00Z' }],
     entries: [{ id: 1, kind: 'grant_trial', amountMicros: 300_000_000, actor: 'system', reason: 'sign-up credit', createdAt: '2026-11-27T00:00:00Z' }],
+    burn: { perDayMicros: 0, days: [], runOutAt: null }, metering: true,
     nextExpiry: '2027-02-25T00:00:00Z', trial: { state: 'granted', amountMicros: 300_000_000, days: 90 }, billedIn: 'UTC', termsVersion: 'v1', termsUrl: 'https://example.test/terms', ...extra,
   };
 }
