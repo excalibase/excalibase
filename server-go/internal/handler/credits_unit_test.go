@@ -50,6 +50,10 @@ func (l *stubLedger) CreditStatement(context.Context, string, time.Time) (credit
 	return l.statement, l.readErr
 }
 
+func (l *stubLedger) CreditUsageBurn(context.Context, string, time.Time) (credits.UsageBurn, error) {
+	return credits.UsageBurn{}, l.readErr
+}
+
 func (l *stubLedger) CreditTrialState(context.Context, string) (credits.TrialState, error) {
 	return l.trial, nil
 }

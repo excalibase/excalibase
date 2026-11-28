@@ -31,6 +31,9 @@ type readLedger struct {
 	outcomes      map[string]GrantOutcome
 	grantErr      map[string]error
 	granted       []string
+	burn          UsageBurn
+	burnErr       error
+	burnFrom      time.Time
 }
 
 func (l *readLedger) CreditAccount(context.Context, string) (Account, error) {
@@ -40,6 +43,11 @@ func (l *readLedger) CreditAccount(context.Context, string) (Account, error) {
 func (l *readLedger) CreditEntries(_ context.Context, _ string, before int64, limit int) ([]Entry, error) {
 	l.entriesBefore, l.entriesLimit = before, limit
 	return l.entries, nil
+}
+
+func (l *readLedger) CreditUsageBurn(_ context.Context, _ string, from time.Time) (UsageBurn, error) {
+	l.burnFrom = from
+	return l.burn, l.burnErr
 }
 
 func (l *readLedger) CreditTrialState(context.Context, string) (TrialState, error) {
@@ -256,5 +264,43 @@ func TestTheSweeperRunsAtOnceAndStopsWhenAsked(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if leader.asked.Load() > settled+1 {
 		t.Fatalf("it kept running after stop: %d then %d", settled, leader.asked.Load())
+	}
+}
+
+func TestTheOverviewCarriesTheBurnAndWhenTheCreditRunsOut(t *testing.T) {
+	now := time.Date(2026, 12, 8, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-24 * time.Hour)
+	ledger := &readLedger{
+		account: Account{Balance: 10_000_000},
+		trial:   TrialState{State: "granted"},
+		burn:    UsageBurn{Days: []DayBurn{{Day: now.Truncate(24 * time.Hour), Micros: 2_000_000}}, Since: &since},
+	}
+	service := NewService(ledger, Rules{TermsVersion: "v1"}, func() time.Time { return now })
+	overview, err := service.Overview(context.Background(), "o1", "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Burn.PerDay != 2_000_000 || overview.Burn.RunOutAt == nil || !overview.Burn.RunOutAt.Equal(now.Add(5*24*time.Hour)) {
+		t.Fatalf("burn %+v", overview.Burn)
+	}
+	if !ledger.burnFrom.Equal(BurnWindowStart(now)) {
+		t.Fatalf("the ledger is asked for the seven-day window, got %v", ledger.burnFrom)
+	}
+}
+
+func TestAFailureReadingTheBurnFailsTheOverview(t *testing.T) {
+	ledger := &readLedger{trial: TrialState{State: "granted"}, burnErr: errors.New("read failed")}
+	if _, err := newReadService(ledger).Overview(context.Background(), "o1", "u1"); err == nil {
+		t.Fatal("a half page that hides a failed read would show a wrong run-out date")
+	}
+}
+
+func TestTheOverviewSaysWhetherUsageIsBilledYet(t *testing.T) {
+	for _, metered := range []bool{false, true} {
+		service := NewService(&readLedger{trial: TrialState{State: "granted"}}, Rules{Metered: metered}, nil)
+		overview, err := service.Overview(context.Background(), "o1", "u1")
+		if err != nil || overview.Metering != metered {
+			t.Fatalf("metered %v: overview says %v (%v)", metered, overview.Metering, err)
+		}
 	}
 }

@@ -47,7 +47,10 @@ func (s *Service) Rules() Rules { return s.rules }
 // Overview is everything the org's credit page and Home widget show.
 type Overview struct {
 	Account
-	Entries      []Entry    `json:"entries"`
+	Entries []Entry `json:"entries"`
+	Burn    Burn    `json:"burn"`
+	// Metering says usage is billed; with it off the burn is always empty.
+	Metering     bool       `json:"metering"`
 	NextExpiry   *time.Time `json:"nextExpiry"`
 	Trial        TrialView  `json:"trial"`
 	BilledIn     string     `json:"billedIn"`
@@ -75,7 +78,13 @@ func (s *Service) Overview(ctx context.Context, orgID, userID string) (Overview,
 	if err != nil {
 		return Overview{}, err
 	}
-	return Overview{Account: account, Entries: entries, NextExpiry: nextExpiry(account.Lots), Trial: trial, BilledIn: "UTC", TermsVersion: s.rules.TermsVersion}, nil
+	now := s.now()
+	usage, err := s.ledger.CreditUsageBurn(ctx, orgID, BurnWindowStart(now))
+	if err != nil {
+		return Overview{}, err
+	}
+	burn := ComputeBurn(usage, account.Balance, now)
+	return Overview{Account: account, Entries: entries, Burn: burn, Metering: s.rules.Metered, NextExpiry: nextExpiry(account.Lots), Trial: trial, BilledIn: "UTC", TermsVersion: s.rules.TermsVersion}, nil
 }
 
 func nextExpiry(lots []Lot) *time.Time {

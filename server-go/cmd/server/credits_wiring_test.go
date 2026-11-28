@@ -29,6 +29,9 @@ func (matrixLedger) CreditEntries(context.Context, string, int64, int) ([]credit
 func (matrixLedger) CreditStatement(_ context.Context, _ string, month time.Time) (credits.Statement, error) {
 	return credits.Statement{Month: month.Format("2006-01"), Entries: []credits.Entry{}}, nil
 }
+func (matrixLedger) CreditUsageBurn(context.Context, string, time.Time) (credits.UsageBurn, error) {
+	return credits.UsageBurn{}, nil
+}
 func (matrixLedger) CreditTrialState(context.Context, string) (credits.TrialState, error) {
 	return credits.TrialState{State: "none"}, nil
 }
