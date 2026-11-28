@@ -361,6 +361,7 @@ func runServer(cfg config.AppConfig) {
 	stopCredits := startCreditsSweeper(cfg, sqlStore, deps.credits)
 	defer stopCredits()
 	defer startCreditMeter(cfg, sqlStore, deps.credits)()
+	defer startCreditZero(cfg, sqlStore, deps, pauseSvc)()
 	stopAppRollouts := startAppRolloutSweeper(cfg, sqlStore, deps.appDeploySvc)
 	defer stopAppRollouts()
 	stopImageWatcher := startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)
@@ -2187,12 +2188,14 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 		AdminConsole bool `json:"adminConsole"`
 		// Credits is the credit terms Studio's sign-up box asks about; absent while credits are off (EXC-866).
 		Credits *creditTermsBody `json:"credits,omitempty"`
+		// SupportEmail is where a customer writes to add credit or appeal; the same address the mails give.
+		SupportEmail string `json:"supportEmail,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, Sites: cfg.SitesAvailable(),
 			SiteGitBuilds: cfg.SiteGitBuildsOn(),
 			CustomDomains: customDomainsOn(cfg), SiteCustomDomains: cfg.SitesCustomDomainsAvailable(), Features: features.Snapshot(r.Context(), flags),
-			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/"), AdminHost: cfg.AdminHost, AdminConsole: !cfg.AdminConsoleDisabled()}
+			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/"), AdminHost: cfg.AdminHost, AdminConsole: !cfg.AdminConsoleDisabled(), SupportEmail: cfg.SupportEmail}
 		if features.Enabled(r.Context(), flags, features.Credits) {
 			body.Credits = &creditTermsBody{TermsVersion: cfg.Credits.TermsVersion, TermsURL: cfg.Credits.TermsURL}
 		}
@@ -2582,11 +2585,11 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 		// Before the unrestricted-write gate below: that gate answers a narrowed token with a 403, and
 		// these routes must not answer anyone but a platform admin's session differently from a missing one.
 		mountAdminAudit(r, d)
+		r.Route("/analytics", func(r chi.Router) { d.adminAnalyticsHandler.Routes(r) })
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireUnrestrictedCredentialForWrites)
 			r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.adminConsoleHandler.Routes(r) })
-			r.Route("/analytics", func(r chi.Router) { d.adminAnalyticsHandler.Routes(r) })
 			r.Route("/attention", func(r chi.Router) { d.adminAttentionHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.orgHandler.ConsoleRoutes(r) })
 			r.Route("/tiers", func(r chi.Router) {

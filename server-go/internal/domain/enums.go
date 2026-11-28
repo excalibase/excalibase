@@ -184,4 +184,6 @@ const (
 	PauseReasonIdle7Days = "idle_7d"
 	PauseReasonManual    = "manual"
 	PauseReasonTierLimit = "tier_limit"
+	// PauseReasonCredits is written when the org's credit ran out and the grace period passed (EXC-866).
+	PauseReasonCredits = "credits"
 )

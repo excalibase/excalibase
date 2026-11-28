@@ -4,6 +4,7 @@ export const ANALYTICS_TABS = {
   abuse: 'analytics-abuse',
   traffic: 'analytics-traffic',
   storage: 'analytics-storage',
+  credits: 'analytics-credits',
 } as const;
 
 export const isAnalyticsTab = (id: string) => (Object.values(ANALYTICS_TABS) as string[]).includes(id);

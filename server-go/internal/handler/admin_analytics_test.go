@@ -33,7 +33,12 @@ func (f *fakeAnalytics) TrafficAnalytics(_ context.Context, days int) (*admincon
 	return &adminconsole.TrafficAnalytics{WindowDays: days, PeakConnections: 35}, f.err
 }
 
-var analyticsPaths = []string{"/api/admin/analytics/users", "/api/admin/analytics/abuse", "/api/admin/analytics/traffic"}
+func (f *fakeAnalytics) CreditAnalytics(_ context.Context, days int) (*adminconsole.CreditAnalytics, error) {
+	f.days = days
+	return &adminconsole.CreditAnalytics{OrgsAtZero: 4}, f.err
+}
+
+var analyticsPaths = []string{"/api/admin/analytics/users", "/api/admin/analytics/abuse", "/api/admin/analytics/traffic", "/api/admin/analytics/credits"}
 
 func analyticsRouter(role, scopes string, flags features.Flags, reads adminconsole.AnalyticsReader) http.Handler {
 	h := NewAdminAnalyticsHandler(reads, flags)
@@ -55,20 +60,20 @@ func analyticsGet(router http.Handler, path string) *httptest.ResponseRecorder {
 	return w
 }
 
-func TestAdminAnalytics_OnlyAPlatformAdminSessionMayRead(t *testing.T) {
+func TestAdminAnalytics_OnlyAPlatformAdminSessionMayReadAndOthersMeetAMissingRoute(t *testing.T) {
 	on := features.NewStatic(features.AdminAnalytics)
 	for _, role := range []string{"platform_operator", "platform_viewer", "user"} {
 		router := analyticsRouter(role, auth.ScopeSession, on, &fakeAnalytics{})
 		for _, path := range analyticsPaths {
-			if w := analyticsGet(router, path); w.Code != http.StatusForbidden {
-				t.Errorf("%s as %s = %d, want 403", path, role, w.Code)
+			if w := analyticsGet(router, path); w.Code != http.StatusNotFound {
+				t.Errorf("%s as %s = %d, want 404 like a missing route", path, role, w.Code)
 			}
 		}
 	}
 	token := analyticsRouter("platform_admin", auth.ScopeRead, on, &fakeAnalytics{})
 	for _, path := range analyticsPaths {
-		if w := analyticsGet(token, path); w.Code != http.StatusForbidden {
-			t.Errorf("%s with an access token = %d, want 403", path, w.Code)
+		if w := analyticsGet(token, path); w.Code != http.StatusNotFound {
+			t.Errorf("%s with an access token = %d, want 404 like a missing route", path, w.Code)
 		}
 	}
 	admin := analyticsRouter("platform_admin", auth.ScopeSession, on, &fakeAnalytics{})
@@ -114,8 +119,10 @@ func TestAdminAnalytics_PermissionIsCheckedBeforeTheFlag(t *testing.T) {
 	for _, role := range []string{"platform_operator", "platform_viewer", "user"} {
 		router := analyticsRouter(role, auth.ScopeSession, features.NewStatic(), &fakeAnalytics{})
 		for _, path := range analyticsPaths {
-			if w := analyticsGet(router, path); w.Code != http.StatusForbidden {
-				t.Errorf("%s as %s with the flag off = %d, want 403 so the flag's existence is not told to non-admins", path, role, w.Code)
+			off := analyticsGet(router, path)
+			on := analyticsGet(analyticsRouter(role, auth.ScopeSession, features.NewStatic(features.AdminAnalytics), &fakeAnalytics{}), path)
+			if off.Code != http.StatusNotFound || off.Code != on.Code || off.Body.String() != on.Body.String() {
+				t.Errorf("%s as %s: flag off %d %q, flag on %d %q; non-admins must not be told whether the feature exists", path, role, off.Code, off.Body.String(), on.Code, on.Body.String())
 			}
 		}
 	}
@@ -126,5 +133,13 @@ func TestAdminAnalytics_AFailedReadIsABare500(t *testing.T) {
 	w := analyticsGet(router, "/api/admin/analytics/abuse")
 	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "secret_table") {
 		t.Fatalf("got %d %s, want a 500 that leaks nothing", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminAnalytics_CreditsServesTheOrgsAtZero(t *testing.T) {
+	router := analyticsRouter("platform_admin", auth.ScopeSession, features.NewStatic(features.AdminAnalytics), &fakeAnalytics{})
+	w := analyticsGet(router, "/api/admin/analytics/credits")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"orgsAtZero":4`) {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }

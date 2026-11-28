@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { getAbuseAnalytics, getTrafficAnalytics, getUserAnalytics } from '../api/adminAnalytics';
+import { getAbuseAnalytics, getCreditAnalytics, getTrafficAnalytics, getUserAnalytics } from '../api/adminAnalytics';
 
 // Each read is asked for only while the analytics tabs are on, so a server with
 // the flag off is never called (it would answer 404).
@@ -13,3 +13,6 @@ export const useAbuseAnalytics = (enabled: boolean) =>
 
 export const useTrafficAnalytics = (enabled: boolean) =>
   useQuery({ queryKey: ['admin', 'analytics', 'traffic'], queryFn: getTrafficAnalytics, ...options(enabled) });
+
+export const useCreditAnalytics = (enabled: boolean) =>
+  useQuery({ queryKey: ['admin', 'analytics', 'credits'], queryFn: getCreditAnalytics, ...options(enabled) });

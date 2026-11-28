@@ -285,7 +285,7 @@ func (s *PostgresAppStore) Transition(projectID, id string, from []string, to st
 		return nil, err
 	}
 	if _, err := tx.Exec(
-		`UPDATE apps SET status = $3, doc = jsonb_set(doc, '{status}', to_jsonb($3::text))
+		`UPDATE apps SET status = $3, doc = jsonb_set(doc, '{status}', to_jsonb($3::text)), updated_at = now()
 		 WHERE project_id = $1 AND id = $2`, projectID, id, to); err != nil {
 		return nil, fmt.Errorf("record app status: %w", err)
 	}

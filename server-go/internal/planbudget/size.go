@@ -42,9 +42,18 @@ type Refusal struct {
 	Need      Size
 	Left      Size
 	Budget    Size
+	// Step is everything the refused step asked for, in every dimension, not only the one that did not fit.
+	Step Size
+	// CreditExhausted says the ceiling is the free allowance because the org's
+	// credit is used up, not the plan's own budget.
+	CreditExhausted bool
 }
 
 func (r *Refusal) Error() string {
+	if r.CreditExhausted {
+		return fmt.Sprintf("your credit is used up, so this cannot start or grow: it needs %s more %s but only %s is left of your free allowance. Contact support to add credit, or pause or delete other services",
+			r.amount(r.Need), r.Dimension, r.amount(r.Left))
+	}
 	return fmt.Sprintf("plan budget exceeded: this needs %s more %s but only %s is left (your plan allows %s)",
 		r.amount(r.Need), r.Dimension, r.amount(r.Left), r.amount(r.Budget))
 }
@@ -82,7 +91,7 @@ func Decide(used, delta, ceiling Size) error {
 		}
 		left := d.get(ceiling) - d.get(used)
 		if add > left {
-			return &Refusal{Dimension: d.name, Need: d.only(add), Left: d.only(max(left, 0)), Budget: ceiling}
+			return &Refusal{Dimension: d.name, Need: d.only(add), Left: d.only(max(left, 0)), Budget: ceiling, Step: delta}
 		}
 	}
 	return nil

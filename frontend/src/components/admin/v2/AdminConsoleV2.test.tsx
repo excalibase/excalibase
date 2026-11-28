@@ -40,6 +40,22 @@ describe('which tabs an admin sees', () => {
     expect(adminTabs(false, true).map((t) => t.id)).toEqual(['projects', 'platform']);
   });
 
+  test('the credit tab follows the storage tab, for a platform admin with credits on', () => {
+    const ids = (credits: boolean, canMutate = true) => adminTabs(canMutate, true, {}, false, credits).map((t) => t.id);
+    expect(ids(true)).toEqual([
+      'attention', 'projects', 'users', 'orgs', 'analytics-users', ANALYTICS_TABS.abuse, 'analytics-traffic', 'analytics-storage', 'analytics-credits', 'platform',
+    ]);
+    expect(ids(false)).not.toContain('analytics-credits');
+    expect(ids(true, false)).toEqual(['projects', 'platform']);
+    expect(adminTabs(true, false, {}, false, true).map((t) => t.id)).not.toContain('analytics-credits');
+  });
+
+  test('the credit tab shows how many orgs are at $0 beside its name', () => {
+    const tab = adminTabs(true, true, { orgsAtZero: 17 }, false, true).find((t) => t.id === ANALYTICS_TABS.credits);
+    expect(tab?.badge).toEqual({ text: '17', tone: 'neutral' });
+    expect(adminTabs(true, true, {}, false, true).find((t) => t.id === ANALYTICS_TABS.credits)?.badge).toBeUndefined();
+  });
+
   test('the badges carry the counts once they are known and say what is missing before', () => {
     const tabs = adminTabs(true, true, { signups: 292, stillActive: 98 });
     const badge = (id: string) => tabs.find((t) => t.id === id)?.badge;
@@ -66,6 +82,7 @@ function renderConsole(canMutate: boolean, path = '/admin', features: Record<str
     if (url === '/config') return Promise.resolve({ data: { deploymentMode: 'cloud', features } } as never);
     if (url === '/admin/analytics/users') return Promise.resolve({ data: { windowDays: 30, signups: 0, suspended: 0, activeLast7Days: 0, perDay: [], funnel: [], domains: [] } } as never);
     if (url === '/admin/analytics/abuse') return Promise.resolve({ data: { windowDays: 30, perDay: [], proxyRefusals: 0, registryRefusals: 0, refusedUsers: 0, refusedStillActive: 3, suspended: 0, latest: [] } } as never);
+    if (url === '/admin/analytics/credits') return Promise.resolve({ data: { orgsWithCredit: 120, orgsAtZero: 17, orgsWithPausedServices: 5, servicesPaused: 9 } } as never);
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -132,6 +149,21 @@ describe('AdminConsoleV2', () => {
     await userEvent.keyboard('{ArrowRight}');
     expect(screen.getByRole('tab', { name: /Sign-ups/ })).toHaveFocus();
     expect(screen.getByLabelText('Needs attention')).toBeInTheDocument();
+  });
+
+  test('with credits on the Credit tab opens, shows its numbers and wears the count of orgs at $0', async () => {
+    renderConsole(true, '/admin?tab=analytics-credits', { adminanalytics: true, credits: true });
+    expect(await screen.findByText('Orgs at $0')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Credit/ })).toHaveTextContent('17');
+    expect(screen.getByText('Orgs at $0').nextElementSibling).toHaveTextContent('17');
+  });
+
+  test('with credits off there is no Credit tab and the credit numbers are never requested', async () => {
+    renderConsole(true, '/admin?tab=analytics-credits', { adminanalytics: true, credits: false });
+    await screen.findByRole('tab', { name: /Sign-ups/ });
+    await waitFor(() => expect(vi.mocked(api.get)).toHaveBeenCalledWith('/admin/analytics/users'));
+    expect(screen.queryByRole('tab', { name: /Credit/ })).toBeNull();
+    expect(vi.mocked(api.get).mock.calls.some(([url]) => String(url).includes('analytics/credits'))).toBe(false);
   });
 
   test('a chip jumps to the tab that explains it', async () => {

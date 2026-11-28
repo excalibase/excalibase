@@ -33,6 +33,8 @@ type Service struct {
 	ledger Ledger
 	rules  Rules
 	now    func() time.Time
+	zero   ZeroSource
+	grace  time.Duration
 }
 
 func NewService(ledger Ledger, rules Rules, now func() time.Time) *Service {
@@ -55,6 +57,8 @@ type Overview struct {
 	Trial        TrialView  `json:"trial"`
 	BilledIn     string     `json:"billedIn"`
 	TermsVersion string     `json:"termsVersion"`
+	// Zero is the credit-running-out section; nil while credit is not metered.
+	Zero *ZeroView `json:"zero"`
 }
 
 // TrialView is the signed-in person's sign-up credit: what it is, and where they stand.
@@ -84,7 +88,11 @@ func (s *Service) Overview(ctx context.Context, orgID, userID string) (Overview,
 		return Overview{}, err
 	}
 	burn := ComputeBurn(usage, account.Balance, now)
-	return Overview{Account: account, Entries: entries, Burn: burn, Metering: s.rules.Metered, NextExpiry: nextExpiry(account.Lots), Trial: trial, BilledIn: "UTC", TermsVersion: s.rules.TermsVersion}, nil
+	zero, err := s.zeroView(ctx, orgID, account.Balance, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	return Overview{Account: account, Entries: entries, Burn: burn, Metering: s.rules.Metered, NextExpiry: nextExpiry(account.Lots), Trial: trial, BilledIn: "UTC", TermsVersion: s.rules.TermsVersion, Zero: zero}, nil
 }
 
 func nextExpiry(lots []Lot) *time.Time {

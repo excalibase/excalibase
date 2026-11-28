@@ -57,6 +57,14 @@ export interface TrafficAnalytics {
   peakConnections: number;
 }
 
+export interface CreditAnalytics {
+  orgsWithCredit: number;
+  orgsAtZero: number;
+  orgsWithPausedServices: number;
+  servicesPaused: number;
+}
+
 export const getUserAnalytics = async () => (await api.get<UserAnalytics>('/admin/analytics/users')).data;
 export const getAbuseAnalytics = async () => (await api.get<AbuseAnalytics>('/admin/analytics/abuse')).data;
 export const getTrafficAnalytics = async () => (await api.get<TrafficAnalytics>('/admin/analytics/traffic')).data;
+export const getCreditAnalytics = async () => (await api.get<CreditAnalytics>('/admin/analytics/credits')).data;

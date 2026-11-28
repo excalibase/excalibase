@@ -22,7 +22,7 @@ let orgRole = 'owner';
 function route(url: string) {
   const ok = (data: unknown) => Promise.resolve({ data });
   if (url === '/orgs') return ok([{ id: 'org-1', name: 'Acme', role: orgRole }]);
-  if (url === '/config') return ok({ deploymentMode: 'cloud', appHosting: true, sites: true, features: { studio_v2: true } });
+  if (url === '/config') return ok({ deploymentMode: 'cloud', appHosting: true, sites: true, features: { studio_v2: true }, supportEmail: 'help@example.test' });
   if (url === '/tiers') return ok([{ tier: 'FREE', cpu: '1', memory: '2Gi', autoPauseAfterDays: 7 }]);
   if (url === '/provision/p1') return ok(database());
   if (url.endsWith('/metrics/current')) return ok({ activeConnections: 3, maxConnections: 50, diskUsageGB: 2, databaseSizeBytes: 2048 });
@@ -95,6 +95,62 @@ describe('database panel', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
     expect(api.post).toHaveBeenCalledWith('/provision/p1/resume', undefined, expect.anything());
     expect(screen.queryByText('What goes down')).not.toBeInTheDocument();
+  });
+
+  test('a database paused because the credit ran out says so and that it resumes by itself', async () => {
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'credits' }) });
+    expect(await screen.findByText(/paused because your credit is used up/i)).toBeInTheDocument();
+    expect(screen.getByText(/starts again by itself when credit is added/i)).toBeInTheDocument();
+    expect(screen.queryByText(/upgrade/i)).not.toBeInTheDocument();
+  });
+
+  test('a database paused by the user says nothing about credit', async () => {
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'manual' }) });
+    await screen.findByRole('button', { name: 'Resume database' });
+    expect(screen.queryByText(/credit is used up/i)).not.toBeInTheDocument();
+  });
+
+  const creditRefusal = (step: { cpuMilli: number; memoryBytes: number }) => ({
+    response: { status: 409, data: { code: 'plan_budget_exceeded', creditExhausted: true, dimension: 'CPU', need: { cpuMilli: 500 }, step, budget: { cpuMilli: 1000, memoryBytes: 1024 * 1024 ** 2, diskBytes: 0, services: 5 }, error: 'your credit is used up, so this cannot start or grow: it needs 0.50 vCPU more CPU but only 0.00 vCPU is left of your free allowance. Contact support to add credit, or pause or delete other services' } },
+  });
+
+  test('resuming at $0 explains that a database that fits the free allowance starts once other services are paused', async () => {
+    vi.mocked(api.post).mockRejectedValueOnce(creditRefusal({ cpuMilli: 500, memoryBytes: 512 * 1024 ** 2 }) as never);
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'idle_7d' }) });
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/your credit is used up/i);
+    expect(alert).toHaveTextContent(/fits your free allowance once other services are paused/i);
+    expect(alert).toHaveTextContent(/contact support to add credit: help@example\.test/i);
+    expect(within(alert).getByRole('link', { name: 'Usage & credits' })).toHaveAttribute('href', '/usage');
+  });
+
+  test('resuming at $0 a database bigger than the free allowance gets no claim that it would fit', async () => {
+    vi.mocked(api.post).mockRejectedValueOnce(creditRefusal({ cpuMilli: 2000, memoryBytes: 512 * 1024 ** 2 }) as never);
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'idle_7d' }) });
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/your credit is used up/i);
+    expect(alert).not.toHaveTextContent(/fits your free allowance/i);
+  });
+
+  test('a plan budget refusal that is not about credit gets no credit hint even when the database is small', async () => {
+    const refusal = creditRefusal({ cpuMilli: 500, memoryBytes: 512 * 1024 ** 2 });
+    refusal.response.data.creditExhausted = false;
+    vi.mocked(api.post).mockRejectedValueOnce(refusal as never);
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED', pauseReason: 'idle_7d' }) });
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).not.toHaveTextContent(/fits your free allowance/i);
+  });
+
+  test('any other failed resume shows only the server sentence, with no credit hint', async () => {
+    vi.mocked(api.post).mockRejectedValueOnce({ response: { status: 409, data: { error: 'another operation is running' } } } as never);
+    renderPanel({ kind: 'database' }, 'overview', { database: database({ status: 'PAUSED' }) });
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume database' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('another operation is running');
+    expect(alert).not.toHaveTextContent(/free allowance/i);
   });
 
   test('delete asks for the project name before it does anything', async () => {

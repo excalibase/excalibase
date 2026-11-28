@@ -3,10 +3,12 @@ import { ProvisionFailure } from '../../shared/ProvisionFailure';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, PauseCircle, PlayCircle } from 'lucide-react';
 import { useCurrentMetrics } from '../../../hooks/useMetrics';
+import { useSupportEmail } from '../../../hooks/useDeploymentMode';
 import { useProjectRole } from '../../../hooks/useProjectRole';
 import { useDeprovisionDatabase, useListBackups, usePauseProject, useResumeProject } from '../../../hooks/useProvisioning';
 import { projectOperationMessage } from '../../../hooks/projectFollow';
 import { useTiers } from '../../../api/tiers';
+import { budgetRefusal } from '../../../api/planBudget';
 import type { BackupInfo, DatabaseInstance } from '../../../types';
 import { DangerZone } from '../../../pages/SettingsPage';
 import { isDeletionProtected } from '../../../utils/deletionProtection';
@@ -18,6 +20,7 @@ import { databaseServiceStatus } from '../serviceStatus';
 import { panelSearch } from './panelState';
 import { card, Fact } from './sections';
 import { formatInstant } from '../../../utils/instant';
+import { addCreditText } from '../../../utils/support';
 
 const NOT_AVAILABLE = 'Not available';
 
@@ -101,6 +104,10 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
   const paused = project.status === 'PAUSED';
   const busy = pause.isPending || resume.isPending;
   const failure = pause.error ?? resume.error;
+  const refusal = budgetRefusal(resume.error);
+  const fitsAfterPauses = refusal?.creditExhausted === true && refusal.fitsCeilingAlone;
+  const supportEmail = useSupportEmail();
+  const pausedForCredit = paused && project.pauseReason === 'credits';
   const settled = paused || project.status === 'ACTIVE';
   const [asking, setAsking] = useState(false);
   const run = () => (paused ? resume.mutate(project.projectId) : setAsking(true));
@@ -121,7 +128,20 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
           <List title="What stays" items={STAYS} />
         </div>
       )}
-      {failure != null && <p role="alert" className="break-words text-xs text-red-400">{projectOperationMessage(failure, 'The database could not be changed')}</p>}
+      {pausedForCredit && (
+        <p className="text-sm text-amber-400">Paused because your credit is used up. It starts again by itself when credit is added. {addCreditText(supportEmail)}</p>
+      )}
+      {failure != null && (
+        <p role="alert" className="break-words text-xs text-red-400">
+          {projectOperationMessage(failure, 'The database could not be changed')}
+          {fitsAfterPauses && (
+            <>
+              {' '}This database fits your free allowance once other services are paused. {addCreditText(supportEmail)}{' '}
+              <Link to="/usage" className="underline">Usage &amp; credits</Link>
+            </>
+          )}
+        </p>
+      )}
       {busy && <output className="block text-xs text-text-secondary">{paused ? 'Resuming: starting the database.' : 'Pausing: taking a backup, then stopping the database.'} This can take a few minutes.</output>}
       <button
         type="button"

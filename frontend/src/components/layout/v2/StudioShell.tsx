@@ -5,6 +5,7 @@ import { OrgSwitcher } from './OrgSwitcher';
 import { SideNav } from './SideNav';
 import { CommandPalette } from './CommandPalette';
 import { NoOrganization } from './NoOrganization';
+import { CreditBanner } from './CreditBanner';
 import { useMemberOrgs } from '../../../hooks/useMemberOrgs';
 import { useRecordVisits } from '../../../pages/home/useRecordVisits';
 
@@ -21,6 +22,7 @@ export function StudioShell() {
   return (
     <div data-testid="studio-shell" className="flex h-screen flex-col overflow-hidden bg-bg-primary">
       <TopBar left={<OrgSwitcher />} onSearch={() => setSearching(true)} />
+      <CreditBanner />
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <SideNav />
         <main className="min-w-0 flex-1 overflow-y-auto p-4 md:p-6">{noOrg ? <NoOrganization /> : <Outlet />}</main>

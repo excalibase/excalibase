@@ -409,9 +409,6 @@ var permissionRoutes = []permissionRoute{
 	{group: "admin console users", method: http.MethodGet, path: "/api/admin/console/users", unrestrictedOnly: true},
 	{group: "admin attention suspensions", method: http.MethodGet, path: "/api/admin/attention/suspensions", unrestrictedOnly: true},
 	{group: "admin attention failed projects", method: http.MethodGet, path: "/api/admin/attention/failed-projects", unrestrictedOnly: true},
-	{group: "admin analytics users", method: http.MethodGet, path: "/api/admin/analytics/users", unrestrictedOnly: true},
-	{group: "admin analytics abuse", method: http.MethodGet, path: "/api/admin/analytics/abuse", unrestrictedOnly: true},
-	{group: "admin analytics traffic", method: http.MethodGet, path: "/api/admin/analytics/traffic", unrestrictedOnly: true},
 	{group: "admin console suspend", method: http.MethodPost, path: "/api/admin/console/users/u-1/suspend", unrestrictedOnly: true},
 }
 
@@ -531,6 +528,9 @@ func (matrixAnalytics) AbuseAnalytics(context.Context, int) (*adminconsole.Abuse
 }
 func (matrixAnalytics) TrafficAnalytics(context.Context, int) (*adminconsole.TrafficAnalytics, error) {
 	return &adminconsole.TrafficAnalytics{}, nil
+}
+func (matrixAnalytics) CreditAnalytics(context.Context, int) (*adminconsole.CreditAnalytics, error) {
+	return &adminconsole.CreditAnalytics{}, nil
 }
 
 // EXC-757: outside /admin a human platform admin is a customer. Every

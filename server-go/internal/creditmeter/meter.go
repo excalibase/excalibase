@@ -165,8 +165,8 @@ func (m *Meter) billHour(ctx context.Context, orgID string, hour time.Time) erro
 		return fmt.Errorf("debit %s: %w", hour.Format(time.RFC3339), err)
 	}
 	if result.Uncovered > 0 {
-		// The $0 rules belong to step C.5 of EXC-866. Until then the shortfall is only written off (recorded,
-		// never collected); alerts, refusing growth, the grace period and pausing compute come with C.5.
+		// The shortfall is written off (recorded, never collected). What an org at $0 may still run is the
+		// $0 rules' business (creditzero and the plan budget gate), not the meter's.
 		metrics.CountCreditMeterEvent(metrics.CreditMeterShortfallHour)
 	}
 	return nil

@@ -59,6 +59,8 @@ interface ConfigResponse {
   apiUrl?: string;
   // Where the operator console is also served (EXC-757); absent when it is not.
   adminHost?: string;
+  // Where a customer writes to add credit or appeal; the server's SUPPORT_EMAIL.
+  supportEmail?: string;
   // False when the server has the console switched off (a cloud install with no admin host).
   adminConsole?: boolean;
 }
@@ -122,6 +124,12 @@ export function useCustomDomainsEnabled(): boolean {
 export function useCreditTerms(): { termsVersion: string; termsUrl?: string } | undefined {
   const { data } = useStudioConfig();
   return data?.credits;
+}
+
+// Undefined until the server answers or when it names no address.
+export function useSupportEmail(): string | undefined {
+  const { data } = useStudioConfig();
+  return data?.supportEmail || undefined;
 }
 
 // Off until the server says the feature is on, so Studio never shows a

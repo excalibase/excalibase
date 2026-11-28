@@ -4,6 +4,8 @@ import "testing"
 
 var meterEnvs = []string{
 	"CREDIT_PRICES",
+	"CREDIT_GRACE_DAYS",
+	"CREDIT_TRANSITION_MAX_AGE_MINUTES",
 }
 
 func clearMeterEnv(t *testing.T) {
@@ -19,7 +21,7 @@ func TestMeterDefaultsAreThePlansPrices(t *testing.T) {
 	got := Load().CreditMeter
 	got.err = nil
 	want := CreditMeterConfig{
-		PriceVersion: "v1", VCPUMonthMicros: 12_000_000, RAMGiBMonthMicros: 6_000_000, DiskGiBMonthMicros: 120_000,
+		PriceVersion: "v1", VCPUMonthMicros: 12_000_000, RAMGiBMonthMicros: 6_000_000, DiskGiBMonthMicros: 120_000, GraceDays: 7, TransitionMaxAgeMinutes: 30,
 	}
 	if got != want {
 		t.Errorf("defaults:\n got %+v\nwant %+v", got, want)
@@ -56,6 +58,48 @@ func TestABadPriceStopsTheBoot(t *testing.T) {
 		set(t)
 		if Load().Validate() == nil {
 			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+func TestTheGracePeriodIsSevenDaysAndCanBeChanged(t *testing.T) {
+	clearMeterEnv(t)
+	if got := Load().CreditMeter.GraceDays; got != 7 {
+		t.Fatalf("default %d", got)
+	}
+	t.Setenv("CREDIT_GRACE_DAYS", "0")
+	if got := Load().CreditMeter.GraceDays; got != 0 || Load().Validate() != nil {
+		t.Fatalf("zero days means pausing at once: %d", got)
+	}
+	t.Setenv("CREDIT_GRACE_DAYS", "14")
+	if got := Load().CreditMeter.GraceDays; got != 14 {
+		t.Fatalf("set %d", got)
+	}
+}
+
+func TestABadGracePeriodStopsTheBoot(t *testing.T) {
+	for _, bad := range []string{"-1", "seven", "1.5", "4000"} {
+		clearMeterEnv(t)
+		t.Setenv("CREDIT_GRACE_DAYS", bad)
+		if Load().Validate() == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}
+
+func TestAChangingStateStopsHoldingAnOrgAfterHalfAnHourUnlessConfigured(t *testing.T) {
+	clearMeterEnv(t)
+	if got := Load().CreditMeter.TransitionMaxAgeMinutes; got != 30 {
+		t.Fatalf("default %d", got)
+	}
+	t.Setenv("CREDIT_TRANSITION_MAX_AGE_MINUTES", "90")
+	if got := Load().CreditMeter.TransitionMaxAgeMinutes; got != 90 || Load().Validate() != nil {
+		t.Fatalf("set %d", got)
+	}
+	for _, bad := range []string{"0", "-5", "soon", "1.5", "5000"} {
+		t.Setenv("CREDIT_TRANSITION_MAX_AGE_MINUTES", bad)
+		if Load().Validate() == nil {
+			t.Errorf("%q was accepted", bad)
 		}
 	}
 }

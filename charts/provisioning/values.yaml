@@ -115,8 +115,10 @@ env:
   FEATURE_CREDITS: "false"
   FEATURE_PLANBUDGET: "false"
   # Usage metering (EXC-866): samples what each org reserves and draws settled hours from its credit.
-  # Needs FEATURE_CREDITS and FEATURE_PLANBUDGET, or the server refuses to start. Keep it off until the
-  # $0 rules (EXC-866 C.5) ship. Prices: CREDIT_PRICES (JSON). The free allowance is the plan budget's:
+  # Needs FEATURE_CREDITS and FEATURE_PLANBUDGET, or the server refuses to start. It also turns on
+  # the $0 rules (EXC-866 C.5): at $0 creates and growth are refused, and after CREDIT_GRACE_DAYS (7) compute
+  # above the free allowance pauses; credit, an upgrade or turning this flag off resumes it.
+  # Prices: CREDIT_PRICES (JSON). The free allowance is the plan budget's:
   # PLANBUDGET_{FREE,STANDARD}_ALLOWANCE_{CPU_MILLI,MEMORY_MIB,DISK_GIB}.
   FEATURE_CREDITBURN: "false"
 

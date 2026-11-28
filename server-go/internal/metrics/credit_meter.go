@@ -17,6 +17,10 @@ const (
 	CreditMeterShortfallHour = "shortfall_hour"
 	// CreditMeterDroppedPostStepSample: a sample after a step gave up waiting for the step to commit; the next regular sample covers it.
 	CreditMeterDroppedPostStepSample = "dropped_post_step_sample"
+	// CreditMeterPauseFailed: pausing a service for used-up credit failed and will be retried after a backoff.
+	CreditMeterPauseFailed = "pause_failed"
+	// CreditMeterPauseStuck: a service that still fails to pause after waiting the longest backoff was skipped so it cannot block the org.
+	CreditMeterPauseStuck = "pause_stuck"
 )
 
 var creditMeterEvents = promauto.NewCounterVec(
@@ -30,4 +34,9 @@ var creditMeterEvents = promauto.NewCounterVec(
 // CountCreditMeterEvent records one credit meter case.
 func CountCreditMeterEvent(reason string) {
 	creditMeterEvents.WithLabelValues(reason).Inc()
+}
+
+// CreditMeterEvents is the counter behind one reason, for tests and dashboards that read it back.
+func CreditMeterEvents(reason string) prometheus.Counter {
+	return creditMeterEvents.WithLabelValues(reason)
 }

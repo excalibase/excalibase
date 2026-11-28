@@ -35,6 +35,24 @@ export interface CreditBurn {
   runOutAt: string | null;
 }
 
+export interface PausedForCredit {
+  kind: 'database' | 'app' | 'functions';
+  projectId: string;
+  serviceId: string;
+  name: string;
+  pausedAt: string;
+}
+
+// What the $0 rules say about the org; null while usage is not billed.
+export interface CreditZero {
+  atZero: boolean;
+  lowCredit: boolean;
+  // The day compute above the free allowance pauses; null while the org has credit.
+  graceEndsAt: string | null;
+  graceDays: number;
+  paused: PausedForCredit[];
+}
+
 export interface CreditOverview {
   orgId: string;
   balanceMicros: number;
@@ -47,6 +65,7 @@ export interface CreditOverview {
   billedIn: string;
   termsVersion: string;
   termsUrl: string;
+  zero?: CreditZero | null;
 }
 
 export const creditsKey = (orgId: string | undefined) => ['credits', orgId] as const;

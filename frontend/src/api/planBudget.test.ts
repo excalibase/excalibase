@@ -19,6 +19,20 @@ describe('plan budget text', () => {
     expect(budgetRefusal(error)).toMatchObject({ message: 'plan budget exceeded: needs 1 vCPU', dimension: 'CPU' });
   });
 
+  test('a refusal says whether the credit being used up caused it', () => {
+    const body = { code: 'plan_budget_exceeded', error: 'your credit is used up', dimension: 'CPU' };
+    expect(budgetRefusal({ response: { status: 409, data: { ...body, creditExhausted: true } } })?.creditExhausted).toBe(true);
+    expect(budgetRefusal({ response: { status: 409, data: body } })?.creditExhausted).toBe(false);
+    expect(budgetRefusal({ response: { status: 409, data: { ...body, creditExhausted: 'yes' } } })?.creditExhausted).toBe(false);
+    const budget = { cpuMilli: 1000, memoryBytes: 1000 };
+    const fits = (step: unknown, ceiling: unknown = budget) => budgetRefusal({ response: { status: 409, data: { ...body, step, budget: ceiling } } })?.fitsCeilingAlone;
+    expect(fits({ cpuMilli: 1000, memoryBytes: 1000 })).toBe(true);
+    expect(fits({ cpuMilli: 1001, memoryBytes: 10 })).toBe(false);
+    expect(fits({ cpuMilli: 10, memoryBytes: 1001 })).toBe(false);
+    expect(fits(undefined)).toBe(false);
+    expect(fits({ cpuMilli: 10, memoryBytes: 10 }, {})).toBe(false);
+  });
+
   test('any other failure is not a budget refusal', () => {
     expect(budgetRefusal({ response: { status: 409, data: { code: 'other', error: 'x' } } })).toBeUndefined();
     expect(budgetRefusal({ response: { status: 500, data: {} } })).toBeUndefined();
