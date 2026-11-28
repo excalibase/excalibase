@@ -71,10 +71,11 @@ func SoftLimit(root, selfCgroup string, percent int, goMemLimit string) (int64, 
 	return limit / 100 * int64(percent), true
 }
 
-// Apply sets the runtime's soft limit to percent of the container's and returns it.
-func Apply(percent int) (int64, bool) {
+// Apply sets the runtime's soft limit to percent of the container's and returns it. goMemLimit
+// is the GOMEMLIMIT setting as the caller read it; when set, Apply leaves the limit alone.
+func Apply(percent int, goMemLimit string) (int64, bool) {
 	selfCgroup, _ := os.ReadFile("/proc/self/cgroup")
-	limit, ok := SoftLimit(CgroupRoot, string(selfCgroup), percent, os.Getenv("GOMEMLIMIT"))
+	limit, ok := SoftLimit(CgroupRoot, string(selfCgroup), percent, goMemLimit)
 	if ok {
 		debug.SetMemoryLimit(limit)
 	}

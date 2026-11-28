@@ -87,3 +87,18 @@ func TestContainerLimitFollowsTheProcessCgroup(t *testing.T) {
 		t.Fatalf("limit %d reported for a path leaving the root", got)
 	}
 }
+
+func TestApplyLeavesAnExplicitGOMEMLIMITAlone(t *testing.T) {
+	if got, ok := Apply(80, "256MiB"); ok {
+		t.Fatalf("Apply set %d over an explicit GOMEMLIMIT", got)
+	}
+}
+
+func TestApplyReportsNothingWithoutAContainerLimit(t *testing.T) {
+	// The test host's own cgroup may or may not be limited; either way the result must agree with SoftLimit.
+	selfCgroup, _ := os.ReadFile("/proc/self/cgroup")
+	want, wantOK := SoftLimit(CgroupRoot, string(selfCgroup), 80, "")
+	if got, ok := Apply(80, ""); ok != wantOK || got != want {
+		t.Fatalf("Apply = %d, %v; want %d, %v", got, ok, want, wantOK)
+	}
+}

@@ -69,9 +69,6 @@ const bridgesEvery = 15 * time.Second
 const rootlessAttempts = 30
 
 func main() {
-	if limit, ok := memlimit.Apply(memoryShare); ok {
-		log.Printf("engine proxy: soft memory limit %d bytes, %d%% of the container's", limit, memoryShare)
-	}
 	if err := serve(os.Getenv); err != nil {
 		log.Fatalf("engine proxy: %v", err)
 	}
@@ -82,6 +79,9 @@ func serve(getenv func(string) string) error {
 	cfg, err := loadConfig(getenv)
 	if err != nil {
 		return err
+	}
+	if limit, ok := memlimit.Apply(memoryShare, getenv("GOMEMLIMIT")); ok {
+		log.Printf("engine proxy: soft memory limit %d bytes, %d%% of the container's", limit, memoryShare)
 	}
 	if _, err := os.Stat(cfg.socket); err != nil {
 		return fmt.Errorf("engine socket: %w", err)
