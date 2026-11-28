@@ -34,6 +34,11 @@ function ResultNotice({ result, onDismiss }: { readonly result: SuspendResult; r
   );
 }
 
+function AccountAction({ suspended, onOpen }: { readonly suspended: boolean; readonly onOpen: (action: 'suspend' | 'unsuspend') => void }) {
+  if (suspended) return <Button size="sm" variant="secondary" onClick={() => onOpen('unsuspend')}>Unsuspend account</Button>;
+  return <Button size="sm" variant="danger" onClick={() => onOpen('suspend')}>Suspend account</Button>;
+}
+
 // One account for the platform admin: who they are, how far they are trusted,
 // what they own, why they were suspended, and what was done to them. The two
 // actions are the console's own endpoints, and each asks for a written reason
@@ -77,11 +82,7 @@ function AccountDetail() {
       setConfirming(null);
     }
   };
-  const actions = isStaff ? null : (
-    suspension.suspended
-      ? <Button size="sm" variant="secondary" onClick={() => open('unsuspend')}>Unsuspend account</Button>
-      : <Button size="sm" variant="danger" onClick={() => open('suspend')}>Suspend account</Button>
-  );
+  const actions = isStaff ? null : <AccountAction suspended={suspension.suspended} onOpen={open} />;
   const word = confirming === 'unsuspend' ? 'Unsuspend' : 'Suspend';
 
   return (

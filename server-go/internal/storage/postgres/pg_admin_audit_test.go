@@ -89,12 +89,11 @@ func TestAdminAuditFiltersByActorAddressActionPrefixAndTarget(t *testing.T) {
 	}
 }
 
-func TestAdminUserDetailGathersTheAccountAndLeaksNothingElse(t *testing.T) {
-	store, console := consoleFixture(t)
-	ctx := context.Background()
-	exec := func(query string, args ...any) {
+func seedFullAccount(t *testing.T, store *Store) {
+	t.Helper()
+	exec := func(query string) {
 		t.Helper()
-		if _, err := store.db.ExecContext(ctx, query, args...); err != nil {
+		if _, err := store.db.ExecContext(context.Background(), query); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -105,8 +104,12 @@ func TestAdminUserDetailGathersTheAccountAndLeaksNothingElse(t *testing.T) {
 	exec(`INSERT INTO abuse_suspensions (user_id, email, reason, reason_code, suspended_at) VALUES ('u-cust', 'cust@mailinator.test', 'proxy', 'proxy', NOW())`)
 	logAudit(t, store, domain.AuditEntry{UserID: "u-admin", Action: "user.suspend", Resource: "user", ResourceID: "u-cust", Details: "proxy"})
 	logAudit(t, store, domain.AuditEntry{UserID: "u-admin", Action: "user.suspend", Resource: "user", ResourceID: "u-other", Details: "someone else"})
+}
 
-	detail, err := console.ReadUserDetail(ctx, "u-cust")
+func TestAdminUserDetailGathersTheAccountAndLeaksNothingElse(t *testing.T) {
+	store, console := consoleFixture(t)
+	seedFullAccount(t, store)
+	detail, err := console.ReadUserDetail(context.Background(), "u-cust")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,6 +122,17 @@ func TestAdminUserDetailGathersTheAccountAndLeaksNothingElse(t *testing.T) {
 	if !detail.Suspension.Suspended || detail.Suspension.ReasonCode != "proxy" || len(detail.Suspensions) != 1 || detail.Suspensions[0].ActorEmail != "admin@example.test" {
 		t.Fatalf("suspension = %+v history %+v", detail.Suspension, detail.Suspensions)
 	}
+	assertOrgsAndProjects(t, detail)
+	if len(detail.SignIn) != 1 || detail.SignIn[0].Provider != "github" {
+		t.Fatalf("sign-in = %+v", detail.SignIn)
+	}
+	if len(detail.Audit) != 1 || detail.Audit[0].ResourceID != "u-cust" {
+		t.Fatalf("audit = %+v, want only this account's entry", detail.Audit)
+	}
+}
+
+func assertOrgsAndProjects(t *testing.T, detail *adminconsole.UserDetail) {
+	t.Helper()
 	roles := map[string]string{}
 	for _, org := range detail.Orgs {
 		roles[org.ID] = org.Role
@@ -128,17 +142,6 @@ func TestAdminUserDetailGathersTheAccountAndLeaksNothingElse(t *testing.T) {
 	}
 	if len(detail.Projects) != 2 {
 		t.Fatalf("projects = %+v, want both orgs' projects", detail.Projects)
-	}
-	if len(detail.SignIn) != 1 || detail.SignIn[0].Provider != "github" {
-		t.Fatalf("sign-in = %+v", detail.SignIn)
-	}
-	for _, row := range detail.Audit {
-		if row.ResourceID == "u-other" {
-			t.Fatalf("another account's entry leaked: %+v", row)
-		}
-	}
-	if len(detail.Audit) != 1 {
-		t.Fatalf("audit = %+v", detail.Audit)
 	}
 }
 
